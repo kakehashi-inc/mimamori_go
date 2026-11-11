@@ -30,10 +30,10 @@ const (
 
 const (
 	// Configuration files are placed next to the executable and data files
-	// in its data/ directory (which may be a symbolic link).
+	// in its data/ directory (which may be a symbolic link). The CLI has no
+	// configuration of its own: it reads the central's configuration.
 	CentralConfigFileName     = "central.json"
 	AgentConfigFileName       = "agent.json"
-	CLIConfigFileName         = "cli.json"
 	DataDirName               = "data"
 	CentralDBFileName         = "central.db"
 	AgentLocalDBFileName      = "agent.db"
@@ -42,11 +42,7 @@ const (
 	CentralLockFileName       = "central.lock"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"
-	EnvCLIURL                 = "MIMAMORI_URL"
 	EnvCLIKey                 = "MIMAMORI_CLI_KEY"
-	EnvCLICAFile              = "MIMAMORI_CA_FILE"
-	EnvCLIConfig              = "MIMAMORI_CLI_CONFIG"
-	DefaultCLIURL             = "https://127.0.0.1:8443"
 	DefaultWebListen          = "0.0.0.0:8080"
 	DefaultAgentListen        = "0.0.0.0:8443"
 	DefaultAgentPort          = 8443

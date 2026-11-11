@@ -44,7 +44,7 @@ mimamori detects operations performed with the privileges of selected OS users o
     sudo ./mimamori central start
     ```
 
-    Configuration files (`central.json`, `agent.json`, `cli.json`) are placed next to the executable and data files in its `data/` directory, which may be a symbolic link to another place.
+    Configuration files (`central.json`, `agent.json`) are placed next to the executable and data files in its `data/` directory, which may be a symbolic link to another place.
 
     Set `server_names` to the host names and IP addresses agents use to connect. Run the process as a service (systemd and so on) as suits your environment.
 

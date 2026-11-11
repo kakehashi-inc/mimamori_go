@@ -44,7 +44,7 @@ mimamori は、各ホストで指定した OS のユーザー（Web サーバー
     sudo ./mimamori central start
     ```
 
-    設定ファイル（`central.json`、`agent.json`、`cli.json`）は実行ファイルと同じディレクトリに、データファイルはその `data/` に作られます。`data/` はシンボリックリンクにして別の場所に置けます。
+    設定ファイル（`central.json`、`agent.json`）は実行ファイルと同じディレクトリに、データファイルはその `data/` に作られます。`data/` はシンボリックリンクにして別の場所に置けます。
 
     `server_names` に、エージェントが接続に使うホスト名や IP アドレスを設定してください。プロセスの常駐（systemd など）は環境に合わせて設定します。
 

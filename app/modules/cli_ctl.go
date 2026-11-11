@@ -17,18 +17,11 @@ import (
 	"time"
 )
 
-// CLIConfig is the optional configuration file of the management CLI.
-type CLIConfig struct {
-	URL    string `json:"url"`
-	Key    string `json:"key"`
-	CAFile string `json:"ca_file"`
-}
-
 // CtlCmd groups the management commands. They run on the central host and
 // use the management API over the loopback address.
 type CtlCmd struct {
-	CLIConfig string `name:"cli-config" help:"Optional CLI configuration file (JSON with url, key, ca_file; cli.json next to the executable is read when it exists). Usually only MIMAMORI_CLI_KEY is needed: the address comes from central.json and the CA from the data directory" type:"path"`
-	JSON      bool   `help:"Print raw JSON"`
+	Config string `help:"Central configuration file (the address of the management API is taken from it)" default:"${central_config}" type:"path"`
+	JSON   bool   `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
 	Tokens       CtlTokensCmd       `cmd:"" help:"Tokens"`
@@ -47,87 +40,36 @@ type ctlClient struct {
 	json bool
 }
 
-// loadCLIConfig resolves the connection settings. Only the credential has to
-// be given (MIMAMORI_CLI_KEY, or "key" in a CLI configuration file); the
-// address comes from agent_listen of central.json and the CA certificate
-// from the data directory, both next to the executable. A CLI configuration
-// file is read only when given with --cli-config or MIMAMORI_CLI_CONFIG, or
-// when cli.json exists next to the executable. Environment variables take
-// precedence over the file.
-func loadCLIConfig(path string) (*CLIConfig, error) {
-	cfg := &CLIConfig{}
-	explicit := path
-	if explicit == "" {
-		explicit = os.Getenv(EnvCLIConfig)
-	}
-	file := explicit
-	if file == "" {
-		file = ConfigPath(CLIConfigFileName)
-	}
-	data, err := os.ReadFile(file)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
-		}
-		if fi, err := os.Stat(file); err == nil && fi.Mode().Perm()&0o077 != 0 && cfg.Key != "" {
-			fmt.Fprintf(os.Stderr, "Warning: %s holds a credential and is readable by others; chmod 600 it\n", file)
-		}
-	case explicit != "":
-		return nil, err
-	}
-	if v := os.Getenv(EnvCLIURL); v != "" {
-		cfg.URL = v
-	}
-	if v := os.Getenv(EnvCLIKey); v != "" {
-		cfg.Key = v
-	}
-	if v := os.Getenv(EnvCLICAFile); v != "" {
-		cfg.CAFile = v
-	}
-	if cfg.URL == "" {
-		cfg.URL = DefaultCLIURL
-		if cc, _, err := LoadCentralConfig(ConfigPath(CentralConfigFileName)); err == nil {
-			if _, port, err := net.SplitHostPort(cc.AgentListen); err == nil {
-				cfg.URL = "https://" + net.JoinHostPort("127.0.0.1", port)
-			}
-		}
-	}
-	if cfg.CAFile == "" {
-		cfg.CAFile = filepath.Join(DataDir(), CABundleFileName)
-	}
-	return cfg, nil
-}
-
 func (c *CtlCmd) client() (*ctlClient, error) {
-	cfg, err := loadCLIConfig(c.CLIConfig)
+	// The management API is the central's own listener: its address comes
+	// from the central configuration and its CA from the central's data
+	// directory. Only the credential is given, by the environment.
+	key := os.Getenv(EnvCLIKey)
+	if key == "" {
+		return nil, NewExitErrorf(ExitAuth, "no CLI credential: set %s (issue one on the accounts screen)", EnvCLIKey)
+	}
+	cc, _, err := LoadCentralConfig(c.Config)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	if cfg.Key == "" {
-		return nil, NewExitErrorf(ExitAuth, "no CLI credential: set %s or a CLI configuration file (issue one on the accounts screen)", EnvCLIKey)
-	}
-	u, err := url.Parse(cfg.URL)
+	_, port, err := net.SplitHostPort(cc.AgentListen)
 	if err != nil {
-		return nil, NewExitError(ExitConfig, err.Error())
+		return nil, NewExitErrorf(ExitConfig, "agent_listen: %v", err)
 	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return nil, NewExitError(ExitConfig, "the management API is only reachable on a loopback address (e.g. https://127.0.0.1:8443)")
-	}
-	pemData, err := os.ReadFile(cfg.CAFile)
+	caFile := filepath.Join(DataDir(), CABundleFileName)
+	pemData, err := os.ReadFile(caFile)
 	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "CA certificate %s: %v (check its permissions or set %s)", cfg.CAFile, err, EnvCLICAFile)
+		return nil, NewExitErrorf(ExitConfig, "CA certificate of the central: %v", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemData) {
-		return nil, NewExitErrorf(ExitConfig, "no certificate in %s", cfg.CAFile)
+		return nil, NewExitErrorf(ExitConfig, "no certificate in %s", caFile)
 	}
-	hc, err := NewHTTPSClient(cfg.URL, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+	hc, err := NewHTTPSClient("https://"+net.JoinHostPort("127.0.0.1", port), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	hc.Headers["Authorization"] = "Bearer " + cfg.Key
+	hc.Headers["Authorization"] = "Bearer " + key
 	return &ctlClient{http: hc, json: c.JSON}, nil
 }
 
