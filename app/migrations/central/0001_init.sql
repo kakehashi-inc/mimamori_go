@@ -10,6 +10,7 @@ CREATE TABLE accounts (
     name          TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
     role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer')),
+    language      TEXT    NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ja')),
     disabled      INTEGER NOT NULL DEFAULT 0,
     failed_logins INTEGER NOT NULL DEFAULT 0,
     locked_until  INTEGER NOT NULL DEFAULT 0,
@@ -24,7 +25,8 @@ CREATE TABLE sessions (
     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     created_at   INTEGER NOT NULL,
     expires_at   INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL
+    last_seen_at INTEGER NOT NULL,
+    remember     INTEGER NOT NULL DEFAULT 0
 );
 -- +goose StatementEnd
 
