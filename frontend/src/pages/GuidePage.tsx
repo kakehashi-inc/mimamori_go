@@ -57,7 +57,9 @@ export function GuidePage() {
     const { t } = useTranslation();
     const { data: guide, error, loading, reload } = useApi(getGuide, []);
 
-    const urls = guide?.agent_urls?.length ? guide.agent_urls : [`https://${guide?.central_hostname || 'HOST'}:8443`];
+    const urls = guide?.agent_urls?.length
+        ? guide.agent_urls
+        : [`https://${guide?.central_hostname || 'HOST'}:${guide?.agent_port || 'PORT'}`];
     const fp = guide?.ca_fingerprint || '<fingerprint>';
     const url = urls[0];
 
@@ -152,7 +154,7 @@ export function GuidePage() {
 
                     <Step n={5} title={t('guide.init.title')}>
                         <p>{t('guide.init.body')}</p>
-                        <CodeBlock code={agentInitCommand('<token>', url, fp)} />
+                        <CodeBlock code={agentInitCommand(url, fp)} />
                         <Bullets
                             items={[t('guide.init.stdin'), t('guide.init.fingerprint'), t('guide.init.overwrite')]}
                         />
@@ -187,7 +189,7 @@ export function GuidePage() {
                                 t('guide.reinit.caseCa'),
                             ]}
                         />
-                        <CodeBlock code={agentInitCommand('<token>', url, fp, true)} />
+                        <CodeBlock code={agentInitCommand(url, fp, true)} />
                         <p>{t('guide.reinit.after')}</p>
                         <CodeBlock code={CMD_AGENT_START} />
                     </Step>

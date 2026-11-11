@@ -351,7 +351,7 @@ func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {
 }
 func (c *CtlTokensListCmd) Run(p *CtlCmd) error {
 	// The token list is printed without shortening any value.
-	return runCtlTable(p, true, "GET", "/tokens", nil, "id", "name", "status", "expires_at", "last_seen_at", "instance_id", "pending_renewal", "expiring_unconnected")
+	return runCtlTable(p, true, "GET", "/tokens", nil, "id", "name", "value", "status", "expires_at", "last_seen_at", "instance_id", "pending_renewal", "expiring_unconnected")
 }
 func (c *CtlTokensShowCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "GET", fmt.Sprintf("/tokens/%d", c.ID), nil)

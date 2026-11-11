@@ -86,3 +86,20 @@ func ValidatePassword(p string) error {
 	}
 	return nil
 }
+
+// ShortenSecret returns a recognizable but unusable form of a secret value:
+// its prefix with the first and last four characters ("mmr_AbCd...WxYz").
+// An empty value stays empty.
+func ShortenSecret(v string) string {
+	prefix := ""
+	if i := strings.Index(v, "_"); i >= 0 && i < 8 {
+		prefix, v = v[:i+1], v[i+1:]
+	}
+	if v == "" {
+		return ""
+	}
+	if len(v) <= 8 {
+		return prefix + "..."
+	}
+	return prefix + v[:4] + "..." + v[len(v)-4:]
+}

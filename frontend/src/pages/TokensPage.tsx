@@ -18,7 +18,6 @@ import { CodeBlock } from '../components/CopyButton';
 import { Field, inputClass } from '../components/FormControls';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
-import { SecretValueModal } from '../components/SecretValueModal';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
@@ -78,6 +77,7 @@ export function TokensPage() {
                         <Table>
                             <THead>
                                 <Th>{t('tokens.name')}</Th>
+                                <Th>{t('tokens.value')}</Th>
                                 <Th>{t('tokens.status')}</Th>
                                 <Th>{t('tokens.expiresAt')}</Th>
                                 <Th>{t('tokens.machine')}</Th>
@@ -99,6 +99,7 @@ export function TokensPage() {
                                                 </Link>
                                             )}
                                         </Td>
+                                        <Td className='font-mono text-xs whitespace-nowrap'>{tk.value || '-'}</Td>
                                         <Td>
                                             <div className='flex flex-col items-start gap-1'>
                                                 <TokenStatusBadge status={tk.status} />
@@ -222,22 +223,30 @@ export function TokensPage() {
                             reload();
                         }}
                     />
-                    <SecretValueModal
+                    <Modal
                         open={issued !== null}
                         title={t('tokens.issuedTitle', { name: issued?.token.name ?? '' })}
-                        value={issued?.value ?? ''}
                         onClose={() => setIssued(null)}
+                        size='lg'
+                        footer={
+                            <Button variant='primary' onClick={() => setIssued(null)}>
+                                {t('common.close')}
+                            </Button>
+                        }
                     >
-                        {issued && <InitCommandHelp value={issued.value} />}
-                    </SecretValueModal>
+                        {issued && <IssuedTokenHelp issued={issued} />}
+                    </Modal>
                 </>
             )}
         </>
     );
 }
 
-/** Agent init command example for a freshly issued token value. */
-function InitCommandHelp({ value }: { value: string }) {
+/**
+ * Next steps after issuing or reissuing a token. The browser only receives a
+ * shortened value; the full value is shown by the CLI on the central host.
+ */
+function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
     const { t } = useTranslation();
     const [guide, setGuide] = useState<Guide | null>(null);
     useEffect(() => {
@@ -245,22 +254,35 @@ function InitCommandHelp({ value }: { value: string }) {
             .then(setGuide)
             .catch(() => setGuide(null));
     }, []);
-    const urls = guide?.agent_urls?.length ? guide.agent_urls : [`https://${guide?.central_hostname || '<host>'}:8443`];
+    const urls = guide?.agent_urls?.length
+        ? guide.agent_urls
+        : [`https://${guide?.central_hostname || '<host>'}:${guide?.agent_port || '<port>'}`];
     return (
-        <div className='flex flex-col gap-2'>
-            <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
-            <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
-            {urls.map(url => (
-                <CodeBlock key={url} code={agentInitCommand(value, url)} />
-            ))}
-            <p className='text-xs text-muted'>
-                {t('tokens.initThenStart')} <code className='font-mono'>sudo mimamori agent start</code>
-            </p>
-            <p className='text-xs'>
-                <Link to='/guide' className='text-accent hover:text-accent-hover hover:underline'>
-                    {t('tokens.seeGuide')}
-                </Link>
-            </p>
+        <div className='flex flex-col gap-4'>
+            <div className='flex flex-col gap-1'>
+                <p className='text-sm font-medium'>{t('tokens.value')}</p>
+                <code className='font-mono text-sm break-all'>{issued.value}</code>
+            </div>
+            <Alert tone='info'>{t('tokens.fullValueNote')}</Alert>
+            <div className='flex flex-col gap-2'>
+                <p className='text-sm font-medium'>{t('tokens.showFullCommand')}</p>
+                <CodeBlock code={`sudo ./mimamori ctl tokens show ${issued.token.id}`} />
+            </div>
+            <div className='flex flex-col gap-2'>
+                <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
+                <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
+                {urls.map(url => (
+                    <CodeBlock key={url} code={agentInitCommand(url)} />
+                ))}
+                <p className='text-xs text-muted'>
+                    {t('tokens.initThenStart')} <code className='font-mono'>sudo mimamori agent start</code>
+                </p>
+                <p className='text-xs'>
+                    <Link to='/guide' className='text-accent hover:text-accent-hover hover:underline'>
+                        {t('tokens.seeGuide')}
+                    </Link>
+                </p>
+            </div>
         </div>
     );
 }

@@ -161,7 +161,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 			return reject("expired token", t.Name)
 		}
 		// First connection with the renewed value: the old value stops working.
-		t.Hash, t.ExpiresAt = t.PendingHash, t.PendingExpiresAt
+		t.Hash, t.Value, t.ExpiresAt = t.PendingHash, v, t.PendingExpiresAt
 		t.PendingHash, t.PendingExpiresAt = "", 0
 		t.RenewedAt = now
 		c.history(nil, models.HistToken, "renewed", t.Name, "agent switched to the renewed token; the previous value is no longer accepted")

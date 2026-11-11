@@ -127,7 +127,9 @@ interface HostInfo {
 ```ts
 type TokenStatus = 'unused' | 'active' | 'expired' | 'revoked';
 interface Token {
-  id: number; name: string; status: TokenStatus;
+  id: number; name: string;
+  value: string;                     // /admin/v1（CLI）は値の全体、/api/v1（ブラウザ）は略した形 "mmr_AbCd...WxYz"
+  status: TokenStatus;
   expires_at: string; created_at: string; created_by: string;
   last_seen_at: string | null; instance_id: string; bound_at: string | null;
   reissued_at: string | null; renewed_at: string | null;
@@ -137,7 +139,7 @@ interface Token {
 }
 ```
 
-- `value` は発行時と再発行時の応答にだけ含まれます。セントラルはハッシュ値だけを保存します。
+- 発行と再発行の応答の `value` も同じく、CLI には値の全体、ブラウザには略した形を返します。値の全体は、管理者であってもブラウザには送りません。
 - `valid_days` を省略すると設定の既定値を使います。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
 
 ## 6. 監視ルール
@@ -344,6 +346,7 @@ interface ConfigItem {
 ```ts
 interface Guide {
   version: string; central_hostname: string;
+  agent_port: string;            // 動作中のエージェント用の待ち受けのポート
   agent_urls: string[];          // エージェントが接続に使える URL（サーバー証明書の名前から作る）
   ca_fingerprint: string;        // 現在の独自CAの SHA-256 フィンガープリント
   default_valid_days: number;

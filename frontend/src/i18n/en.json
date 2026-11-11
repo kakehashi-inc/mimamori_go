@@ -73,9 +73,6 @@
         "next": "Next",
         "perPage": "Rows per page"
     },
-    "secret": {
-        "onceNote": "This value is shown only now. Once you close this dialog it cannot be displayed again, so copy it and store it somewhere safe."
-    },
     "layout": {
         "builtinStopped": "The built-in agent is stopped"
     },
@@ -252,9 +249,12 @@
         "revokeTitle": "Revoke token",
         "revokeConfirm": "Revoke token {{name}}? Agents using it will no longer be able to connect. This cannot be undone.",
         "initCommand": "Example agent init command",
-        "initCommandHint": "Run it on the monitored host. The token is read from standard input.",
+        "initCommandHint": "Run it on the monitored host. It asks for the token without showing what you type.",
         "initThenStart": "After initializing, start the agent with:",
-        "seeGuide": "Open the setup guide"
+        "seeGuide": "Open the setup guide",
+        "value": "Value",
+        "fullValueNote": "For security, the browser receives only a shortened value, administrators included. Get the full value with the command below on the central host, then enter it when agent init asks for the token.",
+        "showFullCommand": "Show the full value (on the central host)"
     },
     "detections": {
         "title": "Detections",
@@ -554,12 +554,12 @@
             "title": "Issue a token",
             "body": "An administrator issues one token per host.",
             "link": "Go to tokens",
-            "note": "The token value is shown only when issued. It is bound to the instance ID of the agent that is initialized with it (created by the agent at initialization and kept in its data directory) and cannot be used by other agents."
+            "note": "The browser shows only a shortened value, administrators included. The full value is shown on the central host with \"ctl tokens list\" or \"ctl tokens show ID\". The token is bound to the instance ID of the agent that is initialized with it (created by the agent at initialization and kept in its local database) and cannot be used by other agents."
         },
         "init": {
             "title": "Initialize and start the agent",
-            "body": "Place mimamori on the monitored host and initialize it with the issued token. Replace <token> with the issued value.",
-            "stdin": "The token is read from standard input, so it is not passed as an argument and does not appear in the process list.",
+            "body": "Place mimamori on the monitored host and initialize it with the issued token. Enter the full token value when asked for it.",
+            "stdin": "The token is read from the terminal without echo (or from standard input), so it is not passed as an argument and does not appear in the process list.",
             "fingerprint": "Passing the fingerprint above with --ca-fingerprint verifies the central server on the very first connection.",
             "overwrite": "Add --overwrite to re-initialize a host that is already initialized.",
             "start": "When initialization finishes, start the agent:",

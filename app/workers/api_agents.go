@@ -260,6 +260,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 type tokenJSON struct {
 	ID                  int64   `json:"id"`
 	Name                string  `json:"name"`
+	Value               string  `json:"value"` // full for the CLI, shortened for the browser
 	Status              string  `json:"status"`
 	ExpiresAt           *string `json:"expires_at"`
 	CreatedAt           *string `json:"created_at"`
@@ -274,9 +275,11 @@ type tokenJSON struct {
 	AgentID             int64   `json:"agent_id"`
 }
 
-func (c *core) tokenOut(t *models.Token) tokenJSON {
+// tokenOut converts a token for the API. The value is given in full only to
+// the management CLI; the browser screens receive a shortened form.
+func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 	now := time.Now().Unix()
-	out := tokenJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
+	out := tokenJSON{ID: t.ID, Name: t.Name, Value: tokenValueFor(r, t.Value), Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
 		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
 	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
@@ -298,7 +301,7 @@ func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]tokenJSON, 0, len(list))
 	for _, t := range list {
-		out = append(out, c.tokenOut(t))
+		out = append(out, c.tokenOut(r, t))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -323,7 +326,7 @@ func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
 
 func (c *core) handleGetToken(w http.ResponseWriter, r *http.Request) {
 	if t := c.loadToken(w, r); t != nil {
-		writeJSON(w, http.StatusOK, c.tokenOut(t))
+		writeJSON(w, http.StatusOK, c.tokenOut(r, t))
 	}
 }
 
@@ -383,7 +386,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r)
-	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.Name}
+	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.Name}
 	if err := models.InsertToken(c.db, tok); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, "a token with this name already exists")
@@ -402,7 +405,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		detail += "; rule id " + itoa64(agent.AssignedRuleID.Int64) + " version " + itoa(agent.AssignedRuleVersion)
 	}
 	c.history(p, models.HistToken, "issued", tok.Name, detail)
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(tok), "value": value})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok), "value": tokenValueFor(r, value)})
 }
 
 func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +434,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	// Every previous value (current and pending renewal) stops working.
-	t.Hash = modules.HashSecret(value)
+	t.Hash, t.Value = modules.HashSecret(value), value
 	t.ExpiresAt = now + int64(days)*86400
 	t.PendingHash, t.PendingExpiresAt = "", 0
 	t.UsedAt, t.RevokedAt, t.ReissuedAt = 0, 0, now
@@ -440,7 +443,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, "previous values invalidated; expires "+time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339))
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(t), "value": value})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t), "value": tokenValueFor(r, value)})
 }
 
 func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +458,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, "binding to the agent instance removed (was "+prev+")")
-	writeJSON(w, http.StatusOK, c.tokenOut(t))
+	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
 }
 
 func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
@@ -472,5 +475,15 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		}
 		c.history(principalFrom(r), models.HistToken, "revoked", t.Name, "")
 	}
-	writeJSON(w, http.StatusOK, c.tokenOut(t))
+	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
+}
+
+// tokenValueFor returns a token value as the caller may see it: in full for
+// the management CLI, shortened for the browser screens (the full value is
+// never sent to a browser, administrators included).
+func tokenValueFor(r *http.Request, value string) string {
+	if p := principalFrom(r); p != nil && p.ViaCLI {
+		return value
+	}
+	return modules.ShortenSecret(value)
 }

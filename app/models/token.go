@@ -8,13 +8,15 @@ const (
 	TokenRevoked = "revoked"
 )
 
-// Token is a row of the tokens table: the credential of one agent. Only the
-// SHA-256 hash of the value is stored. PendingHash is the hash of the value
-// handed out by automatic renewal and not yet used by the agent.
+// Token is a row of the tokens table: the credential of one agent. Value is
+// the value in effect (shown in full only to the management CLI); agents are
+// looked up by its SHA-256 hash. PendingHash is the hash of the value handed
+// out by automatic renewal and not yet used by the agent.
 type Token struct {
 	ID               int64
 	Name             string
 	Hash             string
+	Value            string
 	ExpiresAt        int64
 	PendingHash      string
 	PendingExpiresAt int64
@@ -30,11 +32,11 @@ type Token struct {
 	CreatedBy        string
 }
 
-const tokenCols = `id, name, hash, expires_at, pending_hash, pending_expires_at, renew_counter, instance_id, bound_at, used_at, last_seen_at, revoked_at, reissued_at, renewed_at, created_at, created_by`
+const tokenCols = `id, name, hash, value, expires_at, pending_hash, pending_expires_at, renew_counter, instance_id, bound_at, used_at, last_seen_at, revoked_at, reissued_at, renewed_at, created_at, created_by`
 
 func scanToken(s rowScanner) (*Token, error) {
 	t := &Token{}
-	if err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.ExpiresAt, &t.PendingHash, &t.PendingExpiresAt, &t.RenewCounter,
+	if err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.Value, &t.ExpiresAt, &t.PendingHash, &t.PendingExpiresAt, &t.RenewCounter,
 		&t.InstanceID, &t.BoundAt, &t.UsedAt, &t.LastSeenAt, &t.RevokedAt, &t.ReissuedAt, &t.RenewedAt, &t.CreatedAt, &t.CreatedBy); err != nil {
 		return nil, err
 	}
@@ -58,8 +60,8 @@ func (t *Token) Status(now int64) string {
 // InsertToken creates a token.
 func InsertToken(db Execer, t *Token) error {
 	t.CreatedAt = Now()
-	res, err := db.Exec(`INSERT INTO tokens (name, hash, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-		t.Name, t.Hash, t.ExpiresAt, t.CreatedAt, t.CreatedBy)
+	res, err := db.Exec(`INSERT INTO tokens (name, hash, value, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
+		t.Name, t.Hash, t.Value, t.ExpiresAt, t.CreatedAt, t.CreatedBy)
 	if err != nil {
 		return err
 	}
@@ -90,8 +92,8 @@ func ListTokens(db Execer) ([]*Token, error) {
 
 // SaveToken writes every mutable column of the token.
 func SaveToken(db Execer, t *Token) error {
-	return execOne(db, `UPDATE tokens SET hash = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renew_counter = ?,
+	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renew_counter = ?,
 		instance_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?, revoked_at = ?, reissued_at = ?, renewed_at = ? WHERE id = ?`,
-		t.Hash, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.InstanceID, t.BoundAt, t.UsedAt,
+		t.Hash, t.Value, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.InstanceID, t.BoundAt, t.UsedAt,
 		t.LastSeenAt, t.RevokedAt, t.ReissuedAt, t.RenewedAt, t.ID)
 }

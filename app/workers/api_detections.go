@@ -475,7 +475,7 @@ func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": modules.AppVersion, "central_hostname": c.hostname, "agent_urls": nonNil(urls),
+		"version": modules.AppVersion, "central_hostname": c.hostname, "agent_port": port, "agent_urls": nonNil(urls),
 		"ca_fingerprint": fp, "default_valid_days": c.conf().TokenValidDays,
 	})
 }

@@ -72,6 +72,7 @@ CREATE TABLE tokens (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT    NOT NULL UNIQUE,
     hash               TEXT    NOT NULL UNIQUE,
+    value              TEXT    NOT NULL DEFAULT '',
     expires_at         INTEGER NOT NULL,
     pending_hash       TEXT    NOT NULL DEFAULT '',
     pending_expires_at INTEGER NOT NULL DEFAULT 0,

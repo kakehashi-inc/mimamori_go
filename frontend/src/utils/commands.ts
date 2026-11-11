@@ -1,9 +1,10 @@
 /**
- * The command that initializes an agent. The token is passed through stdin
- * so it does not appear in the process list or as a command argument.
+ * The command that initializes an agent. It asks for the token on the
+ * terminal without echo, so the value never appears in the process list, a
+ * command argument or the shell history.
  */
-export function agentInitCommand(value: string, url: string, fingerprint?: string, overwrite?: boolean): string {
+export function agentInitCommand(url: string, fingerprint?: string, overwrite?: boolean): string {
     const fp = fingerprint ? ` --ca-fingerprint ${fingerprint}` : '';
     const ow = overwrite ? ' --overwrite' : '';
-    return `printf '%s\\n' '${value}' | sudo mimamori agent init --server ${url}${fp}${ow}`;
+    return `sudo mimamori agent init --server ${url}${fp}${ow}`;
 }

@@ -234,6 +234,9 @@ func TestTokenRenewalAndReissue(t *testing.T) {
 		t.Fatalf("old value must stop working after the first use of the new one: %d", rec.Code)
 	}
 	id := int64(issued["token"].(map[string]any)["id"].(float64))
+	if v := e.admin("GET", "/tokens/"+itoa64(id), nil)["value"]; v != renewed {
+		t.Fatalf("the CLI must show the renewed value in effect, got %v", v)
+	}
 	re := e.admin("POST", "/tokens/"+itoa64(id)+"/reissue", map[string]any{})
 	if rec := e.agentCall("sync", renewed, "m", modules.SyncRequest{}); rec.Code != 401 {
 		t.Fatalf("reissue must invalidate previous values: %d", rec.Code)
@@ -457,5 +460,43 @@ func TestConfigUpdate(t *testing.T) {
 	}
 	if it := item(out, "agent_listen"); it["pending"] != false || it["stored"] != false {
 		t.Fatalf("agent_listen after unset: %v", it)
+	}
+}
+
+func TestTokenValueVisibility(t *testing.T) {
+	e := newTestEnv(t)
+	issued := e.admin("POST", "/tokens", map[string]any{"name": "host-v"})
+	full := issued["value"].(string)
+	if !strings.HasPrefix(full, modules.TokenPrefix) || len(full) < 40 {
+		t.Fatalf("the CLI must receive the full value, got %q", full)
+	}
+	list := e.admin("GET", "/tokens", nil)["list"].([]any)
+	if v := list[0].(map[string]any)["value"]; v != full {
+		t.Fatalf("CLI list value %v, want the full value", v)
+	}
+	// Browser: an administrator session never receives the full value.
+	cookie := login(t, e, "admin", "Admin-pass-123")
+	hdr := map[string]string{"Cookie": sessionCookie + "=" + cookie, csrfHeader: "1"}
+	for _, path := range []string{"/api/v1/tokens", "/api/v1/tokens/1"} {
+		rec := e.do(e.web, "GET", path, nil, hdr, "192.0.2.1:1000")
+		if rec.Code != 200 || strings.Contains(rec.Body.String(), full) {
+			t.Fatalf("%s: %d, full value present: %v", path, rec.Code, strings.Contains(rec.Body.String(), full))
+		}
+		if !strings.Contains(rec.Body.String(), modules.ShortenSecret(full)) {
+			t.Fatalf("%s: shortened value missing", path)
+		}
+	}
+	for _, req := range []struct {
+		path string
+		body any
+	}{{"/api/v1/tokens", map[string]any{"name": "host-w"}}, {"/api/v1/tokens/1/reissue", nil}} {
+		rec := e.do(e.web, "POST", req.path, req.body, hdr, "192.0.2.1:1000")
+		var out struct {
+			Value string `json:"value"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		if rec.Code != 200 || !strings.Contains(out.Value, "...") {
+			t.Fatalf("%s: %d value %q", req.path, rec.Code, out.Value)
+		}
 	}
 }

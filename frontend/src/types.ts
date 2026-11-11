@@ -124,6 +124,8 @@ export interface AgentDetail extends AgentSummary {
 export interface Token {
     id: number;
     name: string;
+    /** Shortened value ("mmr_AbCd...WxYz"); the full value is never sent to the browser. */
+    value: string;
     status: TokenStatus;
     expires_at: string;
     created_at: string;
@@ -147,6 +149,7 @@ export interface TokenIssueRequest {
 
 export interface TokenWithValue {
     token: Token;
+    /** Shortened value, as in Token. */
     value: string;
 }
 
@@ -391,6 +394,8 @@ export interface Account {
 export interface Guide {
     version: string;
     central_hostname: string;
+    /** Port of the agent listener in effect (agent_listen). */
+    agent_port: string;
     agent_urls: string[] | null;
     ca_fingerprint: string;
     default_valid_days: number;
