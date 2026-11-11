@@ -1,6 +1,6 @@
 {
   "name": "mimamori",
-  "packageManager": "yarn@4.13.0",
+  "packageManager": "yarn@4.18.1",
   "dependencies": {
     "i18next": "^25.10.4",
     "react": "^19.2.4",
