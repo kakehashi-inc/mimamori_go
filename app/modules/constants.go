@@ -15,7 +15,11 @@ const (
 	AuditKey = "mimamori"
 	// AuditRulesFile holds the persistent copy of the generated rules so that
 	// they are reloaded by augenrules at boot. It never edits other files.
-	AuditRulesFile = "/etc/audit/rules.d/99-mimamori.rules"
+	// augenrules concatenates rules.d in C-locale name order, and distribution
+	// files may be named without a number (Ubuntu: audit.rules), so the name
+	// starts with "zz-" to come after every other file and win for the global
+	// settings.
+	AuditRulesFile = "/etc/audit/rules.d/zz-mimamori.rules"
 	// AuditdConfFile is read (never written) to warn about halting actions.
 	AuditdConfFile = "/etc/audit/auditd.conf"
 	// MachineIDFile identifies the host a token is bound to.

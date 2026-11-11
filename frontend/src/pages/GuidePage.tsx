@@ -27,7 +27,7 @@ const CMD_ROTATE_CHECK = "sudo grep -E '^\\s*(max_log_file|max_log_file_action|n
 const CONF_ROTATE_EXAMPLE = ['max_log_file = 8', 'max_log_file_action = ROTATE', 'num_logs = 5'].join('\n');
 const CMD_AGENT_START = 'sudo mimamori agent start';
 const CMD_NEVER_CHECK = "sudo auditctl -l | grep -- '-a never,task'";
-const RULES_FILE = '/etc/audit/rules.d/99-mimamori.rules';
+const RULES_FILE = '/etc/audit/rules.d/zz-mimamori.rules';
 
 function Step({ n, title, children }: { n: number; title: ReactNode; children: ReactNode }) {
     return (
