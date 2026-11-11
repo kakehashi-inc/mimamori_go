@@ -50,10 +50,6 @@ func main() {
 		kong.Description("mimamori: detects and reports operations performed by selected OS users on each host."),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
-		kong.Vars{
-			"central_config": modules.ConfigPath(modules.CentralConfigFileName),
-			"agent_config":   modules.ConfigPath(modules.AgentConfigFileName),
-		},
 	)
 	modules.SetDataDir(cli.DataDir)
 	if err := modules.CheckExePath(); err != nil {

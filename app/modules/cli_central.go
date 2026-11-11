@@ -18,27 +18,17 @@ type CentralCmd struct {
 	Status        CentralStatusCmd        `cmd:"" help:"Show whether the central is running (exit code 3 when it is not)"`
 	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run on the central host with access to its data directory)"`
 	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run on the central host with access to its data directory)"`
-	ExampleConfig CentralExampleConfigCmd `cmd:"" name:"example-config" help:"Print an example configuration file"`
+	Config        CentralConfigCmd        `cmd:"" help:"Show and change the configuration stored in the central database (run on the central host; changes take effect when the central is restarted)"`
 }
 
 // CentralStartCmd starts the central.
-type CentralStartCmd struct {
-	Config string `help:"Configuration file" default:"${central_config}" type:"path"`
-}
+type CentralStartCmd struct{}
 
 func (c *CentralStartCmd) Run() error {
 	if StartCentral == nil {
 		return NewExitError(ExitGeneral, "central not linked")
 	}
-	return StartCentral(c.Config)
-}
-
-// CentralExampleConfigCmd prints an example configuration.
-type CentralExampleConfigCmd struct{}
-
-func (c *CentralExampleConfigCmd) Run() error {
-	fmt.Println(ExampleCentralConfig())
-	return nil
+	return StartCentral()
 }
 
 // localOperator names the OS user running a local administration command
@@ -170,23 +160,19 @@ type AgentCmd struct {
 // AgentInitCmd initializes the agent.
 type AgentInitCmd struct {
 	Server        string `help:"Central URL, e.g. https://central.example.com:8443" required:""`
-	Overwrite     bool   `help:"Replace an existing configuration"`
+	Overwrite     bool   `help:"Replace an existing initialization"`
 	CAFingerprint string `name:"ca-fingerprint" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
-	Config        string `help:"Configuration file" default:"${agent_config}" type:"path"`
 }
 
 func (c *AgentInitCmd) Run() error {
 	return AgentInit(AgentInitOptions{
-		ServerURL: c.Server, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint,
-		ConfigPath: c.Config, DataDir: DataDir(),
+		ServerURL: c.Server, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint, DataDir: DataDir(),
 	})
 }
 
 // AgentStartCmd starts the agent.
-type AgentStartCmd struct {
-	Config string `help:"Configuration file" default:"${agent_config}" type:"path"`
-}
+type AgentStartCmd struct{}
 
 func (c *AgentStartCmd) Run() error {
-	return AgentStart(c.Config, DataDir())
+	return AgentStart(DataDir())
 }

@@ -59,9 +59,7 @@ func (c *CentralStopCmd) Run() error {
 }
 
 // CentralStatusCmd shows whether the central is running.
-type CentralStatusCmd struct {
-	Config string `help:"Configuration file" default:"${central_config}" type:"path"`
-}
+type CentralStatusCmd struct{}
 
 func (c *CentralStatusCmd) Run() error {
 	dir := DataDir()
@@ -70,10 +68,18 @@ func (c *CentralStatusCmd) Run() error {
 		return err
 	}
 	fmt.Printf("%-16s %s\n", "data dir:", dir)
-	if cfg, _, err := LoadCentralConfig(c.Config); err == nil {
-		fmt.Printf("%-16s http://%s\n", "web:", cfg.WebListen)
-		fmt.Printf("%-16s https://%s\n", "agents/admin:", cfg.AgentListen)
-		fmt.Printf("%-16s %d\n", "workers:", cfg.Workers)
+	dbPath := filepath.Join(dir, CentralDBFileName)
+	if _, err := os.Stat(dbPath); err == nil {
+		if db, err := OpenSQLite(dbPath, SchemaCentral); err == nil {
+			if cfg, err := LoadCentralConfig(db); err == nil {
+				fmt.Printf("%-16s http://%s\n", "web:", cfg.WebListen)
+				fmt.Printf("%-16s https://%s\n", "agents/admin:", cfg.AgentListen)
+				fmt.Printf("%-16s %d\n", "workers:", cfg.Workers)
+			} else {
+				fmt.Printf("%-16s %v\n", "configuration:", err)
+			}
+			db.Close()
+		}
 	}
 	if !running {
 		return &ExitError{Code: ExitNotRunning}
@@ -93,9 +99,7 @@ func (c *AgentStopCmd) Run() error {
 }
 
 // AgentStatusCmd shows whether the agent is running and its state.
-type AgentStatusCmd struct {
-	Config string `help:"Configuration file" default:"${agent_config}" type:"path"`
-}
+type AgentStatusCmd struct{}
 
 func (c *AgentStatusCmd) Run() error {
 	dir := DataDir()
@@ -103,31 +107,33 @@ func (c *AgentStatusCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	if cfg, err := LoadAgentConfig(c.Config); err == nil {
-		fmt.Printf("%-16s %s\n", "central:", cfg.ServerURL)
-		fmt.Printf("%-16s %s\n", "token name:", cfg.TokenName)
-		if cfg.TokenExpiresAt > 0 {
-			fmt.Printf("%-16s %s\n", "token expires:", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05"))
-		}
-	} else {
-		fmt.Printf("%-16s %v\n", "configuration:", err)
-	}
 	dbPath := filepath.Join(dir, AgentLocalDBFileName)
-	if _, err := os.Stat(dbPath); err == nil {
-		if db, err := OpenSQLite(dbPath, SchemaAgentLocal); err == nil {
-			var rule RuleAssignment
-			if json.Unmarshal([]byte(models.GetLocalState(db, stateRule)), &rule) == nil && rule.ID > 0 {
-				fmt.Printf("%-16s %s (version %d)\n", "rule:", rule.Name, rule.Version)
-			} else {
-				fmt.Printf("%-16s none\n", "rule:")
+	if _, err := os.Stat(dbPath); err != nil {
+		fmt.Printf("%-16s not initialized (run agent init)\n", "configuration:")
+	} else if db, err := OpenSQLite(dbPath, SchemaAgentLocal); err != nil {
+		fmt.Printf("%-16s %v\n", "local database:", err)
+	} else {
+		if cfg, err := LoadAgentConfig(db); err == nil {
+			fmt.Printf("%-16s %s\n", "central:", cfg.ServerURL)
+			fmt.Printf("%-16s %s\n", "token name:", cfg.TokenName)
+			if cfg.TokenExpiresAt > 0 {
+				fmt.Printf("%-16s %s\n", "token expires:", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05"))
 			}
-			var ap ApplyResult
-			if json.Unmarshal([]byte(models.GetLocalState(db, stateApply)), &ap) == nil && ap.Status != "" {
-				fmt.Printf("%-16s %s: %s\n", "last apply:", ap.Status, ap.Message)
-			}
-			fmt.Printf("%-16s %d report(s), %d detection(s)\n", "unsent:", outboxRows(db), models.OutboxDetectionCount(db))
-			db.Close()
+		} else {
+			fmt.Printf("%-16s %v\n", "configuration:", err)
 		}
+		var rule RuleAssignment
+		if json.Unmarshal([]byte(models.GetLocalState(db, stateRule)), &rule) == nil && rule.ID > 0 {
+			fmt.Printf("%-16s %s (version %d)\n", "rule:", rule.Name, rule.Version)
+		} else {
+			fmt.Printf("%-16s none\n", "rule:")
+		}
+		var ap ApplyResult
+		if json.Unmarshal([]byte(models.GetLocalState(db, stateApply)), &ap) == nil && ap.Status != "" {
+			fmt.Printf("%-16s %s: %s\n", "last apply:", ap.Status, ap.Message)
+		}
+		fmt.Printf("%-16s %d report(s), %d detection(s)\n", "unsent:", outboxRows(db), models.OutboxDetectionCount(db))
+		db.Close()
 	}
 	if !running {
 		return &ExitError{Code: ExitNotRunning}

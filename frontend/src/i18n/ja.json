@@ -126,7 +126,8 @@
         "rejected": "拒否した接続",
         "template": "テンプレート",
         "suppression": "抑止条件",
-        "detection": "検知"
+        "detection": "検知",
+        "config": "設定"
     },
     "certStatus": {
         "active": "使用中",

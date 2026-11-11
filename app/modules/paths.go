@@ -62,12 +62,6 @@ func DataDir() string {
 	return filepath.Join(ExeDir(), DataDirName)
 }
 
-// ConfigPath returns the default path of a configuration file (next to the
-// executable).
-func ConfigPath(name string) string {
-	return filepath.Join(ExeDir(), name)
-}
-
 // EnsureSecureDir creates dir with mode 0700 when it does not exist and
 // checks that it is owned by the user running the program and not
 // accessible by others. An existing directory (or the directory a symbolic

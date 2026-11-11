@@ -27,23 +27,19 @@ const (
 // --- Paths ---
 
 const (
-	// Configuration files are placed next to the executable and data files
-	// in its data/ directory (which may be a symbolic link). The CLI has no
-	// configuration of its own: it reads the central's configuration.
-	CentralConfigFileName   = "central.json"
-	AgentConfigFileName     = "agent.json"
+	// Every file is in the data/ directory next to the executable (which may
+	// be a symbolic link, or another directory given with --data-dir). The
+	// configuration is stored in the databases.
 	DataDirName             = "data"
 	CentralDBFileName       = "central.db"
 	AgentLocalDBFileName    = "agent.db"
 	BuiltinAgentLocalDBName = "builtin-agent.db"
 	TargetDBDirName         = "targets"
 	CentralLockFileName     = "central.lock"
-	// CLISecretFileName holds the secret the central creates at start for
-	// the management CLI; whoever can read the data directory can use it.
-	CLISecretFileName = "cli.secret"
-	// AgentIDFileName holds the ID the agent creates at initialization; the
-	// token is bound to it.
-	AgentIDFileName           = "agent-id"
+	// CLISecretFileName holds the port of the management API and the secret
+	// the central creates at start for the management CLI (JSON, see
+	// CLISecret); whoever can read the data directory can use it.
+	CLISecretFileName         = "cli.secret"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"
 	DefaultWebListen          = "0.0.0.0:8080"

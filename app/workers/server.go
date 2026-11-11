@@ -21,15 +21,8 @@ func init() {
 // startCentral runs the central until SIGINT or SIGTERM. The central flow
 // accepts and processes requests and periodic tasks (within the worker
 // limit); the built-in agent runs on a second flow.
-func startCentral(configPath string) error {
+func startCentral() error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
-	cfg, warnings, err := modules.LoadCentralConfig(configPath)
-	if err != nil {
-		return modules.NewExitError(modules.ExitConfig, err.Error())
-	}
-	for _, w := range warnings {
-		logger.Printf("warning: %s", w)
-	}
 	dataDir := modules.DataDir()
 	if err := modules.EnsureSecureDir(dataDir); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory %s: %v", dataDir, err)
@@ -47,6 +40,10 @@ func startCentral(configPath string) error {
 		return modules.NewExitErrorf(modules.ExitConfig, "database: %v", err)
 	}
 	defer db.Close()
+	cfg, err := modules.LoadCentralConfig(db)
+	if err != nil {
+		return modules.NewExitError(modules.ExitConfig, err.Error()+" (correct it with central config)")
+	}
 
 	c := newCore(db, cfg, dataDir, logger)
 	defer c.closeTargets()

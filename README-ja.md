@@ -34,19 +34,18 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 
 ### 導入の流れ
 
-1. セントラルのホストで設定ファイルを用意して起動します。内蔵エージェントも使う場合は、auditd を操作できる権限（通常は root）で実行します。
+1. セントラルのホストで設定を行い、起動します。内蔵エージェントも使う場合は、auditd を操作できる権限（通常は root）で実行します。
 
     ```bash
     cd <実行ファイルを置いたディレクトリ>
-    sudo ./mimamori central example-config | sudo tee central.json >/dev/null
-    sudo chmod 600 central.json
+    sudo ./mimamori central config set server_names central.example.com,192.0.2.10
     sudo ./mimamori central init-admin --name admin
     sudo ./mimamori central start
     ```
 
-    設定ファイル（`central.json`、`agent.json`）は実行ファイルと同じディレクトリに、データファイルはその `data/` に作られます。`data/` はシンボリックリンクにして別の場所に置けます。
+    設定ファイルはありません。設定もデータも、実行ファイルと同じディレクトリの `data/`（`--data-dir` で変更可）にある SQLite に保存されます。`data/` はシンボリックリンクにして別の場所に置けます。`sudo ./mimamori central config list` で全項目を確認でき、設定していない項目は既定値で動きます。変更はセントラルの再起動で反映されます。
 
-    `server_names` に、エージェントが接続に使うホスト名や IP アドレスを設定してください。プロセスの常駐（systemd など）は環境に合わせて設定します。
+    `server_names` に、エージェントが接続に使うホスト名や IP アドレスを設定してください。通知を使う場合は `smtp.*` の項目を設定します。プロセスの常駐（systemd など）は環境に合わせて設定します。
 
 2. ブラウザで `http://<セントラル>:8080` を開いてログインし、監視ルールの作成とトークンの発行を行います。
 3. 監視対象のホストで、トークンを標準入力から渡してエージェントを初期化し、起動します。
@@ -64,7 +63,7 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
     sudo ./mimamori ctl agents list
     ```
 
-    認証情報や環境変数は要りません（CLI はセントラルの設定とデータディレクトリを読みます）。実行ファイルは、絶対パスか `./mimamori` のようにパスを付けて起動します。
+    認証情報や環境変数は要りません（CLI はセントラルのデータディレクトリを読みます）。実行ファイルは、絶対パスか `./mimamori` のようにパスを付けて起動します。
 
 各ホストで必要な auditd の確認と設定は、画面の「導入の案内」に表示されます。
 

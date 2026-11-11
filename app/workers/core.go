@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -139,13 +140,22 @@ func (c *core) ensureBuiltinAgent() (*models.Agent, error) {
 }
 
 // writeCLISecret creates a new secret for the management CLI at every start
-// and writes it into the data directory (readable by the running user only).
+// and writes it, with the port of the management API this run listens on,
+// into the data directory (readable by the running user only).
 func (c *core) writeCLISecret() error {
 	v, err := modules.RandomHex(32)
 	if err != nil {
 		return err
 	}
-	if err := modules.WriteFileAtomic(filepath.Join(c.dataDir, modules.CLISecretFileName), []byte(v+"\n"), 0o600); err != nil {
+	_, port, err := net.SplitHostPort(c.cfg.AgentListen)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(modules.CLISecret{Port: port, Secret: v})
+	if err != nil {
+		return err
+	}
+	if err := modules.WriteFileAtomic(filepath.Join(c.dataDir, modules.CLISecretFileName), append(data, '\n'), 0o600); err != nil {
 		return err
 	}
 	c.cliSecret = v

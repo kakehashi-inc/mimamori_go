@@ -126,7 +126,8 @@
         "rejected": "Rejected connection",
         "template": "Template",
         "suppression": "Suppression",
-        "detection": "Detection"
+        "detection": "Detection",
+        "config": "Configuration"
     },
     "certStatus": {
         "active": "Active",

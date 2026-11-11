@@ -1,53 +1,95 @@
 package modules
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"strconv"
 	"time"
+
+	"mimamori/app/models"
 )
 
-// AgentConfig is the agent's configuration file (root-only, mode 0600).
+// AgentConfig is the agent's configuration. It is stored in the state table
+// of the agent's local database (keys "config.<name>"), which is closed to
+// other users like the rest of the data directory.
 type AgentConfig struct {
-	ServerURL      string   `json:"server_url"`
-	Token          string   `json:"token"`
-	TokenName      string   `json:"token_name"`
-	TokenExpiresAt int64    `json:"token_expires_at"`
-	CAPEMs         []string `json:"ca_pems"`
-	InitializedAt  int64    `json:"initialized_at"`
+	// AgentID identifies this installation; the central binds the token to
+	// it, so another installation cannot use the same token.
+	AgentID        string
+	ServerURL      string
+	Token          string
+	TokenName      string
+	TokenExpiresAt int64
+	CAPEMs         []string
+	InitializedAt  int64
 }
 
-// LoadAgentConfig reads and checks the configuration file.
-func LoadAgentConfig(path string) (*AgentConfig, error) {
-	// The file holds the token, so it must be closed to other users. Its
-	// directory is the executable's directory and is not checked.
-	if err := CheckSecurePath(path); err != nil {
-		return nil, err
+const (
+	agentCfgID          = "config.agent_id"
+	agentCfgServerURL   = "config.server_url"
+	agentCfgToken       = "config.token"
+	agentCfgTokenName   = "config.token_name"
+	agentCfgTokenExpiry = "config.token_expires_at"
+	agentCfgCAs         = "config.ca_pems"
+	agentCfgInitialized = "config.initialized_at"
+)
+
+// ErrAgentNotInitialized is returned when the local database holds no
+// configuration.
+var ErrAgentNotInitialized = errors.New("the agent is not initialized; run agent init")
+
+// LoadAgentConfig reads the configuration from the agent's local database.
+func LoadAgentConfig(db models.Execer) (*AgentConfig, error) {
+	c := &AgentConfig{
+		AgentID:   models.GetLocalState(db, agentCfgID),
+		ServerURL: models.GetLocalState(db, agentCfgServerURL),
+		Token:     models.GetLocalState(db, agentCfgToken),
+		TokenName: models.GetLocalState(db, agentCfgTokenName),
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	c.TokenExpiresAt, _ = strconv.ParseInt(models.GetLocalState(db, agentCfgTokenExpiry), 10, 64)
+	c.InitializedAt, _ = strconv.ParseInt(models.GetLocalState(db, agentCfgInitialized), 10, 64)
+	if v := models.GetLocalState(db, agentCfgCAs); v != "" {
+		if err := json.Unmarshal([]byte(v), &c.CAPEMs); err != nil {
+			return nil, fmt.Errorf("trusted CAs: %w", err)
+		}
 	}
-	var c AgentConfig
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if c.ServerURL == "" && c.Token == "" {
+		return nil, ErrAgentNotInitialized
 	}
-	if c.ServerURL == "" || c.Token == "" || len(c.CAPEMs) == 0 {
-		return nil, fmt.Errorf("%s: incomplete configuration; run agent init", path)
+	if c.AgentID == "" || c.ServerURL == "" || c.Token == "" || len(c.CAPEMs) == 0 {
+		return nil, errors.New("incomplete configuration; run agent init --overwrite")
 	}
-	return &c, nil
+	return c, nil
 }
 
-// Save writes the configuration atomically with mode 0600 so a crash never
-// leaves a broken file.
-func (c *AgentConfig) Save(path string) error {
-	data, err := json.MarshalIndent(c, "", "  ")
+// Save writes the configuration in one transaction, so a crash never leaves
+// a partly updated configuration.
+func (c *AgentConfig) Save(db *sql.DB) error {
+	cas, err := json.Marshal(c.CAPEMs)
 	if err != nil {
 		return err
 	}
-	return WriteFileAtomic(path, data, 0o600)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, kv := range [][2]string{
+		{agentCfgID, c.AgentID},
+		{agentCfgServerURL, c.ServerURL},
+		{agentCfgToken, c.Token},
+		{agentCfgTokenName, c.TokenName},
+		{agentCfgTokenExpiry, strconv.FormatInt(c.TokenExpiresAt, 10)},
+		{agentCfgCAs, string(cas)},
+		{agentCfgInitialized, strconv.FormatInt(c.InitializedAt, 10)},
+	} {
+		if err := models.SetLocalState(tx, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // MergeCAs adds new CA certificates and drops expired ones. It returns true
@@ -95,34 +137,4 @@ func CAFingerprintsOf(pems []string) []string {
 		}
 	}
 	return out
-}
-
-// EnsureAgentID returns the agent ID stored in the data directory, creating
-// a random one when there is none. The central binds the token to this ID,
-// so another installation cannot use the same token.
-func EnsureAgentID(dataDir string) (string, error) {
-	if id, err := ReadAgentID(dataDir); err == nil {
-		return id, nil
-	}
-	id, err := RandomHex(16)
-	if err != nil {
-		return "", err
-	}
-	if err := WriteFileAtomic(filepath.Join(dataDir, AgentIDFileName), []byte(id+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// ReadAgentID reads the agent ID from the data directory.
-func ReadAgentID(dataDir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(dataDir, AgentIDFileName))
-	if err != nil {
-		return "", err
-	}
-	id := strings.TrimSpace(string(b))
-	if id == "" {
-		return "", fmt.Errorf("%s is empty", AgentIDFileName)
-	}
-	return id, nil
 }

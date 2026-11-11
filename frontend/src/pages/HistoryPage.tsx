@@ -21,6 +21,7 @@ const CATEGORIES: HistoryCategory[] = [
     'template',
     'suppression',
     'detection',
+    'config',
 ];
 
 // Rows per page.

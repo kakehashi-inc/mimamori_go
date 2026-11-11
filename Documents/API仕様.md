@@ -282,7 +282,7 @@ interface CertStatus {
 | --- | --- | --- | --- | --- |
 
 ```ts
-type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection';
+type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
 interface HistoryItem {
   id: number; at: string; account_name: string;   // システムの処理は "system"
   category: HistoryCategory; action: string; target: string; detail: string;

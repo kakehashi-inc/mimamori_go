@@ -34,19 +34,18 @@ mimamori detects operations performed with the privileges of selected OS users o
 
 ### Getting started
 
-1. On the central host, prepare the configuration file and start the central. To use the built-in agent too, run it with permission to control auditd (usually root).
+1. On the central host, set the configuration and start the central. To use the built-in agent too, run it with permission to control auditd (usually root).
 
     ```bash
     cd <directory of the executable>
-    sudo ./mimamori central example-config | sudo tee central.json >/dev/null
-    sudo chmod 600 central.json
+    sudo ./mimamori central config set server_names central.example.com,192.0.2.10
     sudo ./mimamori central init-admin --name admin
     sudo ./mimamori central start
     ```
 
-    Configuration files (`central.json`, `agent.json`) are placed next to the executable and data files in its `data/` directory, which may be a symbolic link to another place.
+    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it), which may be a symbolic link to another place. `sudo ./mimamori central config list` shows every item; items not set use their defaults. Changes take effect when the central is restarted.
 
-    Set `server_names` to the host names and IP addresses agents use to connect. Run the process as a service (systemd and so on) as suits your environment.
+    Set `server_names` to the host names and IP addresses agents use to connect, and the `smtp.*` items for notifications. Run the process as a service (systemd and so on) as suits your environment.
 
 2. Open `http://<central>:8080` in a browser, log in, create a monitoring rule and issue a token.
 3. On each monitored host, initialize the agent with the token given on standard input, then start it.
@@ -64,7 +63,7 @@ mimamori detects operations performed with the privileges of selected OS users o
     sudo ./mimamori ctl agents list
     ```
 
-    No credential or environment variable is needed: the CLI reads the central's configuration and data directory. Start the program with its path (an absolute path or `./mimamori`).
+    No credential or environment variable is needed: the CLI reads the central's data directory. Start the program with its path (an absolute path or `./mimamori`).
 
 The setup guide screen explains the auditd checks and settings required on each host.
 

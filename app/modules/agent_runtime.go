@@ -35,13 +35,12 @@ const (
 // sequentially in the calling flow: syncing, applying rules, reading the
 // audit log, scanning files and reporting.
 type AgentRuntime struct {
-	DB         *sql.DB
-	Transport  AgentTransport
-	Builtin    bool
-	DataDir    string
-	Config     *AgentConfig // nil for the built-in agent
-	ConfigPath string
-	Logger     *log.Logger
+	DB        *sql.DB
+	Transport AgentTransport
+	Builtin   bool
+	DataDir   string
+	Config    *AgentConfig // nil for the built-in agent
+	Logger    *log.Logger
 	// OnTokenRenewed is called after a renewed token was saved.
 	OnTokenRenewed func(token string)
 
@@ -202,7 +201,7 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 	if !changed {
 		return
 	}
-	if err := cfg.Save(rt.ConfigPath); err != nil {
+	if err := cfg.Save(rt.DB); err != nil {
 		// Keep using the old token; the central hands out the same new value
 		// again on the next connection.
 		rt.logf("failed to save configuration (token renewal or CA update postponed): %v", err)

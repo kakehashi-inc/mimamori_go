@@ -360,7 +360,7 @@ export interface CertStatus {
 // --- History ---
 
 export type HistoryCategory =
-    'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection';
+    'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
 
 export interface HistoryItem {
     id: number;

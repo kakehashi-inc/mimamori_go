@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"mimamori/app/models"
 )
 
 // RemoteTransport talks to the central over HTTPS with the agent's token.
@@ -21,7 +23,7 @@ type RemoteTransport struct {
 }
 
 // NewRemoteTransport prepares the HTTPS client for an agent configuration.
-func NewRemoteTransport(cfg *AgentConfig, instanceID string) (*RemoteTransport, error) {
+func NewRemoteTransport(cfg *AgentConfig) (*RemoteTransport, error) {
 	tlsCfg, err := AgentTLSConfig(cfg.CAPEMs)
 	if err != nil {
 		return nil, err
@@ -30,7 +32,7 @@ func NewRemoteTransport(cfg *AgentConfig, instanceID string) (*RemoteTransport, 
 	if err != nil {
 		return nil, err
 	}
-	t := &RemoteTransport{client: c, instanceID: instanceID}
+	t := &RemoteTransport{client: c, instanceID: cfg.AgentID}
 	t.SetToken(cfg.Token)
 	return t, nil
 }
@@ -67,32 +69,51 @@ type AgentInitOptions struct {
 	ServerURL     string
 	Overwrite     bool
 	CAFingerprint string
-	ConfigPath    string
 	DataDir       string
 }
 
 // AgentInit initializes the agent: it checks the prerequisites in order and
-// saves the configuration only when every check passed.
+// creates the local database (holding the configuration) only when every
+// check passed.
 func AgentInit(o AgentInitOptions) error {
 	// 1. auditd (the tools exist and auditctl can query the kernel, which
 	// also tells whether this user is permitted to control auditing)
 	if err := CheckAuditd(); err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
-	// 2. existing configuration
-	if _, err := os.Stat(o.ConfigPath); err == nil && !o.Overwrite {
-		return NewExitErrorf(ExitArgument, "%s already exists; use --overwrite to replace it", o.ConfigPath)
+	// 2. existing initialization (the agent ID is kept on re-initialization)
+	dbPath := filepath.Join(o.DataDir, AgentLocalDBFileName)
+	agentID := ""
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := CheckSecurePath(o.DataDir); err != nil {
+			return NewExitErrorf(ExitFileIO, "data directory: %v", err)
+		}
+		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+		if err != nil {
+			return NewExitErrorf(ExitFileIO, "local database: %v", err)
+		}
+		agentID = models.GetLocalState(db, agentCfgID)
+		_, cfgErr := LoadAgentConfig(db)
+		db.Close()
+		if !errors.Is(cfgErr, ErrAgentNotInitialized) && !o.Overwrite {
+			return NewExitError(ExitArgument, "the agent is already initialized; use --overwrite to replace it")
+		}
 	}
 	token, err := ReadSecret("Token: ")
 	if err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	// 3. storage locations
-	// The configuration file is written into an existing directory (by
-	// default the executable's directory), which is left as it is.
-	if fi, err := os.Stat(filepath.Dir(o.ConfigPath)); err != nil || !fi.IsDir() {
-		return NewExitErrorf(ExitFileIO, "directory of %s does not exist", o.ConfigPath)
+	if agentID == "" {
+		if agentID, err = RandomHex(16); err != nil {
+			return err
+		}
 	}
+	// 3. connect, receive the CA, authenticate (binds the token to this agent)
+	cfg, resp, err := initConnect(o, token, agentID)
+	if err != nil {
+		return NewExitError(ExitExec, err.Error())
+	}
+	// 4. storage: the data directory and the local database
 	var created []string
 	if _, err := os.Stat(o.DataDir); errors.Is(err, os.ErrNotExist) {
 		created = append(created, o.DataDir)
@@ -101,26 +122,17 @@ func AgentInit(o AgentInitOptions) error {
 		removeCreated(created)
 		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
 	}
-	// The agent ID identifies this installation; the token is bound to it.
-	// It is created once and kept on re-initialization.
-	idPath := filepath.Join(o.DataDir, AgentIDFileName)
-	if _, err := os.Stat(idPath); errors.Is(err, os.ErrNotExist) {
-		created = append(created, idPath)
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		created = append(created, dbPath, dbPath+"-wal", dbPath+"-shm")
 	}
-	agentID, err := EnsureAgentID(o.DataDir)
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+	if err == nil {
+		err = cfg.Save(db)
+		db.Close()
+	}
 	if err != nil {
 		removeCreated(created)
-		return NewExitErrorf(ExitFileIO, "agent ID: %v", err)
-	}
-	// 4. connect, receive the CA, authenticate (binds the token to this agent)
-	cfg, resp, err := initConnect(o, token, agentID)
-	if err != nil {
-		removeCreated(created)
-		return NewExitError(ExitExec, err.Error())
-	}
-	if err := cfg.Save(o.ConfigPath); err != nil {
-		removeCreated(created)
-		return NewExitErrorf(ExitFileIO, "saving %s: %v", o.ConfigPath, err)
+		return NewExitErrorf(ExitFileIO, "local database: %v", err)
 	}
 
 	for _, h := range HaltActions() {
@@ -174,9 +186,9 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 			return nil, nil, fmt.Errorf("CA fingerprint mismatch: the central offered %s", FormatFingerprint(fps[0]))
 		}
 	}
-	cfg := &AgentConfig{ServerURL: o.ServerURL, Token: token, InitializedAt: time.Now().Unix()}
+	cfg := &AgentConfig{AgentID: agentID, ServerURL: o.ServerURL, Token: token, InitializedAt: time.Now().Unix()}
 	cfg.MergeCAs(ca.CAPEMs, time.Now())
-	tr, err := NewRemoteTransport(cfg, agentID)
+	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -203,14 +215,14 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 }
 
 // AgentStart runs the agent in the calling flow until SIGINT or SIGTERM.
-func AgentStart(configPath, dataDir string) error {
+func AgentStart(dataDir string) error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if err := CheckAuditd(); err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
-	cfg, err := LoadAgentConfig(configPath)
-	if err != nil {
-		return NewExitErrorf(ExitConfig, "configuration: %v", err)
+	dbPath := filepath.Join(dataDir, AgentLocalDBFileName)
+	if _, err := os.Stat(dbPath); err != nil {
+		return NewExitError(ExitConfig, ErrAgentNotInitialized.Error())
 	}
 	if err := CheckSecurePath(dataDir); err != nil {
 		return NewExitErrorf(ExitConfig, "data directory: %v", err)
@@ -220,21 +232,21 @@ func AgentStart(configPath, dataDir string) error {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := OpenSQLite(filepath.Join(dataDir, AgentLocalDBFileName), SchemaAgentLocal)
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
 		return NewExitErrorf(ExitConfig, "local database: %v", err)
 	}
 	defer db.Close()
-	agentID, err := ReadAgentID(dataDir)
+	cfg, err := LoadAgentConfig(db)
 	if err != nil {
-		return NewExitErrorf(ExitConfig, "agent ID: %v (run agent init)", err)
+		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}
-	tr, err := NewRemoteTransport(cfg, agentID)
+	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	rt := NewAgentRuntime(db, tr, dataDir, logger)
-	rt.Config, rt.ConfigPath = cfg, configPath
+	rt.Config = cfg
 	rt.OnTokenRenewed = tr.SetToken
 	prevCAs := len(cfg.CAPEMs)
 
