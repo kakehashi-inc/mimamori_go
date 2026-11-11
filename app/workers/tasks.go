@@ -14,6 +14,7 @@ import (
 // a job, so it counts against the worker limit like a request.
 func (c *core) periodicTasks() {
 	now := time.Now()
+	c.reloadConfig()
 	if err := c.manageCertificates(); err != nil {
 		c.logger.Printf("certificates: %v", err)
 	}
@@ -53,7 +54,7 @@ func (c *core) retention(now time.Time) {
 	if now.Unix()-c.settingInt(settingLastRetentionAt) < 3600 {
 		return
 	}
-	cut := now.Add(-time.Duration(c.cfg.RetentionDays) * 24 * time.Hour).Unix()
+	cut := now.Add(-time.Duration(c.conf().RetentionDays) * 24 * time.Hour).Unix()
 	agents, err := models.ListAgents(c.db)
 	if err != nil {
 		return
@@ -85,10 +86,10 @@ type pendingGroup struct {
 // notify composes at most one mail per minimum interval from new
 // detections, then (re)sends every undelivered mail.
 func (c *core) notify(now time.Time) {
-	if !c.cfg.SMTP.Enabled() {
+	if !c.conf().SMTP.Enabled() {
 		return
 	}
-	minInterval := int64(c.cfg.Notify.MinIntervalMin) * 60
+	minInterval := int64(c.conf().Notify.MinIntervalMin) * 60
 	if now.Unix()-c.settingInt(settingLastNotifyAt) >= minInterval {
 		c.composeNotification(now)
 	}
@@ -97,7 +98,7 @@ func (c *core) notify(now time.Time) {
 		return
 	}
 	for _, n := range unsent {
-		err := modules.SendMail(c.cfg.SMTP, n.Subject, n.Body)
+		err := modules.SendMail(c.conf().SMTP, n.Subject, n.Body)
 		if err != nil {
 			_ = models.MarkNotificationAttempt(c.db, n.ID, 0, err.Error())
 			c.logger.Printf("notification %d: send failed (will retry): %v", n.ID, err)
@@ -142,9 +143,9 @@ func (c *core) composeNotification(now time.Time) {
 	if total == 0 {
 		return
 	}
-	subject := fmt.Sprintf("%s %d new detection(s)", c.cfg.Notify.SubjectPrefix, total)
+	subject := fmt.Sprintf("%s %d new detection(s)", c.conf().Notify.SubjectPrefix, total)
 	if totalAlerts > 0 {
-		subject = fmt.Sprintf("%s [ALERT] %d alert(s), %d new detection(s)", c.cfg.Notify.SubjectPrefix, totalAlerts, total)
+		subject = fmt.Sprintf("%s [ALERT] %d alert(s), %d new detection(s)", c.conf().Notify.SubjectPrefix, totalAlerts, total)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s detected %d new item(s) at %s.\n", modules.AppName, total, now.Local().Format("2006-01-02 15:04:05 MST"))
@@ -152,7 +153,7 @@ func (c *core) composeNotification(now time.Time) {
 	for _, g := range groups {
 		fmt.Fprintf(&b, "\n== %s (%s) ==\n", g.name, g.hostname)
 		for _, d := range append(append([]*models.Detection{}, g.alerts...), g.normals...) {
-			if lines >= c.cfg.Notify.MaxLines {
+			if lines >= c.conf().Notify.MaxLines {
 				omitted++
 				continue
 			}

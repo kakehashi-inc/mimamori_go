@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,8 +25,12 @@ import (
 // worker flows and the built-in agent on its own flow, so everything shared
 // is either in the databases or guarded here.
 type core struct {
-	db        *sql.DB
-	cfg       *modules.CentralConfig
+	db *sql.DB
+	// cfg is the configuration in effect; it is replaced when the stored
+	// configuration changes (see reloadConfig). started is the configuration
+	// read at start, which keeps the items that apply only at start.
+	cfg       atomic.Pointer[modules.CentralConfig]
+	started   *modules.CentralConfig
 	dataDir   string
 	spaFS     fs.FS
 	logger    *log.Logger
@@ -48,7 +51,25 @@ type core struct {
 
 func newCore(db *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
 	h, _ := os.Hostname()
-	return &core{db: db, cfg: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*sql.DB{}}
+	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*sql.DB{}}
+	c.cfg.Store(cfg)
+	return c
+}
+
+// conf returns the configuration in effect.
+func (c *core) conf() *modules.CentralConfig { return c.cfg.Load() }
+
+// reloadConfig reads the stored configuration again so changes made on the
+// settings screen or with "central config" take effect without a restart
+// (except the items that apply only at start).
+func (c *core) reloadConfig() {
+	cfg, err := modules.LoadCentralConfig(c.db)
+	if err != nil {
+		c.logger.Printf("configuration not reloaded: %v", err)
+		return
+	}
+	cfg.KeepRestartItems(c.started)
+	c.cfg.Store(cfg)
 }
 
 func (c *core) setBuiltinStatus(running bool, msg string) {
@@ -140,22 +161,13 @@ func (c *core) ensureBuiltinAgent() (*models.Agent, error) {
 }
 
 // writeCLISecret creates a new secret for the management CLI at every start
-// and writes it, with the port of the management API this run listens on,
-// into the data directory (readable by the running user only).
+// and writes it into the data directory (readable by the running user only).
 func (c *core) writeCLISecret() error {
 	v, err := modules.RandomHex(32)
 	if err != nil {
 		return err
 	}
-	_, port, err := net.SplitHostPort(c.cfg.AgentListen)
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(modules.CLISecret{Port: port, Secret: v})
-	if err != nil {
-		return err
-	}
-	if err := modules.WriteFileAtomic(filepath.Join(c.dataDir, modules.CLISecretFileName), append(data, '\n'), 0o600); err != nil {
+	if err := modules.WriteFileAtomic(filepath.Join(c.dataDir, modules.CLISecretFileName), []byte(v+"\n"), 0o600); err != nil {
 		return err
 	}
 	c.cliSecret = v

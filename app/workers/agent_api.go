@@ -87,7 +87,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	}
 	resp := &modules.SyncResponse{
 		AgentName:          modules.BuiltinAgentName,
-		DefaultIntervalSec: c.cfg.DefaultCheckIntervalSec,
+		DefaultIntervalSec: c.conf().DefaultCheckIntervalSec,
 	}
 	// The assigned version is always sent, so the agent can tell whether it
 	// runs the assigned version (it applies only a different one).
@@ -103,13 +103,13 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	}
 	resp.AgentName = tok.Name
 	resp.TokenExpiresAt = tok.ExpiresAt
-	renewBefore := int64(c.cfg.TokenRenewBeforeDays) * 86400
+	renewBefore := int64(c.conf().TokenRenewBeforeDays) * 86400
 	if tok.ExpiresAt-now < renewBefore {
 		if tok.PendingHash == "" || tok.PendingExpiresAt <= now {
 			tok.RenewCounter++
 			v := modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter)
 			tok.PendingHash = modules.HashSecret(v)
-			tok.PendingExpiresAt = now + int64(c.cfg.TokenValidDays)*86400
+			tok.PendingExpiresAt = now + int64(c.conf().TokenValidDays)*86400
 			if err := models.SaveToken(c.db, tok); err != nil {
 				return nil, err
 			}
@@ -197,7 +197,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		return err
 	}
 	now := time.Now().Unix()
-	dedupe := int64(c.cfg.Notify.DedupeHours) * 3600
+	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
 	tx, err := tdb.Begin()
 	if err != nil {
 		return err

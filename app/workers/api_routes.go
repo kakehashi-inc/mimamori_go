@@ -63,6 +63,9 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 	h("GET /certificates", requireAny(c.handleCertificates))
 	h("GET /history", requireAny(c.handleHistory))
 
+	h("GET /config", requireAdmin(c.handleGetConfig))
+	h("PUT /config", requireAdmin(c.handleUpdateConfig))
+
 	h("GET /accounts", requireAdmin(c.handleListAccounts))
 	h("POST /accounts", requireAdmin(c.handleCreateAccount))
 	h("PUT /accounts/{id}/role", requireAdmin(c.handleAccountRole))

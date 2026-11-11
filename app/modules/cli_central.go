@@ -18,7 +18,7 @@ type CentralCmd struct {
 	Status        CentralStatusCmd        `cmd:"" help:"Show whether the central is running (exit code 3 when it is not)"`
 	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run on the central host with access to its data directory)"`
 	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run on the central host with access to its data directory)"`
-	Config        CentralConfigCmd        `cmd:"" help:"Show and change the configuration stored in the central database (run on the central host; changes take effect when the central is restarted)"`
+	Config        CentralConfigCmd        `cmd:"" help:"Show and change the configuration stored in the central database (run on the central host; also changeable on the settings screen)"`
 }
 
 // CentralStartCmd starts the central.

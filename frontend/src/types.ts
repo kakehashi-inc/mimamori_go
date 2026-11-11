@@ -395,3 +395,32 @@ export interface Guide {
     ca_fingerprint: string;
     default_valid_days: number;
 }
+
+// --- Central configuration ---
+
+export type ConfigKind = 'string' | 'int' | 'bool' | 'list' | 'secret';
+
+export interface ConfigItem {
+    name: string;
+    kind: ConfigKind;
+    /** Current stored or default value ("" for the secret item). */
+    value: string;
+    /** The secret item has a value. */
+    is_set: boolean;
+    default: string;
+    /** false when the default applies. */
+    stored: boolean;
+    /** Takes effect when the central restarts. */
+    restart: boolean;
+    /** A restart item whose stored value is not in effect yet. */
+    pending: boolean;
+}
+
+export interface CentralConfig {
+    items: ConfigItem[];
+}
+
+export interface ConfigUpdate {
+    set: Record<string, string>;
+    unset: string[];
+}

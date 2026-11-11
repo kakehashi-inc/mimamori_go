@@ -5,6 +5,7 @@ import { AccountsPage } from './pages/AccountsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { CertificatesPage } from './pages/CertificatesPage';
+import { ConfigPage } from './pages/ConfigPage';
 import { DetectionsPage } from './pages/DetectionsPage';
 import { GuidePage } from './pages/GuidePage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -45,6 +46,14 @@ export default function App() {
                     element={
                         <RequireAdmin>
                             <AccountsPage />
+                        </RequireAdmin>
+                    }
+                />
+                <Route
+                    path='/config'
+                    element={
+                        <RequireAdmin>
+                            <ConfigPage />
                         </RequireAdmin>
                     }
                 />

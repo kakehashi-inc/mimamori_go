@@ -42,7 +42,7 @@ func (c *core) accountOut(a *models.Account) accountJSON {
 }
 
 func (c *core) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": modules.AppVersion, "remember_days": c.cfg.SessionRememberDays})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": modules.AppVersion, "remember_days": c.conf().SessionRememberDays})
 }
 
 func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -85,12 +85,12 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	expires := now + int64(c.cfg.SessionHours)*3600
+	expires := now + int64(c.conf().SessionHours)*3600
 	cookie := &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
 	if in.Remember {
 		// "Keep me logged in": the cookie survives closing the browser and
 		// the session lasts the configured period from login.
-		maxAge := c.cfg.SessionRememberDays * 86400
+		maxAge := c.conf().SessionRememberDays * 86400
 		expires = now + int64(maxAge)
 		cookie.MaxAge = maxAge
 	}

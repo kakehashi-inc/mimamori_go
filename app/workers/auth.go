@@ -60,7 +60,7 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 		if now-s.LastSeenAt > 60 {
 			// An idle-timeout session is extended by activity; a remembered
 			// session keeps its fixed expiry from login (like its cookie).
-			expires := now + int64(c.cfg.SessionHours)*3600
+			expires := now + int64(c.conf().SessionHours)*3600
 			if s.Remember {
 				expires = s.ExpiresAt
 			}

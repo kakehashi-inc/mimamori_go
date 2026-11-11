@@ -42,7 +42,7 @@ func (t *inProcessTransport) Report(req *modules.ReportRequest) error {
 // central functions run and the reason is shown in the log and on screen.
 func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func() {
 	none := func() {}
-	if !*c.cfg.BuiltinAgent {
+	if !*c.conf().BuiltinAgent {
 		c.setBuiltinStatus(false, "the built-in agent is disabled in the configuration")
 		return none
 	}

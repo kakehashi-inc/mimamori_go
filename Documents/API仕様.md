@@ -312,6 +312,30 @@ interface Account {
 - 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です。
 - パスワードは 10 文字以上です。
 
+## 12.1 システム設定
+
+| メソッド | パス | 権限 | 要求 | 応答 |
+| --- | --- | --- | --- | --- |
+| GET | `/config` | A | - | `CentralConfig` |
+| PUT | `/config` | A | `{"set"?: {項目: 値}, "unset"?: [項目]}` | `CentralConfig`（変更後） |
+
+```ts
+interface CentralConfig { items: ConfigItem[] }
+interface ConfigItem {
+  name: string;                       // 例 "retention_days"、"smtp.host"
+  kind: 'string' | 'int' | 'bool' | 'list' | 'secret';
+  value: string;                      // 保存した値または既定値（一覧はカンマ区切り、真偽値は "true" / "false"。secret は常に ""）
+  is_set: boolean;                    // secret に値があるか
+  default: string;                    // 既定値（secret は ""）
+  stored: boolean;                    // false は既定値で動作中
+  restart: boolean;                   // true はセントラルの再起動後に反映
+  pending: boolean;                   // 再起動後に反映する項目で、保存した値がまだ使われていない
+}
+```
+
+- `set` と `unset`（既定値に戻す）はまとめて検証し、1 つのトランザクションで保存します。不正な値や組み合わせは 400 で、何も保存しません。
+- 即時反映の項目は保存と同時に反映します。変更した項目を履歴（`config`）に残します（`smtp.password` は値を残さない）。
+
 ## 13. 導入の案内
 
 | GET | `/guide` | V | - | `Guide` |

@@ -460,9 +460,9 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
-	_, port, _ := net.SplitHostPort(c.cfg.AgentListen)
+	_, port, _ := net.SplitHostPort(c.conf().AgentListen)
 	var urls []string
-	for _, n := range modules.ServerCertNames(c.cfg.ServerNames) {
+	for _, n := range modules.ServerCertNames(c.conf().ServerNames) {
 		if n == "127.0.0.1" || n == "::1" || n == "localhost" {
 			continue
 		}
@@ -476,6 +476,6 @@ func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": modules.AppVersion, "central_hostname": c.hostname, "agent_urls": nonNil(urls),
-		"ca_fingerprint": fp, "default_valid_days": c.cfg.TokenValidDays,
+		"ca_fingerprint": fp, "default_valid_days": c.conf().TokenValidDays,
 	})
 }

@@ -416,3 +416,46 @@ func TestLoginRemember(t *testing.T) {
 		t.Fatalf("health: %v", h)
 	}
 }
+
+func TestConfigUpdate(t *testing.T) {
+	e := newTestEnv(t)
+	item := func(m map[string]any, name string) map[string]any {
+		for _, it := range m["items"].([]any) {
+			if x := it.(map[string]any); x["name"] == name {
+				return x
+			}
+		}
+		t.Fatalf("item %s missing", name)
+		return nil
+	}
+	out := e.admin("PUT", "/config", map[string]any{"set": map[string]string{
+		"retention_days": "30", "agent_listen": "127.0.0.1:9443", "smtp.password": "pw", "smtp.to": "a@example.com, b@example.com",
+	}})
+	if e.c.conf().RetentionDays != 30 {
+		t.Fatalf("retention_days not applied while running: %d", e.c.conf().RetentionDays)
+	}
+	if e.c.conf().AgentListen != modules.DefaultAgentListen {
+		t.Fatalf("agent_listen must apply at restart only, running %s", e.c.conf().AgentListen)
+	}
+	if it := item(out, "agent_listen"); it["pending"] != true || it["restart"] != true || it["value"] != "127.0.0.1:9443" {
+		t.Fatalf("agent_listen item: %v", it)
+	}
+	if it := item(out, "smtp.password"); it["value"] != "" || it["is_set"] != true {
+		t.Fatalf("password item: %v", it)
+	}
+	if it := item(out, "smtp.to"); it["value"] != "a@example.com,b@example.com" {
+		t.Fatalf("smtp.to item: %v", it)
+	}
+	rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"web_listen": "127.0.0.1:9443"}},
+		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("same listen addresses: status %d", rec.Code)
+	}
+	out = e.admin("PUT", "/config", map[string]any{"unset": []string{"retention_days", "agent_listen"}})
+	if e.c.conf().RetentionDays != modules.DefaultRetentionDays {
+		t.Fatalf("retention_days default not restored: %d", e.c.conf().RetentionDays)
+	}
+	if it := item(out, "agent_listen"); it["pending"] != false || it["stored"] != false {
+		t.Fatalf("agent_listen after unset: %v", it)
+	}
+}

@@ -101,7 +101,7 @@ func (c *core) manageCertificates() error {
 		return err
 	}
 	cur := pickStatus(servers, models.CertActive)
-	wantNames := modules.ServerCertNames(c.cfg.ServerNames)
+	wantNames := modules.ServerCertNames(c.conf().ServerNames)
 	needNew := forceServer || cur == nil || cur.IssuerFP != active.Fingerprint ||
 		time.Unix(cur.NotAfter, 0).Sub(now) < modules.ServerCertRenewBefore
 	if cur != nil && !needNew {
@@ -113,7 +113,7 @@ func (c *core) manageCertificates() error {
 		}
 	}
 	if needNew {
-		pair, err := modules.GenerateServerCert(activePair, c.cfg.ServerNames, now)
+		pair, err := modules.GenerateServerCert(activePair, c.conf().ServerNames, now)
 		if err != nil {
 			return err
 		}

@@ -43,7 +43,7 @@ mimamori detects operations performed with the privileges of selected OS users o
     sudo ./mimamori central start
     ```
 
-    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it), which may be a symbolic link to another place. `sudo ./mimamori central config list` shows every item; items not set use their defaults. Changes take effect when the central is restarted.
+    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it), which may be a symbolic link to another place. `sudo ./mimamori central config list` shows every item; items not set use their defaults. Administrators can also change the configuration on the "System settings" screen. Most changes take effect at once; the listen addresses, workers and the built-in agent take effect after the central restarts, as the screen shows.
 
     Set `server_names` to the host names and IP addresses agents use to connect, and the `smtp.*` items for notifications. Run the process as a service (systemd and so on) as suits your environment.
 

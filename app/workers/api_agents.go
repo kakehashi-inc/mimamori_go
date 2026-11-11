@@ -280,8 +280,8 @@ func (c *core) tokenOut(t *models.Token) tokenJSON {
 		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
 	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
-		near := t.ExpiresAt-now < int64(c.cfg.TokenRenewBeforeDays)*86400
-		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.cfg.DefaultCheckIntervalSec)+600
+		near := t.ExpiresAt-now < int64(c.conf().TokenRenewBeforeDays)*86400
+		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.conf().DefaultCheckIntervalSec)+600
 		out.ExpiringUnconnected = near && stale
 	}
 	if a, err := models.GetAgentByToken(c.db, t.ID); err == nil {
@@ -329,7 +329,7 @@ func (c *core) handleGetToken(w http.ResponseWriter, r *http.Request) {
 
 func (c *core) validDays(v *int) (int, error) {
 	if v == nil || *v == 0 {
-		return c.cfg.TokenValidDays, nil
+		return c.conf().TokenValidDays, nil
 	}
 	if *v < 1 || *v > 3650 {
 		return 0, errors.New("valid_days must be between 1 and 3650")

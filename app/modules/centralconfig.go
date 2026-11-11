@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -64,12 +65,27 @@ const configKeyPrefix = "config."
 
 // ConfigField describes one configuration item.
 type ConfigField struct {
-	Name   string
-	Kind   string // "string", "int", "bool", "list" (comma separated) or "secret"
-	Help   string
-	get    func(c *CentralConfig) string
-	set    func(c *CentralConfig, v string) error
-	secret bool
+	Name string
+	Kind string // "string", "int", "bool", "list" (comma separated) or "secret"
+	Help string
+	// Restart is true for items read only when the central starts (the
+	// listeners, the workers and the built-in agent); the others take effect
+	// while the central is running.
+	Restart bool
+	get     func(c *CentralConfig) string
+	set     func(c *CentralConfig, v string) error
+	secret  bool
+}
+
+// restartItems lists the items that take effect when the central restarts.
+var restartItems = map[string]bool{
+	"web_listen": true, "agent_listen": true, "workers": true, "queue_timeout_sec": true, "builtin_agent": true,
+}
+
+func init() {
+	for i := range ConfigFields {
+		ConfigFields[i].Restart = restartItems[ConfigFields[i].Name]
+	}
 }
 
 func cfgIntField(name, help string, p func(c *CentralConfig) *int) ConfigField {
@@ -335,51 +351,80 @@ func CentralConfigState(db models.Execer) (*CentralConfig, map[string]bool, erro
 	return c, stored, nil
 }
 
-// SetCentralConfigValue stores one item after checking the resulting
-// configuration.
-func SetCentralConfigValue(db models.Execer, name, value string) error {
-	f, err := FindConfigField(name)
+// ApplyCentralConfigChanges sets and unsets items in one transaction after
+// checking the resulting configuration as a whole. It returns the names of
+// the items whose stored value changed.
+func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string) ([]string, error) {
+	cur, stored, err := storedCentralConfig(db)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	c, _, err := storedCentralConfig(db)
-	if err != nil {
-		return err
+	removed := map[string]bool{}
+	for _, name := range unset {
+		if _, err := FindConfigField(name); err != nil {
+			return nil, err
+		}
+		if _, ok := set[name]; ok {
+			return nil, fmt.Errorf("%s is both set and unset", name)
+		}
+		removed[name] = true
 	}
-	if err := f.set(c, value); err != nil {
-		return err
-	}
-	stored := f.get(c)
-	c.applyDefaults()
-	if err := c.Validate(); err != nil {
-		return err
-	}
-	return models.SetSetting(db, configKeyPrefix+name, stored)
-}
-
-// UnsetCentralConfigValue removes one item so its default applies again.
-func UnsetCentralConfigValue(db models.Execer, name string) error {
-	if _, err := FindConfigField(name); err != nil {
-		return err
-	}
-	c, stored, err := storedCentralConfig(db)
-	if err != nil {
-		return err
-	}
-	if !stored[name] {
-		return nil
-	}
-	fresh := &CentralConfig{}
+	next := &CentralConfig{}
+	values := map[string]string{}
 	for _, f := range ConfigFields {
-		if f.Name != name && stored[f.Name] {
-			if err := f.set(fresh, f.get(c)); err != nil {
-				return err
-			}
+		if stored[f.Name] && !removed[f.Name] {
+			values[f.Name] = f.get(cur)
 		}
 	}
-	fresh.applyDefaults()
-	if err := fresh.Validate(); err != nil {
-		return err
+	for name, v := range set {
+		f, err := FindConfigField(name)
+		if err != nil {
+			return nil, err
+		}
+		probe := &CentralConfig{}
+		if err := f.set(probe, v); err != nil {
+			return nil, err
+		}
+		values[name] = f.get(probe)
 	}
-	return models.DeleteSetting(db, configKeyPrefix+name)
+	for name, v := range values {
+		f, _ := FindConfigField(name)
+		if err := f.set(next, v); err != nil {
+			return nil, err
+		}
+	}
+	next.applyDefaults()
+	if err := next.Validate(); err != nil {
+		return nil, err
+	}
+	var changed []string
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, f := range ConfigFields {
+		v, keep := values[f.Name]
+		switch {
+		case keep && (!stored[f.Name] || f.get(cur) != v):
+			if err := models.SetSetting(tx, configKeyPrefix+f.Name, v); err != nil {
+				return nil, err
+			}
+			changed = append(changed, f.Name)
+		case !keep && stored[f.Name]:
+			if err := models.DeleteSetting(tx, configKeyPrefix+f.Name); err != nil {
+				return nil, err
+			}
+			changed = append(changed, f.Name)
+		}
+	}
+	return changed, tx.Commit()
+}
+
+// KeepRestartItems copies the items that take effect only at start from
+// running into c, so a configuration reloaded while running keeps them.
+func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
+	c.WebListen, c.AgentListen = running.WebListen, running.AgentListen
+	c.Workers, c.QueueTimeoutSec = running.Workers, running.QueueTimeoutSec
+	c.BuiltinAgent = running.BuiltinAgent
 }

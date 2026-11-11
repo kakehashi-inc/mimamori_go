@@ -34,12 +34,6 @@ type CtlCmd struct {
 	History      CtlHistoryCmd      `cmd:"" help:"History"`
 }
 
-// CLISecret is the content of the CLI secret file written by the central.
-type CLISecret struct {
-	Port   string `json:"port"`
-	Secret string `json:"secret"`
-}
-
 // ctlClient is the connected management API client.
 type ctlClient struct {
 	http *HTTPSClient
@@ -47,18 +41,29 @@ type ctlClient struct {
 }
 
 func (c *CtlCmd) client() (*ctlClient, error) {
-	// The central writes the port of its management API and a new secret
-	// into its data directory at every start; its CA is there too. Whoever
-	// can read that directory can use the CLI; it is not tied to an account.
-	raw, err := os.ReadFile(filepath.Join(DataDir(), CLISecretFileName))
+	// The management API is the central's own listener: its port comes from
+	// the central's configuration (agent_listen), the CA and the secret the
+	// central writes at every start from its data directory. Whoever can
+	// read that directory can use the CLI; it is not tied to an account.
+	dir := DataDir()
+	dbPath := filepath.Join(dir, CentralDBFileName)
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, NewExitErrorf(ExitConfig, "central database: %v", err)
+	}
+	db, err := OpenSQLite(dbPath, SchemaCentral)
 	if err != nil {
-		return nil, NewExitErrorf(ExitAuth, "CLI secret of the central: %v (is the central running?)", err)
+		return nil, NewExitErrorf(ExitConfig, "central database: %v", err)
 	}
-	var cs CLISecret
-	if err := json.Unmarshal(raw, &cs); err != nil || cs.Port == "" || cs.Secret == "" {
-		return nil, NewExitErrorf(ExitAuth, "%s is not valid; restart the central", CLISecretFileName)
+	cfg, err := LoadCentralConfig(db)
+	db.Close()
+	if err != nil {
+		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	caFile := filepath.Join(DataDir(), CABundleFileName)
+	_, port, err := net.SplitHostPort(cfg.AgentListen)
+	if err != nil {
+		return nil, NewExitErrorf(ExitConfig, "agent_listen: %v", err)
+	}
+	caFile := filepath.Join(dir, CABundleFileName)
 	pemData, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, NewExitErrorf(ExitConfig, "CA certificate of the central: %v", err)
@@ -67,11 +72,15 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if !pool.AppendCertsFromPEM(pemData) {
 		return nil, NewExitErrorf(ExitConfig, "no certificate in %s", caFile)
 	}
-	hc, err := NewHTTPSClient("https://"+net.JoinHostPort("127.0.0.1", cs.Port), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+	hc, err := NewHTTPSClient("https://"+net.JoinHostPort("127.0.0.1", port), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	hc.Headers["Authorization"] = "Bearer " + cs.Secret
+	secret, err := os.ReadFile(filepath.Join(dir, CLISecretFileName))
+	if err != nil {
+		return nil, NewExitErrorf(ExitAuth, "CLI secret of the central: %v (is the central running?)", err)
+	}
+	hc.Headers["Authorization"] = "Bearer " + strings.TrimSpace(string(secret))
 	return &ctlClient{http: hc, json: c.JSON}, nil
 }
 
@@ -90,7 +99,7 @@ func (cl *ctlClient) call(method, path string, in any) (any, error) {
 			return nil, NewExitError(code, he.Error())
 		}
 		if errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.BaseURL.Host)
+			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.BaseURL.Host+" (a changed agent_listen takes effect when the central is restarted)")
 		}
 		return nil, NewExitError(ExitExec, err.Error())
 	}

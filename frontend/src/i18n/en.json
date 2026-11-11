@@ -23,7 +23,8 @@
         "accounts": "Accounts",
         "guide": "Setup guide",
         "settings": "My settings",
-        "logout": "Log out"
+        "logout": "Log out",
+        "config": "System settings"
     },
     "common": {
         "loading": "Loading...",
@@ -590,5 +591,149 @@
         "title": "Page not found",
         "description": "The page you are looking for does not exist or has moved.",
         "back": "Back to home"
+    },
+    "config": {
+        "title": "System settings",
+        "description": "Configuration of the central. It is stored in the central database and can also be changed with the central config command.",
+        "applyNote": "Items marked \"Immediate\" take effect as soon as they are saved. Items marked \"After restart\" take effect when the central is restarted.",
+        "restart": "After restart",
+        "restartTitle": "Takes effect when the central is restarted",
+        "immediate": "Immediate",
+        "immediateTitle": "Takes effect as soon as it is saved",
+        "pending": "Restart required",
+        "pendingTitle": "Restart the central to apply the saved values",
+        "pendingBody": "Saved but not in effect yet: {{items}}",
+        "usingDefault": "Default",
+        "reset": "Reset to default",
+        "undoReset": "Undo reset",
+        "defaultValue": "Default: {{value}}",
+        "listHint": "Separate multiple values with commas.",
+        "enabled": "Enabled",
+        "secretSet": "(set)",
+        "secretNotSet": "(not set)",
+        "secretClear": "Remove the stored password",
+        "save": "Save",
+        "discard": "Discard changes",
+        "saved": "Settings saved.",
+        "savedRestart": "Settings saved. Some changes take effect after the central restarts.",
+        "security": {
+            "starttls": "STARTTLS",
+            "tls": "TLS (from the start)",
+            "none": "None"
+        },
+        "groups": {
+            "server": "Server",
+            "agents": "Agents and tokens",
+            "sessions": "Login sessions",
+            "notify": "Notifications",
+            "smtp": "SMTP",
+            "other": "Other"
+        },
+        "items": {
+            "web_listen": {
+                "label": "Browser listen address",
+                "hint": "IP address and port of the browser screens (HTTP)."
+            },
+            "agent_listen": {
+                "label": "Agent and management listen address",
+                "hint": "IP address and port for the agents and the CLI (HTTPS). The CLI connects to this port on 127.0.0.1."
+            },
+            "server_names": {
+                "label": "Server certificate names",
+                "hint": "Host names and IP addresses the agents use to connect. 127.0.0.1, ::1 and localhost are always included. A new server certificate is issued within a minute."
+            },
+            "workers": {
+                "label": "Workers",
+                "hint": "Requests processed at the same time (up to 64)."
+            },
+            "queue_timeout_sec": {
+                "label": "Queue timeout (seconds)",
+                "hint": "A waiting request is refused after this time."
+            },
+            "builtin_agent": {
+                "label": "Built-in agent",
+                "hint": "Monitor the central host itself."
+            },
+            "token_valid_days": {
+                "label": "Token validity (days)",
+                "hint": "Default validity of issued and renewed tokens."
+            },
+            "token_renew_before_days": {
+                "label": "Renew tokens before (days)",
+                "hint": "A token is renewed automatically when fewer days than this remain."
+            },
+            "default_check_interval_sec": {
+                "label": "Default check interval (seconds)",
+                "hint": "Check interval of agents without a monitoring rule."
+            },
+            "retention_days": {
+                "label": "Retention (days)",
+                "hint": "Detections older than this are deleted."
+            },
+            "session_hours": {
+                "label": "Session lifetime (hours)",
+                "hint": "Extended on every operation."
+            },
+            "session_remember_days": {
+                "label": "Kept login (days)",
+                "hint": "Lifetime of a login with \"Keep me logged in\" (up to 365). Applies to new logins."
+            },
+            "notify_min_interval_min": {
+                "label": "Minimum interval (minutes)",
+                "hint": "Shortest interval between notification mails."
+            },
+            "notify_dedupe_hours": {
+                "label": "Duplicate suppression (hours)",
+                "hint": "The same detection of the same agent is not notified again within this time."
+            },
+            "notify_max_lines": {
+                "label": "Maximum lines",
+                "hint": "Maximum detection lines in one mail."
+            },
+            "notify_subject_prefix": {
+                "label": "Subject prefix",
+                "hint": "Added at the start of the subject."
+            },
+            "smtp_host": {
+                "label": "SMTP server",
+                "hint": "Notifications are sent only when the server, sender and recipients are set."
+            },
+            "smtp_port": {
+                "label": "Port",
+                "hint": "587, 465 or 25 by default depending on the security."
+            },
+            "smtp_security": {
+                "label": "Security",
+                "hint": "How the connection is encrypted."
+            },
+            "smtp_auth": {
+                "label": "Authentication",
+                "hint": "Log in to the SMTP server."
+            },
+            "smtp_username": {
+                "label": "User name",
+                "hint": "User name for authentication."
+            },
+            "smtp_password": {
+                "label": "Password",
+                "hint": "Enter a new value to change it. The stored value is never shown."
+            },
+            "smtp_from": {
+                "label": "Sender",
+                "hint": "Sender address."
+            },
+            "smtp_to": {
+                "label": "Recipients",
+                "hint": "Recipient addresses."
+            },
+            "smtp_timeout_sec": {
+                "label": "Timeout (seconds)",
+                "hint": "Timeout of the SMTP connection."
+            },
+            "smtp_helo_name": {
+                "label": "HELO name",
+                "hint": "Name sent in HELO/EHLO. The host name when empty."
+            }
+        }
     }
 }

@@ -3,7 +3,9 @@ import type {
     Account,
     AgentDetail,
     AgentSummary,
+    CentralConfig,
     CertStatus,
+    ConfigUpdate,
     Detection,
     DetectionQuery,
     Guide,
@@ -306,4 +308,14 @@ export function setAccountDisabled(id: number, disabled: boolean): Promise<Accou
 
 export function deleteAccount(id: number): Promise<unknown> {
     return send('DELETE', `/accounts/${id}`);
+}
+
+// --- Central configuration ---
+
+export function getConfig(): Promise<CentralConfig> {
+    return request<CentralConfig>('/config');
+}
+
+export function updateConfig(body: ConfigUpdate): Promise<CentralConfig> {
+    return send<CentralConfig>('PUT', '/config', body);
 }

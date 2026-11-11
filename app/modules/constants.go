@@ -36,9 +36,8 @@ const (
 	BuiltinAgentLocalDBName = "builtin-agent.db"
 	TargetDBDirName         = "targets"
 	CentralLockFileName     = "central.lock"
-	// CLISecretFileName holds the port of the management API and the secret
-	// the central creates at start for the management CLI (JSON, see
-	// CLISecret); whoever can read the data directory can use it.
+	// CLISecretFileName holds the secret the central creates at start for
+	// the management CLI; whoever can read the data directory can use it.
 	CLISecretFileName         = "cli.secret"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"

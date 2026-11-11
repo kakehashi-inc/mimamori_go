@@ -19,6 +19,7 @@ interface NavItem {
         | 'certificates'
         | 'history'
         | 'accounts'
+        | 'config'
         | 'guide';
     icon: string;
     adminOnly?: boolean;
@@ -34,6 +35,7 @@ const NAV: NavItem[] = [
     { to: '/certificates', key: 'certificates', icon: 'verified_user' },
     { to: '/history', key: 'history', icon: 'history' },
     { to: '/accounts', key: 'accounts', icon: 'manage_accounts', adminOnly: true },
+    { to: '/config', key: 'config', icon: 'tune', adminOnly: true },
     { to: '/guide', key: 'guide', icon: 'menu_book' },
 ];
 
