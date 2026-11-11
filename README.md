@@ -37,12 +37,14 @@ mimamori detects operations performed with the privileges of selected OS users o
 1. On the central host, prepare the configuration file and start the central. To use the built-in agent too, run it with permission to control auditd (usually root).
 
     ```bash
-    sudo install -d -m 700 /etc/mimamori
-    mimamori central example-config | sudo tee /etc/mimamori/central.json >/dev/null
-    sudo chmod 600 /etc/mimamori/central.json
-    sudo mimamori central init-admin --name admin
-    sudo mimamori central start
+    cd <directory of the executable>
+    sudo ./mimamori central example-config | sudo tee central.json >/dev/null
+    sudo chmod 600 central.json
+    sudo ./mimamori central init-admin --name admin
+    sudo ./mimamori central start
     ```
+
+    Configuration files (`central.json`, `agent.json`, `cli.json`) are placed next to the executable and data files in its `data/` directory, which may be a symbolic link to another place.
 
     Set `server_names` to the host names and IP addresses agents use to connect. Run the process as a service (systemd and so on) as suits your environment.
 

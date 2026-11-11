@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -20,10 +19,9 @@ type AgentConfig struct {
 
 // LoadAgentConfig reads and checks the configuration file.
 func LoadAgentConfig(path string) (*AgentConfig, error) {
+	// The file holds the token, so it must be closed to other users. Its
+	// directory is the executable's directory and is not checked.
 	if err := CheckSecurePath(path); err != nil {
-		return nil, err
-	}
-	if err := CheckSecurePath(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(path)

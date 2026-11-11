@@ -56,7 +56,7 @@ func localOperator() string {
 // openCentralDBLocal opens the central database directly on the central
 // host. Access is controlled by the permissions of the data directory.
 func openCentralDBLocal() (*sql.DB, error) {
-	dir := DataDir(DefaultCentralDataDir)
+	dir := DataDir()
 	if err := EnsureSecureDir(dir); err != nil {
 		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
 	}
@@ -182,7 +182,7 @@ type AgentInitCmd struct {
 func (c *AgentInitCmd) Run() error {
 	return AgentInit(AgentInitOptions{
 		ServerURL: c.Server, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint,
-		ConfigPath: c.Config, DataDir: DataDir(DefaultAgentDataDir),
+		ConfigPath: c.Config, DataDir: DataDir(),
 	})
 }
 
@@ -192,5 +192,5 @@ type AgentStartCmd struct {
 }
 
 func (c *AgentStartCmd) Run() error {
-	return AgentStart(c.Config, DataDir(DefaultAgentDataDir))
+	return AgentStart(c.Config, DataDir())
 }

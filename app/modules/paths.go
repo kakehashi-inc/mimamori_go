@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,28 +12,46 @@ import (
 var dataDirOverride string
 
 // SetDataDir overrides the data directory for this process. An empty value
-// keeps the role default.
+// keeps the default (data/ next to the executable).
 func SetDataDir(dir string) {
 	dataDirOverride = dir
 }
 
-// DataDir returns the data directory: the --data-dir flag or the default.
-func DataDir(defaultDir string) string {
+// ExeDir returns the directory of the running executable. Configuration
+// files are placed here.
+func ExeDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
+}
+
+// DataDir returns the data directory: the --data-dir flag, otherwise data/
+// next to the executable. It may be a symbolic link to another place.
+func DataDir() string {
 	if dataDirOverride != "" {
 		return dataDirOverride
 	}
-	return defaultDir
+	return filepath.Join(ExeDir(), DataDirName)
 }
 
-// EnsureSecureDir creates dir (and parents) with mode 0700 and checks that
-// it is owned by the user running the program and not accessible by others.
-// The owner of an existing directory is never changed: a mismatch is
-// reported instead.
+// ConfigPath returns the default path of a configuration file (next to the
+// executable).
+func ConfigPath(name string) string {
+	return filepath.Join(ExeDir(), name)
+}
+
+// EnsureSecureDir creates dir with mode 0700 when it does not exist and
+// checks that it is owned by the user running the program and not
+// accessible by others. An existing directory (or the directory a symbolic
+// link points to) is never modified: a mismatch is reported instead.
 func EnsureSecureDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
 	return CheckSecurePath(dir)

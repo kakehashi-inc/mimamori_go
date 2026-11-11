@@ -27,7 +27,7 @@ type CLIConfig struct {
 // CtlCmd groups the management commands. They run on the central host and
 // use the management API over the loopback address.
 type CtlCmd struct {
-	CLIConfig string `name:"cli-config" help:"CLI configuration file (JSON with url, key, ca_file). Environment variables MIMAMORI_URL, MIMAMORI_CLI_KEY and MIMAMORI_CA_FILE take precedence" type:"path"`
+	CLIConfig string `name:"cli-config" help:"CLI configuration file (JSON with url, key, ca_file; default: cli.json next to the executable). Environment variables MIMAMORI_URL, MIMAMORI_CLI_KEY and MIMAMORI_CA_FILE take precedence" type:"path"`
 	JSON      bool   `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
@@ -53,7 +53,7 @@ func loadCLIConfig(path string) (*CLIConfig, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".config", AppName, "cli.json"))
 	}
-	candidates = append(candidates, DefaultCLIConfigFile)
+	candidates = append(candidates, ConfigPath(CLIConfigFileName))
 	for _, p := range candidates {
 		if p == "" {
 			continue
@@ -86,7 +86,7 @@ func loadCLIConfig(path string) (*CLIConfig, error) {
 		cfg.URL = DefaultCLIURL
 	}
 	if cfg.CAFile == "" {
-		cfg.CAFile = filepath.Join(DataDir(DefaultCentralDataDir), CABundleFileName)
+		cfg.CAFile = filepath.Join(DataDir(), CABundleFileName)
 	}
 	return cfg, nil
 }

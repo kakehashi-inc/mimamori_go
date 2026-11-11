@@ -1,6 +1,7 @@
 -- +goose Up
 -- Schema of the agent's local database on each monitored host
--- (/var/lib/mimamori/agent/agent.db, or builtin-agent.db on the central host).
+-- (data/agent.db next to the executable, or data/builtin-agent.db on the central
+-- host).
 -- Times are INTEGER Unix seconds (UTC).
 
 -- +goose StatementBegin

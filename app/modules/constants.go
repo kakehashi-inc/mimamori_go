@@ -26,15 +26,15 @@ const (
 	MachineIDFile = "/etc/machine-id"
 )
 
-// --- Default paths ---
+// --- Paths ---
 
 const (
-	DefaultConfigDir          = "/etc/mimamori"
-	DefaultCentralConfigFile  = "/etc/mimamori/central.json"
-	DefaultAgentConfigFile    = "/etc/mimamori/agent.json"
-	DefaultCLIConfigFile      = "/etc/mimamori/cli.json"
-	DefaultCentralDataDir     = "/var/lib/mimamori/central"
-	DefaultAgentDataDir       = "/var/lib/mimamori/agent"
+	// Configuration files are placed next to the executable and data files
+	// in its data/ directory (which may be a symbolic link).
+	CentralConfigFileName     = "central.json"
+	AgentConfigFileName       = "agent.json"
+	CLIConfigFileName         = "cli.json"
+	DataDirName               = "data"
 	CentralDBFileName         = "central.db"
 	AgentLocalDBFileName      = "agent.db"
 	BuiltinAgentLocalDBName   = "builtin-agent.db"

@@ -30,7 +30,7 @@ func startCentral(configPath string) error {
 	for _, w := range warnings {
 		logger.Printf("warning: %s", w)
 	}
-	dataDir := modules.DataDir(modules.DefaultCentralDataDir)
+	dataDir := modules.DataDir()
 	if err := modules.EnsureSecureDir(dataDir); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory %s: %v", dataDir, err)
 	}

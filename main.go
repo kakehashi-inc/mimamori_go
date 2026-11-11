@@ -18,7 +18,7 @@ var version = "dev"
 // CLI defines the top-level command structure. Startup parameter parsing lives
 // here; the commands themselves are implemented in app/modules.
 type CLI struct {
-	DataDir string `help:"Data directory (default: /var/lib/mimamori/central for the central, /var/lib/mimamori/agent for the agent)" name:"data-dir" type:"path" placeholder:"DIR"`
+	DataDir string `help:"Data directory (default: data/ next to the executable; it may be a symbolic link)" name:"data-dir" type:"path" placeholder:"DIR"`
 
 	Central modules.CentralCmd `cmd:"" help:"Central service and its local administration"`
 	Agent   modules.AgentCmd   `cmd:"" help:"Agent initialization and service"`
@@ -51,8 +51,8 @@ func main() {
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
 		kong.Vars{
-			"central_config": modules.DefaultCentralConfigFile,
-			"agent_config":   modules.DefaultAgentConfigFile,
+			"central_config": modules.ConfigPath(modules.CentralConfigFileName),
+			"agent_config":   modules.ConfigPath(modules.AgentConfigFileName),
 		},
 	)
 	modules.SetDataDir(cli.DataDir)

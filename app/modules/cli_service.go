@@ -58,7 +58,7 @@ type CentralStopCmd struct {
 }
 
 func (c *CentralStopCmd) Run() error {
-	return stopService("central", filepath.Join(DataDir(DefaultCentralDataDir), CentralLockFileName), c.Timeout)
+	return stopService("central", filepath.Join(DataDir(), CentralLockFileName), c.Timeout)
 }
 
 // CentralStatusCmd shows whether the central is running.
@@ -67,7 +67,7 @@ type CentralStatusCmd struct {
 }
 
 func (c *CentralStatusCmd) Run() error {
-	dir := DataDir(DefaultCentralDataDir)
+	dir := DataDir()
 	running, err := printRunning("central", filepath.Join(dir, CentralLockFileName))
 	if err != nil {
 		return err
@@ -92,7 +92,7 @@ type AgentStopCmd struct {
 }
 
 func (c *AgentStopCmd) Run() error {
-	return stopService("agent", filepath.Join(DataDir(DefaultAgentDataDir), AgentLockFileName), c.Timeout)
+	return stopService("agent", filepath.Join(DataDir(), AgentLockFileName), c.Timeout)
 }
 
 // AgentStatusCmd shows whether the agent is running and its state.
@@ -101,7 +101,7 @@ type AgentStatusCmd struct {
 }
 
 func (c *AgentStatusCmd) Run() error {
-	dir := DataDir(DefaultAgentDataDir)
+	dir := DataDir()
 	running, err := printRunning("agent", filepath.Join(dir, AgentLockFileName))
 	if err != nil {
 		return err

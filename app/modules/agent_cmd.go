@@ -88,15 +88,18 @@ func AgentInit(o AgentInitOptions) error {
 		return NewExitError(ExitArgument, err.Error())
 	}
 	// 3. storage locations
+	// The configuration file is written into an existing directory (by
+	// default the executable's directory), which is left as it is.
+	if fi, err := os.Stat(filepath.Dir(o.ConfigPath)); err != nil || !fi.IsDir() {
+		return NewExitErrorf(ExitFileIO, "directory of %s does not exist", o.ConfigPath)
+	}
 	var created []string
-	for _, d := range []string{filepath.Dir(o.ConfigPath), o.DataDir} {
-		if _, err := os.Stat(d); errors.Is(err, os.ErrNotExist) {
-			created = append(created, d)
-		}
-		if err := EnsureSecureDir(d); err != nil {
-			removeCreated(created)
-			return NewExitErrorf(ExitFileIO, "cannot secure %s: %v", d, err)
-		}
+	if _, err := os.Stat(o.DataDir); errors.Is(err, os.ErrNotExist) {
+		created = append(created, o.DataDir)
+	}
+	if err := EnsureSecureDir(o.DataDir); err != nil {
+		removeCreated(created)
+		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
 	}
 	// 4. connect, receive the CA, authenticate (binds the token to this machine)
 	cfg, resp, err := initConnect(o, token)

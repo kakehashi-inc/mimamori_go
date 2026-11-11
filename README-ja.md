@@ -37,12 +37,14 @@ mimamori は、各ホストで指定した OS のユーザー（Web サーバー
 1. セントラルのホストで設定ファイルを用意して起動します。内蔵エージェントも使う場合は、auditd を操作できる権限（通常は root）で実行します。
 
     ```bash
-    sudo install -d -m 700 /etc/mimamori
-    mimamori central example-config | sudo tee /etc/mimamori/central.json >/dev/null
-    sudo chmod 600 /etc/mimamori/central.json
-    sudo mimamori central init-admin --name admin
-    sudo mimamori central start
+    cd <実行ファイルを置いたディレクトリ>
+    sudo ./mimamori central example-config | sudo tee central.json >/dev/null
+    sudo chmod 600 central.json
+    sudo ./mimamori central init-admin --name admin
+    sudo ./mimamori central start
     ```
+
+    設定ファイル（`central.json`、`agent.json`、`cli.json`）は実行ファイルと同じディレクトリに、データファイルはその `data/` に作られます。`data/` はシンボリックリンクにして別の場所に置けます。
 
     `server_names` に、エージェントが接続に使うホスト名や IP アドレスを設定してください。プロセスの常駐（systemd など）は環境に合わせて設定します。
 
