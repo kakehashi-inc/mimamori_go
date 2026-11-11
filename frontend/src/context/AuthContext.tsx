@@ -10,7 +10,7 @@ interface AuthContextValue {
     status: AuthStatus;
     me: Me | null;
     isAdmin: boolean;
-    login: (name: string, password: string) => Promise<void>;
+    login: (name: string, password: string, remember: boolean) => Promise<void>;
     logout: () => Promise<void>;
     /** The language setting in effect: the account's, or the temporary one before login. */
     langSetting: LangSetting;
@@ -51,8 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, []);
 
-    const login = useCallback(async (name: string, password: string) => {
-        const m = await apiLogin(name, password);
+    const login = useCallback(async (name: string, password: string, remember: boolean) => {
+        const m = await apiLogin(name, password, remember);
         setMe(m);
         setStatus('authenticated');
         await applyLangSetting(m.language);

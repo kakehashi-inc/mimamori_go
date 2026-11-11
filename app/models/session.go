@@ -1,30 +1,35 @@
 package models
 
 // Session is a row of the sessions table (a logged-in browser). The id column
-// holds the hash of the cookie value, never the value itself.
+// holds the hash of the cookie value, never the value itself. A remembered
+// session ("keep me logged in") lasts a fixed period from login; any other
+// session expires after a period without activity.
 type Session struct {
 	ID         string
 	AccountID  int64
 	CreatedAt  int64
 	ExpiresAt  int64
 	LastSeenAt int64
+	Remember   bool
 }
 
 // InsertSession stores a session.
 func InsertSession(db Execer, s *Session) error {
-	_, err := db.Exec(`INSERT INTO sessions (id, account_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
-		s.ID, s.AccountID, s.CreatedAt, s.ExpiresAt, s.LastSeenAt)
+	_, err := db.Exec(`INSERT INTO sessions (id, account_id, created_at, expires_at, last_seen_at, remember) VALUES (?, ?, ?, ?, ?, ?)`,
+		s.ID, s.AccountID, s.CreatedAt, s.ExpiresAt, s.LastSeenAt, boolToInt(s.Remember))
 	return err
 }
 
 // GetSession returns the session by hashed id.
 func GetSession(db Execer, id string) (*Session, error) {
 	s := &Session{}
-	err := db.QueryRow(`SELECT id, account_id, created_at, expires_at, last_seen_at FROM sessions WHERE id = ?`, id).
-		Scan(&s.ID, &s.AccountID, &s.CreatedAt, &s.ExpiresAt, &s.LastSeenAt)
+	var remember int
+	err := db.QueryRow(`SELECT id, account_id, created_at, expires_at, last_seen_at, remember FROM sessions WHERE id = ?`, id).
+		Scan(&s.ID, &s.AccountID, &s.CreatedAt, &s.ExpiresAt, &s.LastSeenAt, &remember)
 	if err != nil {
 		return nil, err
 	}
+	s.Remember = remember != 0
 	return s, nil
 }
 

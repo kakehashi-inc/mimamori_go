@@ -43,13 +43,14 @@ func (c *core) accountOut(a *models.Account) accountJSON {
 }
 
 func (c *core) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": modules.AppVersion})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": modules.AppVersion, "remember_days": c.cfg.SessionRememberDays})
 }
 
 func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name     string `json:"name"`
 		Password string `json:"password"`
+		Remember bool   `json:"remember"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -86,11 +87,19 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := now + int64(c.cfg.SessionHours)*3600
-	if err := models.InsertSession(c.db, &models.Session{ID: modules.HashSecret(value), AccountID: a.ID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now}); err != nil {
+	cookie := &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	if in.Remember {
+		// "Keep me logged in": the cookie survives closing the browser and
+		// the session lasts the configured period from login.
+		maxAge := c.cfg.SessionRememberDays * 86400
+		expires = now + int64(maxAge)
+		cookie.MaxAge = maxAge
+	}
+	if err := models.InsertSession(c.db, &models.Session{ID: modules.HashSecret(value), AccountID: a.ID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now, Remember: in.Remember}); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, cookie)
 	c.history(&principal{Name: a.Name}, models.HistAccount, "login", a.Name, "from "+remoteHost(r.RemoteAddr))
 	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "name": a.Name, "role": a.Role, "language": a.Language})
 }

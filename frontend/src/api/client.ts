@@ -106,8 +106,8 @@ export function getHealth(): Promise<Health> {
     return request<Health>('/health');
 }
 
-export function login(name: string, password: string): Promise<Me> {
-    return send<Me>('POST', '/auth/login', { name, password });
+export function login(name: string, password: string, remember: boolean): Promise<Me> {
+    return send<Me>('POST', '/auth/login', { name, password, remember });
 }
 
 export function logout(): Promise<unknown> {

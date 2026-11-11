@@ -84,7 +84,9 @@
         "password": "Password",
         "submit": "Log in",
         "invalid": "The account name or password is incorrect.",
-        "locked": "Login is temporarily locked after repeated failures. Please try again later."
+        "locked": "Login is temporarily locked after repeated failures. Please try again later.",
+        "remember": "Keep me logged in",
+        "rememberHint": "Stay logged in for {{days}} days, even after closing the browser. Do not use this on a shared computer."
     },
     "role": {
         "admin": "Administrator",

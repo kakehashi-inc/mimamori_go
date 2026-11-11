@@ -49,6 +49,7 @@ type CentralConfig struct {
 	DefaultCheckIntervalSec int          `json:"default_check_interval_sec"`
 	DefaultScanBase         string       `json:"default_scan_base"`
 	SessionHours            int          `json:"session_hours"`
+	SessionRememberDays     int          `json:"session_remember_days"`
 	BuiltinAgent            *bool        `json:"builtin_agent"`
 	Notify                  NotifyConfig `json:"notify"`
 	SMTP                    SMTPConfig   `json:"smtp"`
@@ -91,6 +92,9 @@ func (c *CentralConfig) applyDefaults() {
 	}
 	if c.SessionHours <= 0 {
 		c.SessionHours = DefaultSessionHours
+	}
+	if c.SessionRememberDays <= 0 {
+		c.SessionRememberDays = DefaultRememberDays
 	}
 	if c.BuiltinAgent == nil {
 		c.BuiltinAgent = boolPtr(true)
@@ -140,6 +144,9 @@ func (c *CentralConfig) Validate() error {
 	case "starttls", "tls", "none":
 	default:
 		errs = append(errs, "smtp.security must be starttls, tls or none")
+	}
+	if c.SessionRememberDays > 365 {
+		errs = append(errs, "session_remember_days must be 365 or less")
 	}
 	if c.Workers > 64 {
 		errs = append(errs, "workers must be 64 or less")

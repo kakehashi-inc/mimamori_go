@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/client';
 import { Button } from '../components/Button';
-import { Field, inputClass } from '../components/FormControls';
+import { checkboxClass, Field, inputClass } from '../components/FormControls';
 import { LanguageSwitch } from '../components/LanguageSwitch';
 import { Alert, Loading } from '../components/StateViews';
 import { useAuth } from '../context/AuthContext';
@@ -19,6 +19,7 @@ export function LoginPage() {
     const from = (location.state as { from?: string } | null)?.from ?? '/';
     const [name, setName] = useState('');
     const [password, setPassword] = useState('');
+    const [remember, setRemember] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +31,7 @@ export function LoginPage() {
         setBusy(true);
         setError(null);
         try {
-            await login(name.trim(), password);
+            await login(name.trim(), password, remember);
             navigate(from, { replace: true });
         } catch (err) {
             if (err instanceof ApiError && err.status === 401) setError(t('login.invalid'));
@@ -78,6 +79,20 @@ export function LoginPage() {
                                 onChange={e => setPassword(e.target.value)}
                             />
                         </Field>
+                        <label className='flex cursor-pointer items-start gap-2 text-sm text-ink'>
+                            <input
+                                type='checkbox'
+                                className={`${checkboxClass} mt-0.5`}
+                                checked={remember}
+                                onChange={e => setRemember(e.target.checked)}
+                            />
+                            <span>
+                                {t('login.remember')}
+                                <span className='block text-xs text-muted'>
+                                    {t('login.rememberHint', { days: health?.remember_days ?? 30 })}
+                                </span>
+                            </span>
+                        </label>
                         {error && <Alert tone='danger'>{error}</Alert>}
                         <Button type='submit' variant='primary' busy={busy} icon='login' className='w-full'>
                             {t('login.submit')}

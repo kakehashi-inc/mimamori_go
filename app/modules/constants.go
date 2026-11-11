@@ -62,6 +62,7 @@ const (
 	DefaultWorkers            = 1
 	DefaultQueueTimeoutSec    = 10
 	DefaultSessionHours       = 12
+	DefaultRememberDays       = 30
 	DefaultSMTPTimeoutSec     = 30
 	DefaultCommandTimeoutSec  = 60
 	DefaultHTTPTimeoutSec     = 30

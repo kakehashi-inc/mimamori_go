@@ -57,7 +57,13 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 			return
 		}
 		if now-s.LastSeenAt > 60 {
-			_ = models.TouchSession(c.db, id, now, now+int64(c.cfg.SessionHours)*3600)
+			// An idle-timeout session is extended by activity; a remembered
+			// session keeps its fixed expiry from login (like its cookie).
+			expires := now + int64(c.cfg.SessionHours)*3600
+			if s.Remember {
+				expires = s.ExpiresAt
+			}
+			_ = models.TouchSession(c.db, id, now, expires)
 		}
 		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, SessionID: id}))
 	})

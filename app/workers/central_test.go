@@ -390,3 +390,30 @@ func TestAccountLanguage(t *testing.T) {
 		t.Fatalf("me after change: %v", me)
 	}
 }
+
+func TestLoginRemember(t *testing.T) {
+	e := newTestEnv(t)
+	for _, remember := range []bool{false, true} {
+		rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]any{"name": "admin", "password": "Admin-pass-123", "remember": remember},
+			map[string]string{csrfHeader: "1"}, "x:1")
+		if rec.Code != 200 {
+			t.Fatalf("login: %d", rec.Code)
+		}
+		ck := rec.Result().Cookies()[0]
+		s, err := models.GetSession(e.c.db, modules.HashSecret(ck.Value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		days := (s.ExpiresAt - s.CreatedAt) / 86400
+		if remember {
+			if ck.MaxAge != modules.DefaultRememberDays*86400 || !s.Remember || days != modules.DefaultRememberDays {
+				t.Fatalf("remembered: max-age %d, remember %v, days %d", ck.MaxAge, s.Remember, days)
+			}
+		} else if ck.MaxAge != 0 || s.Remember || s.ExpiresAt-s.CreatedAt != modules.DefaultSessionHours*3600 {
+			t.Fatalf("session cookie: max-age %d, remember %v", ck.MaxAge, s.Remember)
+		}
+	}
+	if h := decode[map[string]any](t, e.do(e.web, "GET", "/api/v1/health", nil, nil, "x:1")); h["remember_days"] != float64(modules.DefaultRememberDays) {
+		t.Fatalf("health: %v", h)
+	}
+}

@@ -32,8 +32,8 @@
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
-| GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0"}` |
-| POST | `/auth/login` | なし | `{"name","password"}` | `Me`（Cookie を設定）。失敗は 401、一時停止中は 423 |
+| GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30}` |
+| POST | `/auth/login` | なし | `{"name","password","remember"?}` | `Me`（Cookie を設定）。`remember` が true なら有効期限付きの Cookie（ログインを保持）。失敗は 401、一時停止中は 423 |
 | POST | `/auth/logout` | V | - | `{}` |
 | GET | `/auth/me` | V | - | `Me` |
 | POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッションは無効になる） |

@@ -6,6 +6,8 @@ import type { LangSetting } from './constants';
 export interface Health {
     status: string;
     version: string;
+    /** Days a "keep me logged in" session lasts. */
+    remember_days: number;
 }
 
 // --- Authentication ---
