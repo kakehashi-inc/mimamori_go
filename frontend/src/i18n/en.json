@@ -253,8 +253,7 @@
         "initThenStart": "After initializing, start the agent with:",
         "seeGuide": "Open the setup guide",
         "value": "Value",
-        "fullValueNote": "The full value is shown only until you close this dialog. After that the browser shows only a shortened value, administrators included. Copy it now, then enter it when agent init asks for the token.",
-        "showFullCommand": "The full value can be shown later only on the central host:"
+        "fullValueNote": "The full value is shown only until you close this dialog. Copy it now, then enter it when agent init asks for the token."
     },
     "detections": {
         "title": "Detections",
@@ -554,7 +553,7 @@
             "title": "Issue a token",
             "body": "An administrator issues one token per host.",
             "link": "Go to tokens",
-            "note": "The full value is shown in the browser only right after issuing or reissuing, until the dialog is closed; afterwards the browser shows a shortened value, administrators included, and the full value is shown on the central host with \"ctl tokens list\" or \"ctl tokens show ID\". The token is bound to the instance ID of the agent that is initialized with it (created by the agent at initialization and kept in its local database) and cannot be used by other agents."
+            "note": "The full token value is shown only right after issuing or reissuing, until the dialog is closed. The token is bound to the instance ID of the agent that is initialized with it (created by the agent at initialization and kept in its local database) and cannot be used by other agents."
         },
         "init": {
             "title": "Initialize and start the agent",
@@ -594,7 +593,7 @@
     },
     "config": {
         "title": "System settings",
-        "description": "Configuration of the central. It is stored in the central database and can also be changed with the central config command.",
+        "description": "Configuration of the central.",
         "applyNote": "Items marked \"Immediate\" take effect as soon as they are saved. Items marked \"After restart\" take effect when the central is restarted.",
         "restart": "After restart",
         "restartTitle": "Takes effect when the central is restarted",
@@ -636,7 +635,7 @@
             },
             "agent_listen": {
                 "label": "Agent and management listen address",
-                "hint": "IP address and port for the agents and the CLI (HTTPS). The CLI connects to this port on 127.0.0.1."
+                "hint": "IP address and port for the agents (HTTPS)."
             },
             "server_names": {
                 "label": "Server certificate names",

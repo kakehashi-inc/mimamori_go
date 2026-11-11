@@ -265,10 +265,6 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
                 <CodeBlock code={issued.value} />
             </div>
             <div className='flex flex-col gap-2'>
-                <p className='text-xs text-muted'>{t('tokens.showFullCommand')}</p>
-                <CodeBlock code={`./mimamori ctl tokens show ${issued.token.id}`} />
-            </div>
-            <div className='flex flex-col gap-2'>
                 <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
                 <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
                 {urls.map(url => (
