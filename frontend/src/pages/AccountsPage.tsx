@@ -10,7 +10,7 @@ import {
     setAccountRole,
 } from '../api/client';
 import { Badge } from '../components/Badge';
-import { MIN_PASSWORD_LENGTH } from '../constants';
+import { MIN_PASSWORD_LENGTH, SUPPORTED_LANGS, type Lang } from '../constants';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Field, inputClass } from '../components/FormControls';
@@ -76,6 +76,7 @@ export function AccountsPage() {
                             <THead>
                                 <Th>{t('accounts.name')}</Th>
                                 <Th>{t('accounts.role')}</Th>
+                                <Th>{t('accounts.language')}</Th>
                                 <Th>{t('accounts.state')}</Th>
                                 <Th>{t('accounts.cliCredential')}</Th>
                                 <Th>{t('accounts.createdAt')}</Th>
@@ -93,6 +94,7 @@ export function AccountsPage() {
                                         <Td>
                                             <RoleBadge role={a.role} />
                                         </Td>
+                                        <Td>{t(`lang.${a.language}`)}</Td>
                                         <Td>
                                             <div className='flex flex-wrap gap-1'>
                                                 {a.disabled ? (
@@ -341,8 +343,10 @@ function CreateAccountModal({
     onCreated: () => void;
 }) {
     const { t } = useTranslation();
+    const { me } = useAuth();
     const [name, setName] = useState('');
     const [role, setRole] = useState<Role>('viewer');
+    const [language, setLanguage] = useState<Lang>('en');
     const [password, setPassword] = useState('');
     const { busy, error, setError, run } = useSubmit();
 
@@ -350,9 +354,11 @@ function CreateAccountModal({
         if (!open) return;
         setName('');
         setRole('viewer');
+        // New accounts start with the language of the administrator creating them.
+        setLanguage(me?.language ?? 'en');
         setPassword('');
         setError(null);
-    }, [open, setError]);
+    }, [open, setError, me]);
 
     return (
         <FormModal
@@ -370,7 +376,7 @@ function CreateAccountModal({
                     return;
                 }
                 void run(async () => {
-                    await createAccount({ name: name.trim(), role, password });
+                    await createAccount({ name: name.trim(), role, language, password });
                     onClose();
                     onCreated();
                 });
@@ -388,6 +394,20 @@ function CreateAccountModal({
             </Field>
             <Field label={t('accounts.role')} htmlFor='ca-role'>
                 <RoleSelect id='ca-role' value={role} onChange={setRole} />
+            </Field>
+            <Field label={t('accounts.language')} htmlFor='ca-language'>
+                <select
+                    id='ca-language'
+                    className={inputClass}
+                    value={language}
+                    onChange={e => setLanguage(e.target.value as Lang)}
+                >
+                    {SUPPORTED_LANGS.map(code => (
+                        <option key={code} value={code}>
+                            {t(`lang.${code}`)}
+                        </option>
+                    ))}
+                </select>
             </Field>
             <Field
                 label={t('password.password')}

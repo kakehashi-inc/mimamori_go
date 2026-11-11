@@ -59,7 +59,7 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 		if now-s.LastSeenAt > 60 {
 			_ = models.TouchSession(c.db, id, now, now+int64(c.cfg.SessionHours)*3600)
 		}
-		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, SessionID: id}))
+		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, SessionID: id}))
 	})
 }
 
@@ -87,7 +87,7 @@ func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 			return
 		}
 		_ = models.TouchCLICredential(c.db, cred.ID, time.Now().Unix())
-		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, ViaCLI: true}))
+		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, ViaCLI: true}))
 	})
 }
 

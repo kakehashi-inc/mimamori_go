@@ -9,8 +9,8 @@ function isLang(value: unknown): value is Lang {
 }
 
 /**
- * Initial language: an explicit choice saved earlier wins, then the browser's
- * preferred languages in order, then the default.
+ * Initial language before login: the language last used in this browser,
+ * otherwise English. After login the account's language is applied.
  */
 function detectLang(): Lang {
     try {
@@ -18,11 +18,6 @@ function detectLang(): Lang {
         if (isLang(stored)) return stored;
     } catch {
         // Storage can be unavailable (private mode, blocked site data).
-    }
-    const candidates = typeof navigator !== 'undefined' ? navigator.languages : [];
-    for (const tag of candidates) {
-        const base = tag.toLowerCase().split('-')[0];
-        if (isLang(base)) return base;
     }
     return DEFAULT_LANG;
 }
@@ -42,7 +37,7 @@ function applyDocumentLang(lng: string) {
 applyDocumentLang(i18n.language);
 i18n.on('languageChanged', applyDocumentLang);
 
-/** Switches the UI language and remembers the choice for the next visit. */
+/** Switches the UI language and remembers it for the next login screen. */
 export function changeLanguage(lng: Lang): Promise<unknown> {
     try {
         localStorage.setItem(LANG_STORAGE_KEY, lng);

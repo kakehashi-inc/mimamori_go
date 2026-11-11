@@ -1,3 +1,4 @@
+import type { Lang } from '../constants';
 import type {
     Account,
     AgentDetail,
@@ -115,6 +116,10 @@ export function logout(): Promise<unknown> {
 
 export function getMe(): Promise<Me> {
     return request<Me>('/auth/me');
+}
+
+export function setOwnLanguage(language: Lang): Promise<Me> {
+    return send<Me>('PUT', '/auth/language', { language });
 }
 
 export function changeOwnPassword(currentPassword: string, newPassword: string): Promise<unknown> {
@@ -278,7 +283,7 @@ export function listAccounts(): Promise<Account[]> {
     return request<Account[] | null>('/accounts').then(v => v ?? []);
 }
 
-export function createAccount(body: { name: string; role: Role; password: string }): Promise<Account> {
+export function createAccount(body: { name: string; role: Role; language: Lang; password: string }): Promise<Account> {
     return send<Account>('POST', '/accounts', body);
 }
 

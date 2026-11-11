@@ -523,7 +523,8 @@
         "issueCliConfirm": "Issue a CLI credential for {{name}}?",
         "issueCliReplace": "Issue a new CLI credential for {{name}}? The previous value stops working.",
         "cliIssuedTitle": "CLI credential for {{name}}",
-        "cliNote": "The CLI works only on the central host itself (loopback)."
+        "cliNote": "The CLI works only on the central host itself (loopback).",
+        "language": "Display language"
     },
     "password": {
         "password": "Password",

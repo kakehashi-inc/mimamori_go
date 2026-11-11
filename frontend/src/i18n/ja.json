@@ -523,7 +523,8 @@
         "issueCliConfirm": "{{name}} のCLI用の認証情報を発行しますか？",
         "issueCliReplace": "{{name}} のCLI用の認証情報を発行し直しますか？以前の値は使えなくなります。",
         "cliIssuedTitle": "{{name}} のCLI用の認証情報",
-        "cliNote": "CLI はセントラルのホスト上（ループバック）からだけ使えます。"
+        "cliNote": "CLI はセントラルのホスト上（ループバック）からだけ使えます。",
+        "language": "表示言語"
     },
     "password": {
         "password": "パスワード",

@@ -198,6 +198,7 @@ type principal struct {
 	AccountID int64
 	Name      string
 	Role      string
+	Language  string
 	SessionID string // hashed session id (browser only)
 	ViaCLI    bool
 }

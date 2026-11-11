@@ -817,8 +817,9 @@ type CtlAccountsCmd struct {
 }
 type CtlAccountsListCmd struct{}
 type CtlAccountsCreateCmd struct {
-	Name string `arg:""`
-	Role string `help:"admin or viewer" enum:"admin,viewer" required:""`
+	Name     string `arg:""`
+	Role     string `help:"admin or viewer" enum:"admin,viewer" required:""`
+	Language string `help:"Display language of the browser screens (en or ja)" enum:"en,ja" default:"en"`
 }
 type CtlAccountsRoleCmd struct {
 	ID   int64  `arg:""`
@@ -841,14 +842,14 @@ type CtlAccountsCredCmd struct {
 }
 
 func (c *CtlAccountsListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/accounts", nil, "id", "name", "role", "disabled", "locked_until", "has_cli_credential", "created_at")
+	return runCtl(p, "GET", "/accounts", nil, "id", "name", "role", "language", "disabled", "locked_until", "has_cli_credential", "created_at")
 }
 func (c *CtlAccountsCreateCmd) Run(p *CtlCmd) error {
 	pw, err := readNewPassword()
 	if err != nil {
 		return err
 	}
-	return runCtl(p, "POST", "/accounts", map[string]any{"name": c.Name, "role": c.Role, "password": pw})
+	return runCtl(p, "POST", "/accounts", map[string]any{"name": c.Name, "role": c.Role, "language": c.Language, "password": pw})
 }
 func (c *CtlAccountsRoleCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/role", c.ID), map[string]any{"role": c.Role})

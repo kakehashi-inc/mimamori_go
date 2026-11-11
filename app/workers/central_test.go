@@ -362,3 +362,31 @@ func TestNotificationCompose(t *testing.T) {
 		t.Fatalf("deduplicated detection is pending again: %+v", pending)
 	}
 }
+
+func TestAccountLanguage(t *testing.T) {
+	e := newTestEnv(t)
+	created := e.admin("POST", "/accounts", map[string]any{"name": "u1", "role": "viewer", "password": "Viewer-pass-123"})
+	if created["language"] != "en" {
+		t.Fatalf("default language: %v", created["language"])
+	}
+	created = e.admin("POST", "/accounts", map[string]any{"name": "u2", "role": "viewer", "language": "ja", "password": "Viewer-pass-123"})
+	if created["language"] != "ja" {
+		t.Fatalf("given language: %v", created["language"])
+	}
+	rec := e.do(e.agent, "POST", "/admin/v1/accounts", map[string]any{"name": "u3", "role": "viewer", "language": "fr", "password": "Viewer-pass-123"},
+		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:1")
+	if rec.Code != 400 {
+		t.Fatalf("unsupported language: %d", rec.Code)
+	}
+	ck := login(t, e, "u2", "Viewer-pass-123")
+	hdr := map[string]string{"Cookie": sessionCookie + "=" + ck, csrfHeader: "1"}
+	if me := decode[map[string]any](t, e.do(e.web, "GET", "/api/v1/auth/me", nil, hdr, "x:1")); me["language"] != "ja" {
+		t.Fatalf("me: %v", me)
+	}
+	if rec := e.do(e.web, "PUT", "/api/v1/auth/language", map[string]string{"language": "en"}, hdr, "x:1"); rec.Code != 200 {
+		t.Fatalf("change own language: %d", rec.Code)
+	}
+	if me := decode[map[string]any](t, e.do(e.web, "GET", "/api/v1/auth/me", nil, hdr, "x:1")); me["language"] != "en" {
+		t.Fatalf("me after change: %v", me)
+	}
+}

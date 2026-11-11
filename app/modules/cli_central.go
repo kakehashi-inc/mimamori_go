@@ -76,7 +76,8 @@ func readNewPassword() (string, error) {
 
 // CentralInitAdminCmd creates the first administrator.
 type CentralInitAdminCmd struct {
-	Name string `help:"Account name" required:""`
+	Name     string `help:"Account name" required:""`
+	Language string `help:"Display language of the browser screens (en or ja)" enum:"en,ja" default:"en"`
 }
 
 func (c *CentralInitAdminCmd) Run() error {
@@ -100,7 +101,7 @@ func (c *CentralInitAdminCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	a := &models.Account{Name: strings.TrimSpace(c.Name), Role: models.RoleAdmin, PasswordHash: hash}
+	a := &models.Account{Name: strings.TrimSpace(c.Name), Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
 	if err := models.InsertAccount(db, a); err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}

@@ -1,3 +1,4 @@
+import type { Lang } from './constants';
 // Shapes of the JSON exchanged with the server (see the API specification in Documents/).
 // Dates are RFC3339 strings in UTC; unset values are null.
 
@@ -15,6 +16,7 @@ export interface Me {
     id: number;
     name: string;
     role: Role;
+    language: Lang;
 }
 
 // --- Overview ---
@@ -401,6 +403,7 @@ export interface Account {
     id: number;
     name: string;
     role: Role;
+    language: Lang;
     disabled: boolean;
     locked_until: string | null;
     created_at: string;

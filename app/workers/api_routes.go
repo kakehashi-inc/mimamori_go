@@ -18,6 +18,7 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 		h("POST /auth/login", c.handleLogin)
 		h("POST /auth/logout", requireAny(c.handleLogout))
 		h("POST /auth/password", requireAny(c.handleOwnPassword))
+		h("PUT /auth/language", requireAny(c.handleOwnLanguage))
 	}
 	h("GET /auth/me", requireAny(c.handleMe))
 	h("GET /overview", requireAny(c.handleOverview))

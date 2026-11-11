@@ -2,15 +2,14 @@
 
 // --- Language ---
 
-// Languages the UI ships translations for (see src/i18n/). The first entry is
-// the fallback when neither the saved choice nor the browser language matches.
-export const SUPPORTED_LANGS = ['ja', 'en'] as const;
+// Languages the UI ships translations for (see src/i18n/). Each account has
+// one of them as its display language; English is the default.
+export const SUPPORTED_LANGS = ['en', 'ja'] as const;
 export type Lang = (typeof SUPPORTED_LANGS)[number];
-export const DEFAULT_LANG: Lang = SUPPORTED_LANGS[0];
+export const DEFAULT_LANG: Lang = 'en';
 
-// localStorage key that remembers an explicitly chosen language. It is only
-// written when the user picks a language from the menu, so browser detection
-// keeps working for everyone else.
+// localStorage key that remembers the language last used in this browser, so
+// the login screen opens in it. After login the account's language applies.
 export const LANG_STORAGE_KEY = 'mimamori.lang';
 
 // --- Accounts ---

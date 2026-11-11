@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getMe, login as apiLogin, logout as apiLogout, setUnauthorizedHandler } from '../api/client';
+import { getMe, login as apiLogin, logout as apiLogout, setOwnLanguage, setUnauthorizedHandler } from '../api/client';
+import type { Lang } from '../constants';
+import { changeLanguage } from '../i18n/i18n';
 import type { Me } from '../types';
 
 type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
@@ -10,6 +12,8 @@ interface AuthContextValue {
     isAdmin: boolean;
     login: (name: string, password: string) => Promise<void>;
     logout: () => Promise<void>;
+    /** Changes the display language; saved to the account when signed in. */
+    setLanguage: (lang: Lang) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -30,6 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 if (!active) return;
                 setMe(m);
                 setStatus('authenticated');
+                void changeLanguage(m.language);
             })
             .catch(() => {
                 if (!active) return;
@@ -46,7 +51,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const m = await apiLogin(name, password);
         setMe(m);
         setStatus('authenticated');
+        await changeLanguage(m.language);
     }, []);
+
+    const setLanguage = useCallback(
+        async (lang: Lang) => {
+            if (me) {
+                const m = await setOwnLanguage(lang);
+                setMe(m);
+            }
+            await changeLanguage(lang);
+        },
+        [me]
+    );
 
     const logout = useCallback(async () => {
         try {
@@ -58,8 +75,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const value = useMemo<AuthContextValue>(
-        () => ({ status, me, isAdmin: me?.role === 'admin', login, logout }),
-        [status, me, login, logout]
+        () => ({ status, me, isAdmin: me?.role === 'admin', login, logout, setLanguage }),
+        [status, me, login, logout, setLanguage]
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

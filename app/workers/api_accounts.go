@@ -26,6 +26,7 @@ type accountJSON struct {
 	ID               int64   `json:"id"`
 	Name             string  `json:"name"`
 	Role             string  `json:"role"`
+	Language         string  `json:"language"`
 	Disabled         bool    `json:"disabled"`
 	LockedUntil      *string `json:"locked_until"`
 	CreatedAt        *string `json:"created_at"`
@@ -37,7 +38,7 @@ func (c *core) accountOut(a *models.Account) accountJSON {
 	if locked < time.Now().Unix() {
 		locked = 0
 	}
-	return accountJSON{ID: a.ID, Name: a.Name, Role: a.Role, Disabled: a.Disabled, LockedUntil: ts(locked),
+	return accountJSON{ID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, Disabled: a.Disabled, LockedUntil: ts(locked),
 		CreatedAt: ts(a.CreatedAt), HasCLICredential: models.HasCLICredential(c.db, a.ID)}
 }
 
@@ -91,7 +92,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	c.history(&principal{Name: a.Name}, models.HistAccount, "login", a.Name, "from "+remoteHost(r.RemoteAddr))
-	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "name": a.Name, "role": a.Role})
+	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "name": a.Name, "role": a.Role, "language": a.Language})
 }
 
 func (c *core) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +106,28 @@ func (c *core) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (c *core) handleMe(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
-	writeJSON(w, http.StatusOK, map[string]any{"id": p.AccountID, "name": p.Name, "role": p.Role})
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.AccountID, "name": p.Name, "role": p.Role, "language": p.Language})
+}
+
+// handleOwnLanguage changes the display language of the signed-in account.
+func (c *core) handleOwnLanguage(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r)
+	var in struct {
+		Language string `json:"language"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !models.ValidLanguage(in.Language) {
+		writeError(w, http.StatusBadRequest, "language must be en or ja")
+		return
+	}
+	if err := models.UpdateAccountLanguage(c.db, p.AccountID, in.Language); err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.AccountID, "name": p.Name, "role": p.Role, "language": in.Language})
 }
 
 func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +184,7 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name     string `json:"name"`
 		Role     string `json:"role"`
+		Language string `json:"language"`
 		Password string `json:"password"`
 	}
 	if err := readJSON(r, &in); err != nil {
@@ -169,6 +192,13 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
+	if in.Language == "" {
+		in.Language = models.LangEnglish
+	}
+	if !models.ValidLanguage(in.Language) {
+		writeError(w, http.StatusBadRequest, "language must be en or ja")
+		return
+	}
 	if !accountNameRe.MatchString(in.Name) {
 		writeError(w, http.StatusBadRequest, "account name must be 1-64 characters of A-Z a-z 0-9 . _ @ -")
 		return
@@ -186,7 +216,7 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	a := &models.Account{Name: in.Name, Role: in.Role, PasswordHash: hash}
+	a := &models.Account{Name: in.Name, Role: in.Role, Language: in.Language, PasswordHash: hash}
 	if err := models.InsertAccount(c.db, a); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, "an account with this name already exists")
@@ -195,7 +225,7 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistAccount, "created", a.Name, "role "+a.Role)
+	c.history(principalFrom(r), models.HistAccount, "created", a.Name, "role "+a.Role+", language "+a.Language)
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
 

@@ -8,12 +8,24 @@ const (
 	RoleViewer = "viewer"
 )
 
+// Display languages of the browser screens. English is the default.
+const (
+	LangEnglish  = "en"
+	LangJapanese = "ja"
+)
+
+// ValidLanguage reports whether lang is a supported display language.
+func ValidLanguage(lang string) bool {
+	return lang == LangEnglish || lang == LangJapanese
+}
+
 // Account is a row of the accounts table (a person using the browser or CLI).
 type Account struct {
 	ID           int64
 	Name         string
 	PasswordHash string
 	Role         string
+	Language     string
 	Disabled     bool
 	FailedLogins int
 	LockedUntil  int64
@@ -21,12 +33,12 @@ type Account struct {
 	UpdatedAt    int64
 }
 
-const accountCols = `id, name, password_hash, role, disabled, failed_logins, locked_until, created_at, updated_at`
+const accountCols = `id, name, password_hash, role, language, disabled, failed_logins, locked_until, created_at, updated_at`
 
 func scanAccount(s rowScanner) (*Account, error) {
 	a := &Account{}
 	var disabled int
-	if err := s.Scan(&a.ID, &a.Name, &a.PasswordHash, &a.Role, &disabled, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := s.Scan(&a.ID, &a.Name, &a.PasswordHash, &a.Role, &a.Language, &disabled, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	a.Disabled = disabled != 0
@@ -36,8 +48,11 @@ func scanAccount(s rowScanner) (*Account, error) {
 // InsertAccount creates an account.
 func InsertAccount(db Execer, a *Account) error {
 	now := Now()
-	res, err := db.Exec(`INSERT INTO accounts (name, password_hash, role, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		a.Name, a.PasswordHash, a.Role, boolToInt(a.Disabled), now, now)
+	if a.Language == "" {
+		a.Language = LangEnglish
+	}
+	res, err := db.Exec(`INSERT INTO accounts (name, password_hash, role, language, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		a.Name, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), now, now)
 	if err != nil {
 		return err
 	}
@@ -79,6 +94,11 @@ func CountAdmins(db Execer) (int, error) {
 // UpdateAccountRole changes the role.
 func UpdateAccountRole(db Execer, id int64, role string) error {
 	return execOne(db, `UPDATE accounts SET role = ?, updated_at = ? WHERE id = ?`, role, Now(), id)
+}
+
+// UpdateAccountLanguage changes the display language.
+func UpdateAccountLanguage(db Execer, id int64, lang string) error {
+	return execOne(db, `UPDATE accounts SET language = ?, updated_at = ? WHERE id = ?`, lang, Now(), id)
 }
 
 // UpdateAccountPassword sets a new password hash and clears the lockout.
