@@ -40,13 +40,6 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 
 各ホストで必要な auditd の確認と設定は、画面の「導入の案内」に表示されます。
 
-### ドキュメント
-
-- [Documents/システム仕様.md](Documents/システム仕様.md): システム仕様
-- [Documents/API仕様.md](Documents/API仕様.md): HTTP API
-- [Documents/テーブル定義.md](Documents/テーブル定義.md): テーブル定義
-- [CHANGELOG.md](CHANGELOG.md): 変更履歴
-
 ## 2. 開発者向けリファレンス
 
 ### アイコン生成

@@ -40,13 +40,6 @@ mimamori detects operations performed with the privileges of selected OS users o
 
 The auditd checks and settings each host needs are shown on the "Setup guide" screen.
 
-### Documents
-
-- [Documents/システム仕様.md](Documents/システム仕様.md): system specification (Japanese)
-- [Documents/API仕様.md](Documents/API仕様.md): HTTP API (Japanese)
-- [Documents/テーブル定義.md](Documents/テーブル定義.md): table definitions (Japanese)
-- [CHANGELOG.md](CHANGELOG.md): changelog
-
 ## 2. Developer reference
 
 ### Generating icons
