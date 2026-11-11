@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -29,7 +28,7 @@ const (
 	stateLastFullScan   = "last_full_scan"
 	stateScanSignature  = "scan_signature"
 	stateDroppedPending = "dropped_pending"
-	stateLastAuditAt    = "last_audit_at"
+	stateLastAuditEvent = "last_audit_event"
 )
 
 // AgentRuntime performs the periodic processing of an agent. Everything runs
@@ -199,7 +198,7 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 	}
 	*rt.Config = cfg
 	if renewed {
-		rt.logf("token renewed; new expiry %s", time.Unix(cfg.TokenExpiresAt, 0).UTC().Format(time.RFC3339))
+		rt.logf("token renewed; new expiry %s", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
 		if rt.OnTokenRenewed != nil {
 			rt.OnTokenRenewed(cfg.Token)
 		}
@@ -220,7 +219,7 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 		left := time.Until(time.Unix(rt.Config.TokenExpiresAt, 0))
 		if left < time.Duration(DefaultTokenRenewDays)*24*time.Hour {
 			rt.logf("warning: the token expires at %s (in %s) and could not be renewed",
-				time.Unix(rt.Config.TokenExpiresAt, 0).UTC().Format(time.RFC3339), left.Round(time.Minute))
+				time.Unix(rt.Config.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"), left.Round(time.Minute))
 		}
 	}
 }
@@ -298,20 +297,16 @@ func (rt *AgentRuntime) setApply(r *ApplyResult) {
 }
 
 func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []DetectionReport {
-	ckpt := filepath.Join(rt.DataDir, "ausearch.checkpoint")
-	if rt.Builtin {
-		ckpt = filepath.Join(rt.DataDir, "builtin-ausearch.checkpoint")
-	}
-	var since time.Time
-	if v, err := strconv.ParseInt(models.GetLocalState(rt.DB, stateLastAuditAt), 10, 64); err == nil && v > 0 {
-		since = time.Unix(v, 0)
-	}
-	events, err := CollectAuditEvents(ckpt, since)
+	var last AuditEventID
+	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateLastAuditEvent)), &last)
+	events, next, err := CollectAuditEvents(last)
 	if err != nil {
 		rt.logf("reading the audit log failed: %v", err)
 		return nil
 	}
-	_ = models.SetLocalState(rt.DB, stateLastAuditAt, strconv.FormatInt(time.Now().Unix(), 10))
+	if b, err := json.Marshal(next); err == nil {
+		_ = models.SetLocalState(rt.DB, stateLastAuditEvent, string(b))
+	}
 	return AggregateAuditEvents(events, c, users)
 }
 

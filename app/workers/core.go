@@ -83,6 +83,20 @@ func (c *core) targetDB(a *models.Agent) (*sql.DB, error) {
 	return db, nil
 }
 
+// openAllTargets opens (and migrates) the database of every monitored target.
+func (c *core) openAllTargets() error {
+	agents, err := models.ListAgents(c.db)
+	if err != nil {
+		return err
+	}
+	for _, a := range agents {
+		if _, err := c.targetDB(a); err != nil {
+			return fmt.Errorf("agent %d: %w", a.ID, err)
+		}
+	}
+	return nil
+}
+
 func (c *core) closeTargets() {
 	c.targetsMu.Lock()
 	defer c.targetsMu.Unlock()

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -146,8 +147,12 @@ func (cl *ctlClient) call(method, path string, in any) (any, error) {
 
 // show prints a value: a table when columns are given and --json is off.
 func (cl *ctlClient) show(v any, columns ...string) {
-	if cl.json || len(columns) == 0 {
+	if cl.json {
 		fmt.Println(marshalIndent(v))
+		return
+	}
+	if len(columns) == 0 {
+		fmt.Println(marshalIndent(localizeValue(v)))
 		return
 	}
 	var rows []any
@@ -176,6 +181,45 @@ func (cl *ctlClient) show(v any, columns ...string) {
 	tw.Flush()
 }
 
+// rfc3339Re finds RFC3339 timestamps (as returned by the API in UTC).
+var rfc3339Re = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
+
+// localTime renders an RFC3339 timestamp in local time.
+func localTime(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// localizeText replaces every RFC3339 timestamp inside a text with local time.
+func localizeText(s string) string {
+	return rfc3339Re.ReplaceAllStringFunc(s, localTime)
+}
+
+// localizeValue converts the timestamps of a decoded JSON value to local
+// time for display (the --json output keeps the API's UTC values).
+func localizeValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			out[k] = localizeValue(x)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = localizeValue(x)
+		}
+		return out
+	case string:
+		return localizeText(t)
+	}
+	return v
+}
+
 func lookup(m map[string]any, path string) any {
 	var cur any = m
 	for _, p := range strings.Split(path, ".") {
@@ -198,9 +242,7 @@ func cell(v any) string {
 		if t == "" {
 			return "-"
 		}
-		if tm, err := time.Parse(time.RFC3339, t); err == nil {
-			return tm.Local().Format("2006-01-02 15:04:05")
-		}
+		t = localizeText(t)
 		if len(t) > 60 {
 			return t[:57] + "..."
 		}

@@ -168,7 +168,7 @@ func AcknowledgeDetection(db Execer, id int64, by string, now int64) (bool, erro
 
 // ListPendingNotify returns detections waiting for notification.
 func ListPendingNotify(db Execer) ([]*Detection, error) {
-	rows, err := db.Query(`SELECT ` + detectionCols + ` FROM detections WHERE notify_state = 'pending' ORDER BY CASE category WHEN 'alert' THEN 0 ELSE 1 END, last_at`)
+	rows, err := db.Query(`SELECT ` + detectionCols + ` FROM detections WHERE notify_state = 'pending' ORDER BY CASE category WHEN 'alert' THEN 0 ELSE 1 END, last_at DESC, id DESC`)
 	return collect(rows, err, scanDetection)
 }
 

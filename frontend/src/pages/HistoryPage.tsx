@@ -10,7 +10,7 @@ import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { HistoryCategory } from '../types';
-import { formatDateTime } from '../utils/format';
+import { formatDateTime, localizeTimestamps } from '../utils/format';
 
 const CATEGORIES: HistoryCategory[] = [
     'account',
@@ -99,7 +99,9 @@ export function HistoryPage() {
                                         </Td>
                                         <Td>{h.action}</Td>
                                         <Td className='max-w-64 break-all'>{h.target || '-'}</Td>
-                                        <Td className='max-w-96 break-words text-muted'>{h.detail || '-'}</Td>
+                                        <Td className='max-w-96 break-words text-muted'>
+                                            {h.detail ? localizeTimestamps(h.detail) : '-'}
+                                        </Td>
                                         <Td className='font-mono text-xs'>{h.remote_addr || '-'}</Td>
                                         <Td className='text-right'>{h.count}</Td>
                                     </Tr>

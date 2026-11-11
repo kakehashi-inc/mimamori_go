@@ -9,7 +9,7 @@ import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo } from '../types';
-import { formatDateTime } from '../utils/format';
+import { formatDateTime, localizeTimestamps } from '../utils/format';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
 
 const linkClass =
@@ -180,7 +180,7 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                                     <Td className='whitespace-nowrap'>{formatDateTime(h.at)}</Td>
                                     <Td>{h.account_name}</Td>
                                     <Td>{h.action}</Td>
-                                    <Td className='text-muted'>{h.detail}</Td>
+                                    <Td className='text-muted'>{localizeTimestamps(h.detail)}</Td>
                                 </Tr>
                             ))}
                         </TBody>

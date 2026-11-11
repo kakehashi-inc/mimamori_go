@@ -2,10 +2,12 @@ package modules
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"mimamori/app/models"
@@ -113,12 +115,13 @@ type=PATH msg=audit(1700000002.000:12): item=0 name="/root/" nametype=PARENT
 type=PATH msg=audit(1700000002.000:12): item=1 name="secret.txt" nametype=NORMAL
 type=SYSCALL msg=audit(1700000003.000:13): arch=c000003e syscall=42 success=no exit=-115 euid=0 comm="ffmpeg" exe="/opt/ffmpeg/bin/ffmpeg" key="mimamori"
 type=SOCKADDR msg=audit(1700000003.000:13): saddr=020001BBC00002010000000000000000
+type=SYSCALL msg=audit(1700000003.500:15): arch=c000003e syscall=59 success=no exit=-2 euid=48 comm="setpriv" exe="/usr/bin/setpriv" key="mimamori"
 type=SYSCALL msg=audit(1700000004.000:14): arch=c000003e syscall=257 success=yes exit=3 euid=48 comm="cat" exe="/usr/bin/cat" key="other"
 `
 
 func TestAuditParsing(t *testing.T) {
 	events := ParseAuditRaw(sampleAudit)
-	if len(events) != 5 {
+	if len(events) != 6 {
 		t.Fatalf("events: %d", len(events))
 	}
 	c := &RuleContent{Users: []Element{{Value: "apache"}}, Exec: CategoryOnly{Category: "alert"}, Denied: CategoryOnly{Category: "normal"},
@@ -288,5 +291,47 @@ func TestSecrets(t *testing.T) {
 	a, b, c := DeriveRenewalToken([]byte("k"), 1, 2), DeriveRenewalToken([]byte("k"), 1, 2), DeriveRenewalToken([]byte("k"), 1, 3)
 	if a != b || a == c {
 		t.Fatal("renewal derivation")
+	}
+}
+
+// TestMigrationsUpgradeExistingDatabase checks that a database created with
+// the current schema is upgraded in place when a newer migration is added,
+// for each of the three kinds of database files.
+func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
+	repo := os.DirFS("../..")
+	for _, schema := range []string{SchemaCentral, SchemaAgentDB, SchemaAgentLocal} {
+		t.Run(schema, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), schema+".db")
+			MigrationsFS = repo
+			db, err := OpenSQLite(path, schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+
+			next := fstest.MapFS{}
+			entries, _ := fs.ReadDir(repo, "app/migrations/"+schema)
+			for _, e := range entries {
+				data, _ := fs.ReadFile(repo, "app/migrations/"+schema+"/"+e.Name())
+				next["app/migrations/"+schema+"/"+e.Name()] = &fstest.MapFile{Data: data}
+			}
+			next["app/migrations/"+schema+"/9999_test.sql"] = &fstest.MapFile{Data: []byte(
+				"-- +goose Up\n-- +goose StatementBegin\nCREATE TABLE upgrade_check (id INTEGER PRIMARY KEY);\n-- +goose StatementEnd\n" +
+					"-- +goose Down\n-- +goose StatementBegin\nDROP TABLE upgrade_check;\n-- +goose StatementEnd\n")}
+			MigrationsFS = next
+			defer func() { MigrationsFS = repo }()
+			db, err = OpenSQLite(path, schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var v int64
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version`).Scan(&v); err != nil || v != 9999 {
+				t.Fatalf("schema version %d, %v", v, err)
+			}
+			if _, err := db.Exec(`INSERT INTO upgrade_check (id) VALUES (1)`); err != nil {
+				t.Fatalf("new table missing: %v", err)
+			}
+		})
 	}
 }

@@ -49,6 +49,7 @@ type connServer struct {
 
 	queue    []job
 	jobCh    chan job
+	lastPoll time.Time
 	wg       sync.WaitGroup
 	taskBusy atomic.Bool
 }
@@ -120,7 +121,16 @@ func (s *connServer) workerLoop() {
 
 // acceptAll polls every listener once. When work is already queued the poll
 // does not wait; otherwise each listener is waited on for a short interval.
+//
+// A connection accepted now may have been waiting in the kernel since the
+// previous poll ended (for example while the single worker was processing a
+// request), so its waiting time is counted from that moment.
 func (s *connServer) acceptAll() {
+	waitingSince := s.lastPoll
+	if waitingSince.IsZero() {
+		waitingSince = time.Now()
+	}
+	defer func() { s.lastPoll = time.Now() }()
 	for _, sp := range s.specs {
 		wait := modules.AcceptPollInterval
 		if len(s.queue) > 0 {
@@ -139,7 +149,7 @@ func (s *connServer) acceptAll() {
 				}
 				break
 			}
-			j := job{conn: c, spec: sp, acceptedAt: time.Now()}
+			j := job{conn: c, spec: sp, acceptedAt: waitingSince}
 			if len(s.queue) >= modules.MaxPendingConns {
 				s.reject(j)
 				continue

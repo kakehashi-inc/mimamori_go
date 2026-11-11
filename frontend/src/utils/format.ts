@@ -16,6 +16,11 @@ export function formatDateTime(value: string | null | undefined): string {
     );
 }
 
+/** Replaces RFC3339 timestamps embedded in a text (such as a history detail) with local time. */
+export function localizeTimestamps(text: string): string {
+    return text.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g, m => formatDateTime(m));
+}
+
 /** Converts a `<input type="datetime-local">` value to RFC3339 (UTC); '' stays ''. */
 export function localInputToRfc3339(value: string): string {
     if (!value) return '';

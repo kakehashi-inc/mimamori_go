@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -16,7 +15,7 @@ import (
 // AuditEvent is one parsed audit event (all records with the same serial).
 type AuditEvent struct {
 	Time     int64
-	Serial   string
+	ID       AuditEventID
 	Arch     string
 	Syscall  int
 	Success  bool
@@ -133,12 +132,14 @@ func ParseAuditRaw(data string) []*AuditEvent {
 		if m == nil {
 			continue
 		}
-		typ, sec, serial, rest := m[1], m[2], m[4], m[5]
-		id := sec + ":" + serial
+		typ, rest := m[1], m[5]
+		id := m[2] + "." + m[3] + ":" + m[4]
 		ev, ok := events[id]
 		if !ok {
-			ts, _ := strconv.ParseInt(sec, 10, 64)
-			ev = &AuditEvent{Time: ts, Serial: id, EUID: -1}
+			ts, _ := strconv.ParseInt(m[2], 10, 64)
+			ms, _ := strconv.ParseInt(m[3], 10, 64)
+			serial, _ := strconv.ParseInt(m[4], 10, 64)
+			ev = &AuditEvent{Time: ts, ID: AuditEventID{Sec: ts, Msec: ms, Serial: serial}, EUID: -1}
 			events[id] = ev
 			order = append(order, id)
 		}
@@ -199,7 +200,15 @@ const (
 func classifyEvent(ev *AuditEvent) (string, string, bool) {
 	isExec := (ev.Arch == archX8664 && (ev.Syscall == sysExecve64 || ev.Syscall == sysExecat64)) ||
 		(ev.Arch == archI386 && (ev.Syscall == sysExecve32 || ev.Syscall == sysExecat32))
+	denied := !ev.Success && (ev.Exit == -13 || ev.Exit == -1)
 	switch {
+	case isExec && denied:
+		// An execution refused by permissions is a denied operation.
+		return TypeDenied, truncate(eventPath(ev), MaxTargetLength), true
+	case isExec && !ev.Success:
+		// Other failures (for example a PATH search that did not find the
+		// program) are not executions.
+		return "", "", false
 	case isExec:
 		target := strings.Join(ev.Argv, " ")
 		if target == "" {
@@ -212,7 +221,7 @@ func classifyEvent(ev *AuditEvent) (string, string, bool) {
 			return "", "", false
 		}
 		return TypeNetwork, addr, true
-	case !ev.Success && (ev.Exit == -13 || ev.Exit == -1):
+	case denied:
 		return TypeDenied, truncate(eventPath(ev), MaxTargetLength), true
 	case ev.Success:
 		return TypeRead, truncate(eventPath(ev), MaxTargetLength), true
@@ -316,44 +325,60 @@ func AggregateAuditEvents(events []*AuditEvent, c *RuleContent, users map[int]st
 	return out
 }
 
-// CollectAuditEvents reads the audit log from where the previous call ended
-// using an ausearch checkpoint file. When the checkpoint cannot be used (for
-// example the log was rotated away) it falls back to events since "since".
-func CollectAuditEvents(checkpoint string, since time.Time) ([]*AuditEvent, error) {
-	timeout := 120 * time.Second
-	base := []string{"--input-logs", "--raw", "-k", AuditKey, "--checkpoint", checkpoint}
-	first := false
-	if _, err := os.Stat(checkpoint); err != nil {
-		first = true
+// AuditEventID orders audit events: time in seconds and milliseconds, then
+// the serial number.
+type AuditEventID struct {
+	Sec    int64 `json:"sec"`
+	Msec   int64 `json:"msec"`
+	Serial int64 `json:"serial"`
+}
+
+// After reports whether id comes after o.
+func (id AuditEventID) After(o AuditEventID) bool {
+	if id.Sec != o.Sec {
+		return id.Sec > o.Sec
 	}
-	args := base
-	if first {
-		args = append(append([]string{}, base...), "-ts", "recent")
+	if id.Msec != o.Msec {
+		return id.Msec > o.Msec
 	}
-	res, err := RunCommand(timeout, 256<<20, "ausearch", args...)
+	return id.Serial > o.Serial
+}
+
+// CollectAuditEvents reads the events carrying this system's key that come
+// after last. The agent keeps the position itself (instead of the ausearch
+// checkpoint option, which does not advance reliably on every audit
+// version): it searches from the second of the last event, which also covers
+// rotated logs (--input-logs reads every log file), and drops the events it
+// already read. A zero last starts ten minutes back. It returns the events
+// and the new position.
+func CollectAuditEvents(last AuditEventID) ([]*AuditEvent, AuditEventID, error) {
+	start := time.Unix(last.Sec, 0).UTC()
+	if last.Sec == 0 {
+		start = time.Now().UTC().Add(-10 * time.Minute)
+	}
+	// ausearch parses -ts with the C locale date format (two-digit year), and
+	// RunCommand runs it with LC_ALL=C and TZ=UTC.
+	args := []string{"--input-logs", "--raw", "-k", AuditKey, "-ts", start.Format("01/02/06"), start.Format("15:04:05")}
+	res, err := RunCommand(120*time.Second, 256<<20, "ausearch", args...)
 	if err != nil {
-		return nil, err
+		return nil, last, err
 	}
-	switch res.ExitCode {
-	case 0, 1: // 1: no matches
-	case 10, 11, 12:
-		// Invalid or unusable checkpoint: start again from "since".
-		_ = os.Remove(checkpoint)
-		ts := since
-		if ts.IsZero() || time.Since(ts) > 24*time.Hour {
-			ts = time.Now().Add(-10 * time.Minute)
-		}
-		lt := ts.Local()
-		args = append(append([]string{}, base...), "-ts", lt.Format("01/02/2006"), lt.Format("15:04:05"))
-		res, err = RunCommand(timeout, 256<<20, "ausearch", args...)
-		if err != nil {
-			return nil, err
-		}
-		if res.ExitCode != 0 && res.ExitCode != 1 {
-			return nil, fmt.Errorf("ausearch exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
-		}
-	default:
-		return nil, fmt.Errorf("ausearch exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
+	// Exit code 1 means no matching event, but ausearch also exits with 1
+	// on some usage errors, which it reports on standard error.
+	stderr := strings.TrimSpace(string(res.Stderr))
+	if (res.ExitCode != 0 && res.ExitCode != 1) || (res.ExitCode == 1 && strings.Contains(stderr, "Error")) {
+		return nil, last, fmt.Errorf("ausearch exit %d: %s", res.ExitCode, stderr)
 	}
-	return ParseAuditRaw(string(res.Stdout)), nil
+	var out []*AuditEvent
+	next := last
+	for _, ev := range ParseAuditRaw(string(res.Stdout)) {
+		if last.Sec != 0 && !ev.ID.After(last) {
+			continue
+		}
+		out = append(out, ev)
+		if ev.ID.After(next) {
+			next = ev.ID
+		}
+	}
+	return out, next, nil
 }

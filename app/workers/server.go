@@ -60,6 +60,11 @@ func startCentral(configPath string) error {
 	if err := c.manageCertificates(); err != nil {
 		return fmt.Errorf("certificates: %w", err)
 	}
+	// Open every per-target database now so pending migrations are applied
+	// at start rather than on first use.
+	if err := c.openAllTargets(); err != nil {
+		return fmt.Errorf("target databases: %w", err)
+	}
 	spaFS, err := fs.Sub(modules.FrontendFS, "frontend/dist")
 	if err != nil {
 		return fmt.Errorf("embedded frontend: %w", err)

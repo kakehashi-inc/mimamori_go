@@ -69,7 +69,7 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 	_ = os.Remove(errF.Name())
 	defer errF.Close()
 
-	env := []string{"LC_ALL=C", "LANG=C", "PATH=/usr/sbin:/sbin:/usr/bin:/bin"}
+	env := []string{"LC_ALL=C", "LANG=C", "TZ=UTC", "PATH=/usr/sbin:/sbin:/usr/bin:/bin"}
 	proc, err := os.StartProcess(path, append([]string{path}, args...), &os.ProcAttr{
 		Files: []*os.File{devnull, outF, errF},
 		Env:   env,

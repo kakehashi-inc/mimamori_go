@@ -327,7 +327,20 @@ func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJS
 	for _, p := range content.Writable.AllowedPaths {
 		allowed[p] = true
 	}
+	var seqs [][]string
+	for _, p := range content.Writable.AllowedPaths {
+		seqs = append(seqs, modules.SplitComponents(p))
+	}
 	for _, d := range hi.Directories {
+		covered := false
+		for _, seq := range seqs {
+			if modules.MatchSeqAt(modules.SplitComponents(d.Path), seq) >= 0 {
+				covered = true
+			}
+		}
+		if covered {
+			continue
+		}
 		base := filepath.Base(d.Path)
 		parent := filepath.Base(filepath.Dir(d.Path))
 		switch {
