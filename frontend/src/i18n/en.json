@@ -128,9 +128,6 @@
         "suppression": "Suppression",
         "detection": "Detection"
     },
-    "suggestionKind": {
-        "allowed_path": "Allowed write path"
-    },
     "certStatus": {
         "active": "Active",
         "next": "Next CA",
@@ -211,12 +208,6 @@
         "directories": "Directories",
         "directoriesTruncated": "There are many directories, so only part of them is shown.",
         "trustedCas": "Trusted CAs",
-        "suggestions": "Rule suggestions",
-        "suggestionsHint": "Items worth adding to the rule, derived from the host information.",
-        "noSuggestions": "No suggestions",
-        "suggestionKind": "Kind",
-        "suggestionValue": "Value",
-        "suggestionReason": "Reason",
         "tokenHistory": "Token history"
     },
     "tokens": {
@@ -579,7 +570,7 @@
             "osDefaults": "The OS default configuration files (audit.rules and auditd.conf) are left untouched.",
             "never": "It removes the default rule that suppresses auditing (-a never,task), which some distributions such as Amazon Linux 2023 ship by default. Check for it with:",
             "restartTitle": "Processes started before the removal are not audited",
-            "restartBody": "Processes started before -a never,task was removed are not audited until they restart. Restart services such as the web server and php-fpm after installation. The agent details page lists processes that are not audited."
+            "restartBody": "Processes started before -a never,task was removed are not audited until they restart. Restart the processes run by the monitored users after installation."
         },
         "reinit": {
             "title": "Re-initializing",

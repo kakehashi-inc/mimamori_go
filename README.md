@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-mimamori detects operations performed with the privileges of selected OS users on each host (for example the users that run the web server or php-fpm), using auditd and file scans, collects them on a central server and notifies by email. Administrators decide what to monitor and what is important (`alert`) with monitoring rules.
+mimamori detects operations performed with the privileges of selected OS users on each host, using auditd and file scans, collects them on a central server and notifies by email. Administrators decide what to monitor and what is important (`alert`) with monitoring rules.
 
 ### Features
 

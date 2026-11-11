@@ -128,9 +128,6 @@
         "suppression": "抑止条件",
         "detection": "検知"
     },
-    "suggestionKind": {
-        "allowed_path": "書き込みを許可するパス"
-    },
     "certStatus": {
         "active": "使用中",
         "next": "次のCA",
@@ -211,12 +208,6 @@
         "directories": "ディレクトリ",
         "directoriesTruncated": "ディレクトリの数が多いため、一部だけを表示しています。",
         "trustedCas": "信頼しているCA",
-        "suggestions": "監視ルールの候補",
-        "suggestionsHint": "ホストの情報から作った、監視ルールに加えるとよい項目の候補です。",
-        "noSuggestions": "候補はありません",
-        "suggestionKind": "種類",
-        "suggestionValue": "値",
-        "suggestionReason": "理由",
         "tokenHistory": "トークンの更新履歴"
     },
     "tokens": {
@@ -579,7 +570,7 @@
             "osDefaults": "OS の既定の設定ファイル（audit.rules や auditd.conf）は変更しません。",
             "never": "監査を抑制する既定のルール（-a never,task）があれば外します。Amazon Linux 2023 などで既定で入っています。次のコマンドで有無を確認できます。",
             "restartTitle": "外す前から動いているプロセスは監査されません",
-            "restartBody": "-a never,task を外す前に起動したプロセスは、再起動するまで監査されません。導入後に Webサーバーや php-fpm などのサービスを再起動してください。エージェントの詳細画面に、監査されていないプロセスが表示されます。"
+            "restartBody": "-a never,task を外す前に起動したプロセスは、再起動するまで監査されません。導入後に、監視対象のユーザーで動いているプロセスを再起動してください。"
         },
         "reinit": {
             "title": "初期化し直す場合",

@@ -89,14 +89,6 @@ export interface AgentSummary {
     builtin_running: boolean | null;
 }
 
-export type SuggestionKind = 'allowed_path';
-
-export interface Suggestion {
-    kind: SuggestionKind;
-    value: string;
-    reason: string;
-}
-
 export interface HostDirectory {
     path: string;
     owner: string;
@@ -123,7 +115,6 @@ export interface HostInfo {
 
 export interface AgentDetail extends AgentSummary {
     host_info: HostInfo | null;
-    suggestions: Suggestion[] | null;
     token_history: HistoryItem[] | null;
     dropped_total: number;
 }

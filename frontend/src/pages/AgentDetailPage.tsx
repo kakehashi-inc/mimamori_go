@@ -137,32 +137,6 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                 </Card>
             )}
 
-            <Card title={t('agentDetail.suggestions')}>
-                <p className='mb-3 text-xs text-muted'>{t('agentDetail.suggestionsHint')}</p>
-                {(agent.suggestions ?? []).length === 0 ? (
-                    <EmptyState icon='lightbulb'>{t('agentDetail.noSuggestions')}</EmptyState>
-                ) : (
-                    <Table>
-                        <THead>
-                            <Th>{t('agentDetail.suggestionKind')}</Th>
-                            <Th>{t('agentDetail.suggestionValue')}</Th>
-                            <Th>{t('agentDetail.suggestionReason')}</Th>
-                        </THead>
-                        <TBody>
-                            {(agent.suggestions ?? []).map((s, i) => (
-                                <Tr key={i}>
-                                    <Td>
-                                        <Badge tone='accent'>{t(`suggestionKind.${s.kind}`)}</Badge>
-                                    </Td>
-                                    <Td className='font-mono text-xs break-all'>{s.value}</Td>
-                                    <Td className='text-muted'>{s.reason}</Td>
-                                </Tr>
-                            ))}
-                        </TBody>
-                    </Table>
-                )}
-            </Card>
-
             <Card title={t('agentDetail.tokenHistory')}>
                 {(agent.token_history ?? []).length === 0 ? (
                     <EmptyState icon='history'>{t('common.empty')}</EmptyState>

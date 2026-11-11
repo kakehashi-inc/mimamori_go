@@ -97,7 +97,6 @@ interface AuditdStatus {
 }
 interface AgentDetail extends AgentSummary {
   host_info: HostInfo | null;
-  suggestions: { kind: 'user' | 'allowed_path' | 'read_dir'; value: string; reason: string }[];
   token_history: HistoryItem[];
   dropped_total: number;             // 保存量の上限で捨てた検知の累計
 }

@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -55,18 +53,11 @@ type agentSummaryJSON struct {
 	BuiltinRunning     *bool                 `json:"builtin_running"`
 }
 
-type suggestionJSON struct {
-	Kind   string `json:"kind"`
-	Value  string `json:"value"`
-	Reason string `json:"reason"`
-}
-
 type agentDetailJSON struct {
 	agentSummaryJSON
-	HostInfo     *hostInfoJSON    `json:"host_info"`
-	Suggestions  []suggestionJSON `json:"suggestions"`
-	TokenHistory []historyJSON    `json:"token_history"`
-	DroppedTotal int64            `json:"dropped_total"`
+	HostInfo     *hostInfoJSON `json:"host_info"`
+	TokenHistory []historyJSON `json:"token_history"`
+	DroppedTotal int64         `json:"dropped_total"`
 }
 
 // hostInfoJSON converts Unix times of modules.HostInfo for the API.
@@ -232,7 +223,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := agentDetailJSON{agentSummaryJSON: c.agentSummary(a, c.latestCAFingerprints(), c.rulesByID()),
-		Suggestions: []suggestionJSON{}, TokenHistory: []historyJSON{}, DroppedTotal: a.DroppedTotal}
+		TokenHistory: []historyJSON{}, DroppedTotal: a.DroppedTotal}
 	var hi *modules.HostInfo
 	if tdb, err := c.targetDB(a); err == nil {
 		if rep, err := models.LatestHostReport(tdb); err == nil {
@@ -251,7 +242,6 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 			hj.TrustedCAs = append(hj.TrustedCAs, trustedCAJSON{Fingerprint: t.Fingerprint, NotAfter: ts(t.NotAfter)})
 		}
 		out.HostInfo = hj
-		out.Suggestions = c.suggestions(a, hi)
 	}
 	name := out.DisplayName
 	if a.Kind == models.AgentToken {
@@ -263,62 +253,6 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-// suggestions proposes allowed paths for the rule from the reported
-// directory structure (Laravel-like writable directories and upload, cache
-// and log directories not yet covered).
-func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJSON {
-	var content *modules.RuleContent
-	if a.AssignedRuleID.Valid {
-		if ra, err := c.ruleAssignment(a.AssignedRuleID.Int64, a.AssignedRuleVersion); err == nil {
-			content = &ra.Content
-		}
-	}
-	if content == nil {
-		content = &modules.RuleContent{}
-	}
-	out := []suggestionJSON{}
-	seen := map[string]bool{}
-	add := func(kind, value, reason string) {
-		k := kind + "\x00" + value
-		if seen[k] {
-			return
-		}
-		seen[k] = true
-		out = append(out, suggestionJSON{Kind: kind, Value: value, Reason: reason})
-	}
-	allowed := map[string]bool{}
-	for _, p := range content.Writable.AllowedPaths {
-		allowed[p] = true
-	}
-	var seqs [][]string
-	for _, p := range content.Writable.AllowedPaths {
-		seqs = append(seqs, modules.SplitComponents(p))
-	}
-	for _, d := range hi.Directories {
-		covered := false
-		for _, seq := range seqs {
-			if modules.MatchSeqAt(modules.SplitComponents(d.Path), seq) >= 0 {
-				covered = true
-			}
-		}
-		if covered {
-			continue
-		}
-		base := filepath.Base(d.Path)
-		parent := filepath.Base(filepath.Dir(d.Path))
-		switch {
-		case base == "storage" && !allowed["storage"]:
-			add("allowed_path", "storage", "directory "+d.Path+" owned by "+d.Owner)
-		case base == "cache" && parent == "bootstrap" && !allowed["bootstrap/cache"]:
-			add("allowed_path", "bootstrap/cache", "directory "+d.Path+" owned by "+d.Owner)
-		case (base == "uploads" || base == "upload" || base == "tmp" || base == "cache" || base == "logs") && !allowed[base] && d.Depth >= 2:
-			add("allowed_path", base, "directory "+d.Path+" owned by "+d.Owner)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
-	return out
 }
 
 // --- tokens ---
