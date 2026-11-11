@@ -25,8 +25,8 @@ type CtlCmd struct {
 
 	// key is the CLI credential. It is read before anything else, so the
 	// credential is always the first line when input is piped.
-	key string
-	JSON   bool   `help:"Print raw JSON"`
+	key  string
+	JSON bool `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
 	Tokens       CtlTokensCmd       `cmd:"" help:"Tokens"`
