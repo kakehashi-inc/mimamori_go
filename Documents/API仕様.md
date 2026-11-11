@@ -37,10 +37,11 @@
 | POST | `/auth/logout` | V | - | `{}` |
 | GET | `/auth/me` | V | - | `Me` |
 | POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッションは無効になる） |
-| PUT | `/auth/language` | V | `{"language":"en"\|"ja"}` | `Me`（自分の表示言語の変更） |
+| PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更） |
 
 ```ts
-interface Me { id: number; name: string; role: 'admin' | 'viewer'; language: 'en' | 'ja' }
+// language: 'auto' はブラウザの言語から自動判別（日本語なら ja、それ以外は en）
+interface Me { id: number; name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja' }
 ```
 
 ## 3. 概要
@@ -297,7 +298,7 @@ interface HistoryItem {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/accounts` | A | - | `Account[]` |
-| POST | `/accounts` | A | `{"name","role","language"?,"password"}` | `Account`（`language` は `en` / `ja`、省略時は `en`） |
+| POST | `/accounts` | A | `{"name","role","language"?,"password"}` | `Account`（`language` は `auto` / `en` / `ja`、省略時は `auto`） |
 | PUT | `/accounts/{id}/role` | A | `{"role"}` | `Account` |
 | PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account` |
 | POST | `/accounts/{id}/disable` | A | - | `Account` |
@@ -307,7 +308,7 @@ interface HistoryItem {
 
 ```ts
 interface Account {
-  id: number; name: string; role: 'admin' | 'viewer'; language: 'en' | 'ja'; disabled: boolean;
+  id: number; name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja'; disabled: boolean;
   locked_until: string | null; created_at: string; has_cli_credential: boolean;
 }
 ```

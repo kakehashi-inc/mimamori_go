@@ -7,7 +7,8 @@
     },
     "lang": {
         "ja": "日本語",
-        "en": "English"
+        "en": "English",
+        "auto": "自動選択（ブラウザの言語）"
     },
     "nav": {
         "label": "メインメニュー",

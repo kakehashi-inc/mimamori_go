@@ -1,6 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import { DEFAULT_LANG, LANG_STORAGE_KEY, SUPPORTED_LANGS, type Lang } from '../constants';
+import { DEFAULT_LANG, SUPPORTED_LANGS, type Lang, type LangSetting } from '../constants';
 import en from './en.json';
 import ja from './ja.json';
 
@@ -8,23 +8,26 @@ function isLang(value: unknown): value is Lang {
     return SUPPORTED_LANGS.includes(value as Lang);
 }
 
-/**
- * Initial language before login: the language last used in this browser,
- * otherwise English. After login the account's language is applied.
- */
-function detectLang(): Lang {
-    try {
-        const stored = localStorage.getItem(LANG_STORAGE_KEY);
-        if (isLang(stored)) return stored;
-    } catch {
-        // Storage can be unavailable (private mode, blocked site data).
+/** The first supported language among the browser's preferred languages, otherwise English. */
+export function browserLang(): Lang {
+    const candidates = typeof navigator !== 'undefined' ? navigator.languages : [];
+    for (const tag of candidates) {
+        const base = tag.toLowerCase().split('-')[0];
+        if (isLang(base)) return base;
     }
     return DEFAULT_LANG;
 }
 
+/** Resolves an account's language setting ('auto' follows the browser). */
+export function resolveLang(setting: LangSetting): Lang {
+    return setting === 'auto' ? browserLang() : setting;
+}
+
+// Nothing is stored in the browser: before login the browser language is
+// used, after login the language setting of the account.
 i18n.use(initReactI18next).init({
     resources: { ja: { translation: ja }, en: { translation: en } },
-    lng: detectLang(),
+    lng: browserLang(),
     fallbackLng: DEFAULT_LANG,
     supportedLngs: [...SUPPORTED_LANGS],
     interpolation: { escapeValue: false }, // React already escapes
@@ -37,20 +40,9 @@ function applyDocumentLang(lng: string) {
 applyDocumentLang(i18n.language);
 i18n.on('languageChanged', applyDocumentLang);
 
-/** Switches the UI language and remembers it for the next login screen. */
-export function changeLanguage(lng: Lang): Promise<unknown> {
-    try {
-        localStorage.setItem(LANG_STORAGE_KEY, lng);
-    } catch {
-        // Not fatal: the choice simply is not remembered.
-    }
-    return i18n.changeLanguage(lng);
-}
-
-/** The currently active language, narrowed to one the UI supports. */
-export function currentLang(): Lang {
-    const base = i18n.language.toLowerCase().split('-')[0];
-    return isLang(base) ? base : DEFAULT_LANG;
+/** Applies a language setting to the UI. */
+export function applyLangSetting(setting: LangSetting): Promise<unknown> {
+    return i18n.changeLanguage(resolveLang(setting));
 }
 
 export default i18n;

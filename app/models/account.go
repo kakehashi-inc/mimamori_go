@@ -8,15 +8,17 @@ const (
 	RoleViewer = "viewer"
 )
 
-// Display languages of the browser screens. English is the default.
+// Display language settings of the browser screens. "auto" (the default)
+// follows the language of the browser.
 const (
+	LangAuto     = "auto"
 	LangEnglish  = "en"
 	LangJapanese = "ja"
 )
 
-// ValidLanguage reports whether lang is a supported display language.
+// ValidLanguage reports whether lang is a supported display language setting.
 func ValidLanguage(lang string) bool {
-	return lang == LangEnglish || lang == LangJapanese
+	return lang == LangAuto || lang == LangEnglish || lang == LangJapanese
 }
 
 // Account is a row of the accounts table (a person using the browser or CLI).
@@ -49,7 +51,7 @@ func scanAccount(s rowScanner) (*Account, error) {
 func InsertAccount(db Execer, a *Account) error {
 	now := Now()
 	if a.Language == "" {
-		a.Language = LangEnglish
+		a.Language = LangAuto
 	}
 	res, err := db.Exec(`INSERT INTO accounts (name, password_hash, role, language, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		a.Name, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), now, now)

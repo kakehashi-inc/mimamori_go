@@ -1,17 +1,15 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SUPPORTED_LANGS } from '../constants';
+import { LANG_SETTINGS } from '../constants';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { useAuth } from '../context/AuthContext';
-import { currentLang } from '../i18n/i18n';
 
 /** Globe icon button that opens a dropdown to pick the UI language. */
 export function LanguageSwitch() {
     const { t, i18n } = useTranslation();
     // Reading i18n.language subscribes this component to language changes.
     void i18n.language;
-    const current = currentLang();
-    const { setLanguage } = useAuth();
+    const { langSetting: current, setLanguage } = useAuth();
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     useClickOutside(ref, open, () => setOpen(false));
@@ -35,7 +33,7 @@ export function LanguageSwitch() {
                     role='menu'
                     className='absolute right-0 z-20 mt-1 min-w-36 overflow-hidden rounded-md border border-line bg-surface py-1 shadow-xl'
                 >
-                    {SUPPORTED_LANGS.map(code => (
+                    {LANG_SETTINGS.map(code => (
                         <button
                             key={code}
                             type='button'

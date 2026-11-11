@@ -77,7 +77,7 @@ func readNewPassword() (string, error) {
 // CentralInitAdminCmd creates the first administrator.
 type CentralInitAdminCmd struct {
 	Name     string `help:"Account name" required:""`
-	Language string `help:"Display language of the browser screens (en or ja)" enum:"en,ja" default:"en"`
+	Language string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
 }
 
 func (c *CentralInitAdminCmd) Run() error {

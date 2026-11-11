@@ -819,7 +819,7 @@ type CtlAccountsListCmd struct{}
 type CtlAccountsCreateCmd struct {
 	Name     string `arg:""`
 	Role     string `help:"admin or viewer" enum:"admin,viewer" required:""`
-	Language string `help:"Display language of the browser screens (en or ja)" enum:"en,ja" default:"en"`
+	Language string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
 }
 type CtlAccountsRoleCmd struct {
 	ID   int64  `arg:""`

@@ -10,7 +10,7 @@ import {
     setAccountRole,
 } from '../api/client';
 import { Badge } from '../components/Badge';
-import { MIN_PASSWORD_LENGTH, SUPPORTED_LANGS, type Lang } from '../constants';
+import { LANG_SETTINGS, MIN_PASSWORD_LENGTH, type LangSetting } from '../constants';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Field, inputClass } from '../components/FormControls';
@@ -343,10 +343,9 @@ function CreateAccountModal({
     onCreated: () => void;
 }) {
     const { t } = useTranslation();
-    const { me } = useAuth();
     const [name, setName] = useState('');
     const [role, setRole] = useState<Role>('viewer');
-    const [language, setLanguage] = useState<Lang>('en');
+    const [language, setLanguage] = useState<LangSetting>('auto');
     const [password, setPassword] = useState('');
     const { busy, error, setError, run } = useSubmit();
 
@@ -354,11 +353,10 @@ function CreateAccountModal({
         if (!open) return;
         setName('');
         setRole('viewer');
-        // New accounts start with the language of the administrator creating them.
-        setLanguage(me?.language ?? 'en');
+        setLanguage('auto');
         setPassword('');
         setError(null);
-    }, [open, setError, me]);
+    }, [open, setError]);
 
     return (
         <FormModal
@@ -400,9 +398,9 @@ function CreateAccountModal({
                     id='ca-language'
                     className={inputClass}
                     value={language}
-                    onChange={e => setLanguage(e.target.value as Lang)}
+                    onChange={e => setLanguage(e.target.value as LangSetting)}
                 >
-                    {SUPPORTED_LANGS.map(code => (
+                    {LANG_SETTINGS.map(code => (
                         <option key={code} value={code}>
                             {t(`lang.${code}`)}
                         </option>

@@ -366,7 +366,7 @@ func TestNotificationCompose(t *testing.T) {
 func TestAccountLanguage(t *testing.T) {
 	e := newTestEnv(t)
 	created := e.admin("POST", "/accounts", map[string]any{"name": "u1", "role": "viewer", "password": "Viewer-pass-123"})
-	if created["language"] != "en" {
+	if created["language"] != "auto" {
 		t.Fatalf("default language: %v", created["language"])
 	}
 	created = e.admin("POST", "/accounts", map[string]any{"name": "u2", "role": "viewer", "language": "ja", "password": "Viewer-pass-123"})

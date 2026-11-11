@@ -120,7 +120,7 @@ func (c *core) handleOwnLanguage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !models.ValidLanguage(in.Language) {
-		writeError(w, http.StatusBadRequest, "language must be en or ja")
+		writeError(w, http.StatusBadRequest, "language must be auto, en or ja")
 		return
 	}
 	if err := models.UpdateAccountLanguage(c.db, p.AccountID, in.Language); err != nil {
@@ -193,10 +193,10 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Language == "" {
-		in.Language = models.LangEnglish
+		in.Language = models.LangAuto
 	}
 	if !models.ValidLanguage(in.Language) {
-		writeError(w, http.StatusBadRequest, "language must be en or ja")
+		writeError(w, http.StatusBadRequest, "language must be auto, en or ja")
 		return
 	}
 	if !accountNameRe.MatchString(in.Name) {

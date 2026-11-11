@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getMe, login as apiLogin, logout as apiLogout, setOwnLanguage, setUnauthorizedHandler } from '../api/client';
-import type { Lang } from '../constants';
-import { changeLanguage } from '../i18n/i18n';
+import type { LangSetting } from '../constants';
+import { applyLangSetting } from '../i18n/i18n';
 import type { Me } from '../types';
 
 type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
@@ -12,8 +12,10 @@ interface AuthContextValue {
     isAdmin: boolean;
     login: (name: string, password: string) => Promise<void>;
     logout: () => Promise<void>;
+    /** The language setting in effect: the account's, or the temporary one before login. */
+    langSetting: LangSetting;
     /** Changes the display language; saved to the account when signed in. */
-    setLanguage: (lang: Lang) => Promise<void>;
+    setLanguage: (setting: LangSetting) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -22,6 +24,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [me, setMe] = useState<Me | null>(null);
     const [status, setStatus] = useState<AuthStatus>('loading');
+    // Language chosen on the login screen; kept only until the page is left.
+    const [anonLang, setAnonLang] = useState<LangSetting>('auto');
 
     useEffect(() => {
         setUnauthorizedHandler(() => {
@@ -34,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 if (!active) return;
                 setMe(m);
                 setStatus('authenticated');
-                void changeLanguage(m.language);
+                void applyLangSetting(m.language);
             })
             .catch(() => {
                 if (!active) return;
@@ -51,16 +55,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const m = await apiLogin(name, password);
         setMe(m);
         setStatus('authenticated');
-        await changeLanguage(m.language);
+        await applyLangSetting(m.language);
     }, []);
 
     const setLanguage = useCallback(
-        async (lang: Lang) => {
+        async (setting: LangSetting) => {
             if (me) {
-                const m = await setOwnLanguage(lang);
+                const m = await setOwnLanguage(setting);
                 setMe(m);
+            } else {
+                setAnonLang(setting);
             }
-            await changeLanguage(lang);
+            await applyLangSetting(setting);
         },
         [me]
     );
@@ -71,12 +77,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } finally {
             setMe(null);
             setStatus('anonymous');
+            setAnonLang('auto');
+            void applyLangSetting('auto');
         }
     }, []);
 
     const value = useMemo<AuthContextValue>(
-        () => ({ status, me, isAdmin: me?.role === 'admin', login, logout, setLanguage }),
-        [status, me, login, logout, setLanguage]
+        () => ({
+            status,
+            me,
+            isAdmin: me?.role === 'admin',
+            login,
+            logout,
+            langSetting: me ? me.language : anonLang,
+            setLanguage,
+        }),
+        [status, me, anonLang, login, logout, setLanguage]
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
