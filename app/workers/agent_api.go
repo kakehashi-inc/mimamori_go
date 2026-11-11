@@ -90,7 +90,9 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		DefaultIntervalSec: c.cfg.DefaultCheckIntervalSec,
 		DefaultScanBase:    c.cfg.DefaultScanBase,
 	}
-	if agent.AssignedRuleID.Valid && (req.RuleID != agent.AssignedRuleID.Int64 || req.RuleVersion != agent.AssignedRuleVersion) {
+	// The assigned version is always sent, so the agent can tell whether it
+	// runs the assigned version (it applies only a different one).
+	if agent.AssignedRuleID.Valid {
 		ra, err := c.ruleAssignment(agent.AssignedRuleID.Int64, agent.AssignedRuleVersion)
 		if err != nil {
 			return nil, err

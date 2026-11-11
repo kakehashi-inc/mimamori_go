@@ -49,6 +49,13 @@ type AgentRuntime struct {
 	defaultScanBase string
 	rule            *RuleAssignment
 	lastApply       *ApplyResult
+	// failedRule is the rule version whose application failed. It is not
+	// retried every cycle (each attempt replaces the loaded rules); a new
+	// version or a restart of the agent tries again.
+	failedRule string
+	// lastOK is the result of the last successful application, restored when
+	// the central assigns the running version again after a failed one.
+	lastOK *ApplyResult
 }
 
 // NewAgentRuntime loads the stored state.
@@ -160,7 +167,16 @@ func (rt *AgentRuntime) sync() {
 	if rt.Config != nil {
 		rt.saveConfigUpdates(resp)
 	}
-	if resp.Rule != nil && (rt.rule == nil || resp.Rule.ID != rt.rule.ID || resp.Rule.Version != rt.rule.Version) {
+	switch {
+	case resp.Rule == nil:
+	case rt.rule != nil && resp.Rule.ID == rt.rule.ID && resp.Rule.Version == rt.rule.Version:
+		// The running version is assigned again (for example after a newer
+		// version failed): report its successful result again.
+		rt.failedRule = ""
+		if rt.lastApply != nil && rt.lastApply.Status == "error" && rt.lastOK != nil {
+			rt.setApply(rt.lastOK)
+		}
+	case ruleKey(resp.Rule) != rt.failedRule:
 		resp.Rule.Content.Normalize()
 		rt.applyRule(resp.Rule, false)
 	}
@@ -224,6 +240,10 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	}
 }
 
+func ruleKey(r *RuleAssignment) string {
+	return fmt.Sprintf("%d:%d", r.ID, r.Version)
+}
+
 // applyRule validates and applies a rule. On failure the previous rule stays
 // in effect and the error is reported.
 func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
@@ -232,6 +252,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if errs := ra.Content.Validate(); len(errs) > 0 {
 		result.Status = "error"
 		result.Message = "validation failed: " + joinMax(errs, 5)
+		rt.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d rejected: %s", ra.Name, ra.Version, result.Message)
 		return
@@ -243,6 +264,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if err := ApplyAuditRules(lines, &st); err != nil {
 		result.Status = "error"
 		result.Message = err.Error()
+		rt.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d not applied: %v", ra.Name, ra.Version, err)
 		return
@@ -250,6 +272,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if b, err := json.Marshal(st); err == nil {
 		_ = models.SetLocalState(rt.DB, stateAuditApply, string(b))
 	}
+	rt.failedRule = ""
 	result.Warnings = res.Warnings
 	if len(res.Warnings) > 0 {
 		result.Status = "warning"
@@ -269,6 +292,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 		rt.logf("failed to store the applied rule: %v", err)
 	}
 	rt.rule = ra
+	rt.lastOK = result
 	rt.setApply(result)
 	if !reapply {
 		rt.logf("rule %q version %d applied: %s", ra.Name, ra.Version, result.Message)
