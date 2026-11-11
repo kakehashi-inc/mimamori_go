@@ -151,23 +151,35 @@ func (c *CentralResetPasswordCmd) Run() error {
 
 // AgentCmd groups the agent's commands.
 type AgentCmd struct {
-	Init   AgentInitCmd   `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
-	Start  AgentStartCmd  `cmd:"" help:"Start the agent"`
-	Stop   AgentStopCmd   `cmd:"" help:"Stop the running agent (sends SIGTERM and waits until it has finished its cycle)"`
-	Status AgentStatusCmd `cmd:"" help:"Show whether the agent is running and its state (exit code 3 when it is not)"`
+	Init       AgentInitCmd       `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
+	SetCentral AgentSetCentralCmd `cmd:"" name:"set-central" help:"Change the central host (and port) of the initialized agent; the agent must be stopped"`
+	Start      AgentStartCmd      `cmd:"" help:"Start the agent"`
+	Stop       AgentStopCmd       `cmd:"" help:"Stop the running agent (sends SIGTERM and waits until it has finished its cycle)"`
+	Status     AgentStatusCmd     `cmd:"" help:"Show whether the agent is running and its state (exit code 3 when it is not)"`
 }
 
 // AgentInitCmd initializes the agent.
 type AgentInitCmd struct {
-	Server        string `help:"Central URL, e.g. https://central.example.com:9081" required:""`
+	CentralHost   string `name:"central-host" help:"Host name or IP address of the central" required:""`
+	CentralPort   int    `name:"central-port" help:"Port of the central for the agents" default:"${default_agent_port}"`
 	Overwrite     bool   `help:"Replace an existing initialization"`
 	CAFingerprint string `name:"ca-fingerprint" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
 }
 
 func (c *AgentInitCmd) Run() error {
 	return AgentInit(AgentInitOptions{
-		ServerURL: c.Server, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint, DataDir: DataDir(),
+		CentralHost: c.CentralHost, CentralPort: c.CentralPort, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint, DataDir: DataDir(),
 	})
+}
+
+// AgentSetCentralCmd changes the central host of an initialized agent.
+type AgentSetCentralCmd struct {
+	CentralHost string `name:"central-host" help:"New host name or IP address of the central" required:""`
+	CentralPort int    `name:"central-port" help:"Port of the central for the agents" default:"${default_agent_port}"`
+}
+
+func (c *AgentSetCentralCmd) Run() error {
+	return AgentSetCentral(DataDir(), c.CentralHost, c.CentralPort)
 }
 
 // AgentStartCmd starts the agent.

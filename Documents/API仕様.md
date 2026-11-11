@@ -346,8 +346,8 @@ interface ConfigItem {
 ```ts
 interface Guide {
   version: string; central_hostname: string;
-  agent_port: string;            // 動作中のエージェント用の待ち受けのポート
-  agent_urls: string[];          // エージェントが接続に使える URL（サーバー証明書の名前から作る）
+  central_hosts: string[];       // エージェントが接続に使えるセントラルのホスト名と IP アドレス（サーバー証明書の名前から、ループバックを除く）
+  central_port: number;          // エージェントが接続するポート（動作中の agent_listen のポート）
   ca_fingerprint: string;        // 現在の独自CAの SHA-256 フィンガープリント
   default_valid_days: number;
 }

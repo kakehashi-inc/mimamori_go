@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -74,7 +75,11 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if !pool.AppendCertsFromPEM(pemData) {
 		return nil, NewExitErrorf(ExitConfig, "no certificate in %s", caFile)
 	}
-	hc, err := NewHTTPSClient("https://"+net.JoinHostPort("127.0.0.1", port), &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, NewExitErrorf(ExitConfig, "agent_listen: %v", err)
+	}
+	hc, err := NewHTTPSClient("127.0.0.1", portNum, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
@@ -324,7 +329,7 @@ func printTokenValue(p *CtlCmd, out any) {
 	tok, _ := m["token"].(map[string]any)
 	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell(tok["expires_at"], true), m["value"])
 	fmt.Println("\nInitialize the agent on the monitored host with the following command and enter the value when asked:")
-	fmt.Printf("  ./%s agent init --server https://<central>:<agent port>\n", AppName)
+	fmt.Printf("  ./%s agent init --central-host <central host>\n", AppName)
 }
 
 func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {

@@ -437,7 +437,7 @@ func TestConfigUpdate(t *testing.T) {
 	if e.c.conf().RetentionDays != 30 {
 		t.Fatalf("retention_days not applied while running: %d", e.c.conf().RetentionDays)
 	}
-	if e.c.conf().AgentListen != modules.DefaultAgentListen {
+	if e.c.conf().AgentListen != modules.DefaultAgentListen() {
 		t.Fatalf("agent_listen must apply at restart only, running %s", e.c.conf().AgentListen)
 	}
 	if it := item(out, "agent_listen"); it["pending"] != true || it["restart"] != true || it["value"] != "127.0.0.1:9443" {

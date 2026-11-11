@@ -38,11 +38,14 @@ const (
 	CentralLockFileName     = "central.lock"
 	// CLISecretFileName holds the secret the central creates at start for
 	// the management CLI; whoever can read the data directory can use it.
-	CLISecretFileName         = "cli.secret"
-	AgentLockFileName         = "agent.lock"
-	CABundleFileName          = "ca.crt"
-	DefaultWebListen          = "0.0.0.0:9080"
-	DefaultAgentListen        = "0.0.0.0:9081"
+	CLISecretFileName = "cli.secret"
+	AgentLockFileName = "agent.lock"
+	CABundleFileName  = "ca.crt"
+	// Default listeners of the central: the browser screens and the agents.
+	// Change the ports here; everything else (listen addresses, the port an
+	// agent connects to, examples on the screens) is derived from them.
+	DefaultListenAddress      = "0.0.0.0"
+	DefaultWebPort            = 9080
 	DefaultAgentPort          = 9081
 	DefaultCheckIntervalSec   = 60
 	DefaultScanIntervalSec    = 3600

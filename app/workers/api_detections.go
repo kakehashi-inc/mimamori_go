@@ -460,13 +460,16 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
-	_, port, _ := net.SplitHostPort(c.conf().AgentListen)
-	var urls []string
+	_, portText, _ := net.SplitHostPort(c.conf().AgentListen)
+	port, _ := strconv.Atoi(portText)
+	// The host names an agent can use for the central are the names of the
+	// server certificate (the loopback names only work on the central host).
+	var hosts []string
 	for _, n := range modules.ServerCertNames(c.conf().ServerNames) {
 		if n == "127.0.0.1" || n == "::1" || n == "localhost" {
 			continue
 		}
-		urls = append(urls, "https://"+net.JoinHostPort(n, port))
+		hosts = append(hosts, n)
 	}
 	fp := ""
 	for _, ca := range c.trustedCAs() {
@@ -475,7 +478,7 @@ func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": modules.AppVersion, "central_hostname": c.hostname, "agent_port": port, "agent_urls": nonNil(urls),
+		"version": modules.AppVersion, "central_hostname": c.hostname, "central_hosts": nonNil(hosts), "central_port": port,
 		"ca_fingerprint": fp, "default_valid_days": c.conf().TokenValidDays,
 	})
 }

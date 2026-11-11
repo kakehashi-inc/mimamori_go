@@ -34,7 +34,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 3. On each monitored host, initialize and start the agent.
 
     ```bash
-    ./mimamori agent init --server https://<central>:9081
+    ./mimamori agent init --central-host <central host name>
     ./mimamori agent start
     ```
 
@@ -154,10 +154,10 @@ yarn setup:fonts
 ### Start
 
 ```bash
-go run . service start
+go run . --data-dir data central start
 ```
 
-The web screens open at http://localhost:8080 (the API server is on 8081; `service stop` / `status` connect to the API port). Runtime data (such as the database file) is created in `data/` next to the executable.
+The web screens open at http://localhost:9080 (the agent port is 9081). Runtime data (such as the database file) is created in `data/` next to the executable.
 
 ### Lint and test
 

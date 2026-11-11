@@ -199,6 +199,16 @@ func (f *ConfigField) Secret() bool { return f.secret }
 // Value returns the field's value in c as text.
 func (f *ConfigField) Value(c *CentralConfig) string { return f.get(c) }
 
+// DefaultWebListen is the default listen address of the browser screens.
+func DefaultWebListen() string {
+	return net.JoinHostPort(DefaultListenAddress, strconv.Itoa(DefaultWebPort))
+}
+
+// DefaultAgentListen is the default listen address for the agents.
+func DefaultAgentListen() string {
+	return net.JoinHostPort(DefaultListenAddress, strconv.Itoa(DefaultAgentPort))
+}
+
 // DefaultCentralConfig returns the defaults used for missing values.
 func DefaultCentralConfig() *CentralConfig {
 	c := &CentralConfig{}
@@ -208,10 +218,10 @@ func DefaultCentralConfig() *CentralConfig {
 
 func (c *CentralConfig) applyDefaults() {
 	if c.WebListen == "" {
-		c.WebListen = DefaultWebListen
+		c.WebListen = DefaultWebListen()
 	}
 	if c.AgentListen == "" {
-		c.AgentListen = DefaultAgentListen
+		c.AgentListen = DefaultAgentListen()
 	}
 	if c.Workers <= 0 {
 		c.Workers = DefaultWorkers

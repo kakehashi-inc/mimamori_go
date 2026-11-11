@@ -28,7 +28,7 @@ func NewRemoteTransport(cfg *AgentConfig) (*RemoteTransport, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := NewHTTPSClient(cfg.ServerURL, tlsCfg, DefaultHTTPTimeoutSec*time.Second)
+	c, err := NewHTTPSClient(cfg.CentralHost, cfg.CentralPort, tlsCfg, DefaultHTTPTimeoutSec*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,8 @@ func (t *RemoteTransport) Report(req *ReportRequest) error {
 
 // AgentInitOptions are the arguments of "agent init".
 type AgentInitOptions struct {
-	ServerURL     string
+	CentralHost   string
+	CentralPort   int
 	Overwrite     bool
 	CAFingerprint string
 	DataDir       string
@@ -76,6 +77,9 @@ type AgentInitOptions struct {
 // creates the local database (holding the configuration) only when every
 // check passed.
 func AgentInit(o AgentInitOptions) error {
+	if err := ValidateCentral(o.CentralHost, o.CentralPort); err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
 	// 1. auditd (the tools exist and auditctl can query the kernel, which
 	// also tells whether this user is permitted to control auditing)
 	if err := CheckAuditd(); err != nil {
@@ -160,7 +164,7 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 	// Receive the CA without verification first (trust on first use, or the
 	// fingerprint given by the administrator), then verify the server
 	// certificate against it.
-	probe, err := NewHTTPSClient(o.ServerURL, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, DefaultHTTPTimeoutSec*time.Second) //nolint:gosec // the CA is verified below
+	probe, err := NewHTTPSClient(o.CentralHost, o.CentralPort, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, DefaultHTTPTimeoutSec*time.Second) //nolint:gosec // the CA is verified below
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,32 +187,100 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 			return nil, nil, fmt.Errorf("CA fingerprint mismatch: the central offered %s", FormatFingerprint(fps[0]))
 		}
 	}
-	cfg := &AgentConfig{AgentID: agentID, ServerURL: o.ServerURL, Token: token, InitializedAt: time.Now().Unix()}
+	cfg := &AgentConfig{AgentID: agentID, CentralHost: o.CentralHost, CentralPort: o.CentralPort, Token: token, InitializedAt: time.Now().Unix()}
 	cfg.MergeCAs(ca.CAPEMs, time.Now())
 	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := tr.Sync(&SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)})
+	resp, err := syncCheck(tr, &SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)})
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg.applySyncResponse(resp)
+	return cfg, resp, nil
+}
+
+// syncCheck performs one sync and turns the usual failures into messages.
+func syncCheck(tr *RemoteTransport, req *SyncRequest) (*SyncResponse, error) {
+	resp, err := tr.Sync(req)
 	if err != nil {
 		var he *HTTPError
 		if errors.As(err, &he) && he.Status == 401 {
-			return nil, nil, errors.New("authentication failed: the token is invalid, expired, revoked or bound to another agent instance")
+			return nil, errors.New("authentication failed: the token is invalid, expired, revoked or bound to another agent instance")
 		}
 		var ue x509.UnknownAuthorityError
 		if errors.As(err, &ue) || IsCertificateError(err) {
-			return nil, nil, fmt.Errorf("the central certificate does not match its CA (check the server URL is one of the certificate names): %w", err)
+			return nil, fmt.Errorf("the central certificate does not match its CA (check that the central host is one of the certificate names, server_names): %w", err)
 		}
-		return nil, nil, err
+		return nil, err
 	}
-	cfg.TokenName = resp.AgentName
-	cfg.TokenExpiresAt = resp.TokenExpiresAt
+	return resp, nil
+}
+
+// applySyncResponse takes the token name, expiry, renewed token and CAs of a
+// sync response.
+func (c *AgentConfig) applySyncResponse(resp *SyncResponse) {
+	c.TokenName = resp.AgentName
+	c.TokenExpiresAt = resp.TokenExpiresAt
 	if resp.TokenRenewal != nil {
-		cfg.Token = resp.TokenRenewal.Token
-		cfg.TokenExpiresAt = resp.TokenRenewal.ExpiresAt
+		c.Token = resp.TokenRenewal.Token
+		c.TokenExpiresAt = resp.TokenRenewal.ExpiresAt
 	}
-	cfg.MergeCAs(resp.CAPEMs, time.Now())
-	return cfg, resp, nil
+	c.MergeCAs(resp.CAPEMs, time.Now())
+}
+
+// AgentSetCentral changes the central host (and port) of an initialized
+// agent. The agent must be stopped. The new address is saved only after a
+// sync with it succeeded (the token and the trusted CAs are kept).
+func AgentSetCentral(dataDir, host string, port int) error {
+	if err := ValidateCentral(host, port); err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	dbPath := filepath.Join(dataDir, AgentLocalDBFileName)
+	if _, err := os.Stat(dbPath); err != nil {
+		return NewExitError(ExitConfig, ErrAgentNotInitialized.Error())
+	}
+	lock, err := AcquireLock(filepath.Join(dataDir, AgentLockFileName))
+	if err != nil {
+		return NewExitError(ExitConfig, "the agent is running; stop it before changing the central host")
+	}
+	defer lock.Release()
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+	if err != nil {
+		return NewExitErrorf(ExitConfig, "local database: %v", err)
+	}
+	defer db.Close()
+	cfg, err := LoadAgentConfig(db)
+	if err != nil {
+		return NewExitErrorf(ExitConfig, "configuration: %v", err)
+	}
+	prev := cfg.CentralAddress()
+	cfg.CentralHost, cfg.CentralPort = host, port
+	tr, err := NewRemoteTransport(cfg)
+	if err != nil {
+		return NewExitError(ExitConfig, err.Error())
+	}
+	// Report the rule in effect so the central's view does not change.
+	req := &SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)}
+	var rule RuleAssignment
+	if json.Unmarshal([]byte(models.GetLocalState(db, stateRule)), &rule) == nil && rule.ID > 0 {
+		req.RuleID, req.RuleVersion = rule.ID, rule.Version
+	}
+	var ap ApplyResult
+	if json.Unmarshal([]byte(models.GetLocalState(db, stateApply)), &ap) == nil && ap.Status != "" {
+		req.LastApply = &ap
+	}
+	resp, err := syncCheck(tr, req)
+	if err != nil {
+		return NewExitErrorf(ExitExec, "cannot use %s: %v (nothing was changed)", cfg.CentralAddress(), err)
+	}
+	cfg.applySyncResponse(resp)
+	if err := cfg.Save(db); err != nil {
+		return NewExitErrorf(ExitFileIO, "local database: %v", err)
+	}
+	fmt.Printf("Central changed from %s to %s.\n", prev, cfg.CentralAddress())
+	return nil
 }
 
 // AgentStart runs the agent in the calling flow until SIGINT or SIGTERM.
@@ -274,7 +346,7 @@ func AgentStart(dataDir string) error {
 			return true
 		}
 	}
-	logger.Printf("%s agent %s started (central %s, token %s)", AppName, AppVersion, cfg.ServerURL, cfg.TokenName)
+	logger.Printf("%s agent %s started (central %s, token %s)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName)
 	rt.Run(wait, stopping)
 	logger.Printf("agent stopped")
 	return nil

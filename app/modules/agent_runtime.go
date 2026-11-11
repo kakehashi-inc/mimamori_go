@@ -256,7 +256,8 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	lines := GenerateAuditRules(res)
 	var st AuditApplyState
 	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateAuditApply)), &st)
-	if err := ApplyAuditRules(lines, &st); err != nil {
+	applyWarnings, err := ApplyAuditRules(lines, &st)
+	if err != nil {
 		result.Status = "error"
 		result.Message = err.Error()
 		rt.failedRule = ruleKey(ra)
@@ -268,10 +269,10 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 		_ = models.SetLocalState(rt.DB, stateAuditApply, string(b))
 	}
 	rt.failedRule = ""
-	result.Warnings = res.Warnings
-	if len(res.Warnings) > 0 {
+	result.Warnings = append(res.Warnings, applyWarnings...)
+	if len(result.Warnings) > 0 {
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("applied with %d warning(s)", len(res.Warnings))
+		result.Message = fmt.Sprintf("applied with %d warning(s)", len(result.Warnings))
 	} else {
 		result.Message = fmt.Sprintf("applied (%d audit rules)", len(lines))
 	}

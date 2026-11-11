@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -17,8 +19,11 @@ import (
 type AgentConfig struct {
 	// AgentID identifies this installation; the central binds the token to
 	// it, so another installation cannot use the same token.
-	AgentID        string
-	ServerURL      string
+	AgentID string
+	// CentralHost is the host name or IP address of the central and
+	// CentralPort the port of its agent listener.
+	CentralHost    string
+	CentralPort    int
 	Token          string
 	TokenName      string
 	TokenExpiresAt int64
@@ -28,7 +33,8 @@ type AgentConfig struct {
 
 const (
 	agentCfgID          = "config.agent_id"
-	agentCfgServerURL   = "config.server_url"
+	agentCfgCentralHost = "config.central_host"
+	agentCfgCentralPort = "config.central_port"
 	agentCfgToken       = "config.token"
 	agentCfgTokenName   = "config.token_name"
 	agentCfgTokenExpiry = "config.token_expires_at"
@@ -43,11 +49,12 @@ var ErrAgentNotInitialized = errors.New("the agent is not initialized; run agent
 // LoadAgentConfig reads the configuration from the agent's local database.
 func LoadAgentConfig(db models.Execer) (*AgentConfig, error) {
 	c := &AgentConfig{
-		AgentID:   models.GetLocalState(db, agentCfgID),
-		ServerURL: models.GetLocalState(db, agentCfgServerURL),
-		Token:     models.GetLocalState(db, agentCfgToken),
-		TokenName: models.GetLocalState(db, agentCfgTokenName),
+		AgentID:     models.GetLocalState(db, agentCfgID),
+		CentralHost: models.GetLocalState(db, agentCfgCentralHost),
+		Token:       models.GetLocalState(db, agentCfgToken),
+		TokenName:   models.GetLocalState(db, agentCfgTokenName),
 	}
+	c.CentralPort, _ = strconv.Atoi(models.GetLocalState(db, agentCfgCentralPort))
 	c.TokenExpiresAt, _ = strconv.ParseInt(models.GetLocalState(db, agentCfgTokenExpiry), 10, 64)
 	c.InitializedAt, _ = strconv.ParseInt(models.GetLocalState(db, agentCfgInitialized), 10, 64)
 	if v := models.GetLocalState(db, agentCfgCAs); v != "" {
@@ -55,10 +62,10 @@ func LoadAgentConfig(db models.Execer) (*AgentConfig, error) {
 			return nil, fmt.Errorf("trusted CAs: %w", err)
 		}
 	}
-	if c.ServerURL == "" && c.Token == "" {
+	if c.CentralHost == "" && c.Token == "" {
 		return nil, ErrAgentNotInitialized
 	}
-	if c.AgentID == "" || c.ServerURL == "" || c.Token == "" || len(c.CAPEMs) == 0 {
+	if c.AgentID == "" || c.CentralHost == "" || c.CentralPort == 0 || c.Token == "" || len(c.CAPEMs) == 0 {
 		return nil, errors.New("incomplete configuration; run agent init --overwrite")
 	}
 	return c, nil
@@ -78,7 +85,8 @@ func (c *AgentConfig) Save(db *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, kv := range [][2]string{
 		{agentCfgID, c.AgentID},
-		{agentCfgServerURL, c.ServerURL},
+		{agentCfgCentralHost, c.CentralHost},
+		{agentCfgCentralPort, strconv.Itoa(c.CentralPort)},
 		{agentCfgToken, c.Token},
 		{agentCfgTokenName, c.TokenName},
 		{agentCfgTokenExpiry, strconv.FormatInt(c.TokenExpiresAt, 10)},
@@ -137,4 +145,24 @@ func CAFingerprintsOf(pems []string) []string {
 		}
 	}
 	return out
+}
+
+// CentralAddress returns host:port of the central for messages.
+func (c *AgentConfig) CentralAddress() string {
+	return net.JoinHostPort(c.CentralHost, strconv.Itoa(c.CentralPort))
+}
+
+// centralHostRe matches a host name (letters, digits, hyphens and dots).
+var centralHostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// ValidateCentral checks the host name or IP address of the central (no
+// scheme, port or path) and the port.
+func ValidateCentral(host string, port int) error {
+	if net.ParseIP(host) == nil && (len(host) > 253 || !centralHostRe.MatchString(host)) {
+		return fmt.Errorf("central host %q must be a host name or an IP address (without scheme, port or path)", host)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("central port %d must be 1-65535", port)
+	}
+	return nil
 }

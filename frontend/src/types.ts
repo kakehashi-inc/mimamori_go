@@ -394,9 +394,10 @@ export interface Account {
 export interface Guide {
     version: string;
     central_hostname: string;
-    /** Port of the agent listener in effect (agent_listen). */
-    agent_port: string;
-    agent_urls: string[] | null;
+    /** Host names and IP addresses the agents can use for the central. */
+    central_hosts: string[] | null;
+    /** Port of the central for the agents (agent_listen in effect). */
+    central_port: number;
     ca_fingerprint: string;
     default_valid_days: number;
 }

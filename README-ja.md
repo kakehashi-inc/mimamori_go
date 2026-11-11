@@ -34,7 +34,7 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 3. 監視対象のホストで、エージェントを初期化して起動します。
 
     ```bash
-    ./mimamori agent init --server https://<セントラル>:9081
+    ./mimamori agent init --central-host <セントラルのホスト名>
     ./mimamori agent start
     ```
 
@@ -154,10 +154,10 @@ yarn setup:fonts
 ### 起動
 
 ```bash
-go run . service start
+go run . --data-dir data central start
 ```
 
-http://localhost:8080 でWeb画面が開きます（APIサーバーは8081。`service stop` / `status`はAPIポートへ接続します）。実行時データ（DBファイルなど）は実行ファイルと同じ場所の`data/`に作成されます。
+http://localhost:9080 でWeb画面が開きます（エージェント用は9081）。実行時データ（DBファイルなど）は実行ファイルと同じ場所の`data/`に作成されます。
 
 ### Lintとテスト
 

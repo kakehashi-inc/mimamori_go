@@ -523,7 +523,6 @@
         "values": "This central server",
         "version": "Version",
         "centralHostname": "Central hostname",
-        "agentUrls": "Agent server URLs",
         "caFingerprint": "Private CA fingerprint",
         "defaultValidDays": "Default token validity",
         "days": "{{count}} days",
@@ -562,7 +561,7 @@
             "fingerprint": "Passing the fingerprint above with --ca-fingerprint verifies the central server on the very first connection.",
             "overwrite": "Add --overwrite to re-initialize a host that is already initialized.",
             "start": "When initialization finishes, start the agent:",
-            "otherUrls": "Any of the agent server URLs listed above can be used."
+            "otherHosts": "Any of the central host names listed above can be used."
         },
         "auto": {
             "title": "What the agent handles automatically",
@@ -579,12 +578,15 @@
             "caseExpired": "The token expired (the agent could not connect before expiry, so it was not renewed)",
             "caseReissued": "The token was reissued",
             "caseCa": "The agent missed a private CA rotation (for example because it was stopped) and can no longer connect",
-            "after": "After re-initializing, start the agent again:"
+            "after": "After re-initializing, start the agent again:",
+            "changeCentral": "To change only the central host (or port) of an agent, stop the agent and run:",
+            "changeCentralNote": "The new host is saved only after the agent could connect to it with its current token. Then start the agent again."
         },
         "central": {
             "title": "About the central host",
             "body": "The central server includes a built-in agent that monitors its own host. Perform steps 1 to 3 on the central host as well so auditd is enabled and running. Without auditd the built-in agent stops and a warning appears at the top of every page."
-        }
+        },
+        "centralHosts": "Central host names"
     },
     "notFound": {
         "title": "Page not found",

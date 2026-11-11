@@ -114,7 +114,7 @@ func (c *AgentStatusCmd) Run() error {
 		fmt.Printf("%-16s %v\n", "local database:", err)
 	} else {
 		if cfg, err := LoadAgentConfig(db); err == nil {
-			fmt.Printf("%-16s %s\n", "central:", cfg.ServerURL)
+			fmt.Printf("%-16s %s\n", "central:", cfg.CentralAddress())
 			fmt.Printf("%-16s %s\n", "token name:", cfg.TokenName)
 			if cfg.TokenExpiresAt > 0 {
 				fmt.Printf("%-16s %s\n", "token expires:", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05"))

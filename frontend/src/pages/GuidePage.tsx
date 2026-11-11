@@ -6,7 +6,7 @@ import { CodeBlock, CopyButton } from '../components/CopyButton';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
 import { Alert, ErrorAlert, Loading } from '../components/StateViews';
 import { useApi } from '../hooks/useApi';
-import { agentInitCommand } from '../utils/commands';
+import { agentInitCommand, agentSetCentralCommand } from '../utils/commands';
 import { formatVersion } from '../utils/format';
 
 // Shell commands shown in the guide. They are not translated.
@@ -55,11 +55,10 @@ export function GuidePage() {
     const { t } = useTranslation();
     const { data: guide, error, loading, reload } = useApi(getGuide, []);
 
-    const urls = guide?.agent_urls?.length
-        ? guide.agent_urls
-        : [`https://${guide?.central_hostname || 'HOST'}:${guide?.agent_port || 'PORT'}`];
+    const hosts = guide?.central_hosts?.length ? guide.central_hosts : [guide?.central_hostname || '<host>'];
+    const port = guide?.central_port || '<port>';
     const fp = guide?.ca_fingerprint || '<fingerprint>';
-    const url = urls[0];
+    const host = hosts[0];
 
     return (
         <>
@@ -76,12 +75,12 @@ export function GuidePage() {
                                     { label: t('guide.version'), value: formatVersion(guide.version) },
                                     { label: t('guide.centralHostname'), value: guide.central_hostname || '-' },
                                     {
-                                        label: t('guide.agentUrls'),
+                                        label: t('guide.centralHosts'),
                                         value: (
                                             <ul className='flex flex-col gap-1'>
-                                                {urls.map(u => (
-                                                    <li key={u}>
-                                                        <code className='font-mono text-xs'>{u}</code>
+                                                {hosts.map(h => (
+                                                    <li key={h}>
+                                                        <code className='font-mono text-xs'>{h}</code>
                                                     </li>
                                                 ))}
                                             </ul>
@@ -152,13 +151,13 @@ export function GuidePage() {
 
                     <Step n={5} title={t('guide.init.title')}>
                         <p>{t('guide.init.body')}</p>
-                        <CodeBlock code={agentInitCommand(url, fp)} />
+                        <CodeBlock code={agentInitCommand(host, port, fp)} />
                         <Bullets
                             items={[t('guide.init.stdin'), t('guide.init.fingerprint'), t('guide.init.overwrite')]}
                         />
                         <p>{t('guide.init.start')}</p>
                         <CodeBlock code={CMD_AGENT_START} />
-                        {urls.length > 1 && <p className='text-xs text-muted'>{t('guide.init.otherUrls')}</p>}
+                        {hosts.length > 1 && <p className='text-xs text-muted'>{t('guide.init.otherHosts')}</p>}
                     </Step>
 
                     <Step n={6} title={t('guide.auto.title')}>
@@ -187,9 +186,12 @@ export function GuidePage() {
                                 t('guide.reinit.caseCa'),
                             ]}
                         />
-                        <CodeBlock code={agentInitCommand(url, fp, true)} />
+                        <CodeBlock code={agentInitCommand(host, port, fp, true)} />
                         <p>{t('guide.reinit.after')}</p>
                         <CodeBlock code={CMD_AGENT_START} />
+                        <p>{t('guide.reinit.changeCentral')}</p>
+                        <CodeBlock code={agentSetCentralCommand(host, port)} />
+                        <p className='text-xs text-muted'>{t('guide.reinit.changeCentralNote')}</p>
                     </Step>
 
                     <Step n={8} title={t('guide.central.title')}>

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 
 	"mimamori/app/modules"
@@ -50,6 +51,7 @@ func main() {
 		kong.Description("mimamori: detects and reports operations performed by selected OS users on each host."),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
+		kong.Vars{"default_agent_port": strconv.Itoa(modules.DefaultAgentPort)},
 	)
 	modules.SetDataDir(cli.DataDir)
 	if err := modules.CheckExePath(); err != nil {

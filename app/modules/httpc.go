@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,18 +47,12 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.Status, msg)
 }
 
-// NewHTTPSClient parses base (https://host:port) and prepares a client.
-func NewHTTPSClient(base string, tlsCfg *tls.Config, timeout time.Duration) (*HTTPSClient, error) {
-	u, err := url.Parse(strings.TrimRight(base, "/"))
-	if err != nil {
-		return nil, err
+// NewHTTPSClient prepares a client for host and port.
+func NewHTTPSClient(host string, port int, tlsCfg *tls.Config, timeout time.Duration) (*HTTPSClient, error) {
+	if host == "" || port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("invalid host %q or port %d", host, port)
 	}
-	if u.Scheme != "https" || u.Host == "" {
-		return nil, fmt.Errorf("server URL must be https://host[:port]: %q", base)
-	}
-	if u.Port() == "" {
-		u.Host = net.JoinHostPort(u.Hostname(), fmt.Sprint(DefaultAgentPort))
-	}
+	u := &url.URL{Scheme: "https", Host: net.JoinHostPort(host, strconv.Itoa(port))}
 	return &HTTPSClient{BaseURL: u, TLS: tlsCfg, Timeout: timeout, Headers: map[string]string{}}, nil
 }
 

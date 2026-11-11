@@ -254,9 +254,8 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
             .then(setGuide)
             .catch(() => setGuide(null));
     }, []);
-    const urls = guide?.agent_urls?.length
-        ? guide.agent_urls
-        : [`https://${guide?.central_hostname || '<host>'}:${guide?.agent_port || '<port>'}`];
+    const hosts = guide?.central_hosts?.length ? guide.central_hosts : [guide?.central_hostname || '<host>'];
+    const port = guide?.central_port || '<port>';
     return (
         <div className='flex flex-col gap-4'>
             <Alert tone='warning'>{t('tokens.fullValueNote')}</Alert>
@@ -267,8 +266,8 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
             <div className='flex flex-col gap-2'>
                 <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
                 <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
-                {urls.map(url => (
-                    <CodeBlock key={url} code={agentInitCommand(url)} />
+                {hosts.map(host => (
+                    <CodeBlock key={host} code={agentInitCommand(host, port)} />
                 ))}
                 <p className='text-xs text-muted'>
                     {t('tokens.initThenStart')} <code className='font-mono'>./mimamori agent start</code>
