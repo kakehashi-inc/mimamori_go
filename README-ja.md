@@ -38,12 +38,12 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 
     ```bash
     cd <実行ファイルを置いたディレクトリ>
-    sudo ./mimamori central config set server_names central.example.com,192.0.2.10
-    sudo ./mimamori central init-admin --name admin
-    sudo ./mimamori central start
+    ./mimamori central config set server_names central.example.com,192.0.2.10
+    ./mimamori central init-admin --name admin
+    ./mimamori central start
     ```
 
-    設定ファイルはありません。設定もデータも、実行ファイルと同じディレクトリの `data/`（`--data-dir` で変更可）にある SQLite に保存されます。`data/` はシンボリックリンクにして別の場所に置けます。`sudo ./mimamori central config list` で全項目を確認でき、設定していない項目は既定値で動きます。管理者はブラウザの「システム設定」画面でも変更できます。多くの項目は即時に反映され、待ち受けアドレス、ワーカー数、内蔵エージェントなどはセントラルの再起動後に反映されます（画面に表示されます）。
+    設定ファイルはありません。設定もデータも、実行ファイルと同じディレクトリの `data/`（`--data-dir` で変更可）にある SQLite に保存されます。`data/` はシンボリックリンクにして別の場所に置けます。`./mimamori central config list` で全項目を確認でき、設定していない項目は既定値で動きます。管理者はブラウザの「システム設定」画面でも変更できます。多くの項目は即時に反映され、待ち受けアドレス、ワーカー数、内蔵エージェントなどはセントラルの再起動後に反映されます（画面に表示されます）。
 
     `server_names` に、エージェントが接続に使うホスト名や IP アドレスを設定してください。通知を使う場合は `smtp.*` の項目を設定します。プロセスの常駐（systemd など）は環境に合わせて設定します。
 
@@ -51,16 +51,16 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 3. 監視対象のホストで、トークンを標準入力から渡してエージェントを初期化し、起動します。
 
     ```bash
-    printf '%s\n' '<トークン>' | sudo mimamori agent init --server https://<セントラル>:8443 --ca-fingerprint <独自CAのフィンガープリント>
-    sudo mimamori agent start
+    printf '%s\n' '<トークン>' | ./mimamori agent init --server https://<セントラル>:8443 --ca-fingerprint <独自CAのフィンガープリント>
+    ./mimamori agent start
     ```
 
-    停止と状態の確認は `sudo mimamori central stop` / `sudo mimamori central status`、エージェントは `sudo mimamori agent stop` / `sudo mimamori agent status` です（supervisor などから常駐させる場合は SIGTERM で終了します）。
+    停止と状態の確認は `./mimamori central stop` / `./mimamori central status`、エージェントは `./mimamori agent stop` / `./mimamori agent status` です（supervisor などから常駐させる場合は SIGTERM で終了します）。
 
 4. 必要に応じて、セントラルのホストで CLI を使います。CLI はアカウントと結び付かず最大の権限を持ち、セントラルのデータディレクトリを読める OS ユーザーが使えます。
 
     ```bash
-    sudo ./mimamori ctl agents list
+    ./mimamori ctl agents list
     ```
 
     認証情報や環境変数は要りません（CLI はセントラルのデータディレクトリを読みます）。実行ファイルは、絶対パスか `./mimamori` のようにパスを付けて起動します。

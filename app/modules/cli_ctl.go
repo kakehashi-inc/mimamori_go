@@ -323,8 +323,8 @@ func printTokenValue(p *CtlCmd, out any) {
 	}
 	tok, _ := m["token"].(map[string]any)
 	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell(tok["expires_at"], true), m["value"])
-	fmt.Println("\nThe value is shown only now. Initialize the agent on the target host with:")
-	fmt.Printf("  printf '%%s\\n' '<value>' | sudo %s agent init --server https://<central>:%d\n", AppName, DefaultAgentPort)
+	fmt.Println("\nInitialize the agent on the monitored host with the following command and enter the value when asked:")
+	fmt.Printf("  ./%s agent init --server https://<central>:<agent port>\n", AppName)
 }
 
 func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {

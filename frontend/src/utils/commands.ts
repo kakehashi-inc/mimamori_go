@@ -6,5 +6,5 @@
 export function agentInitCommand(url: string, fingerprint?: string, overwrite?: boolean): string {
     const fp = fingerprint ? ` --ca-fingerprint ${fingerprint}` : '';
     const ow = overwrite ? ' --overwrite' : '';
-    return `sudo mimamori agent init --server ${url}${fp}${ow}`;
+    return `./mimamori agent init --server ${url}${fp}${ow}`;
 }

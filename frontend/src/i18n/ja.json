@@ -548,7 +548,7 @@
             "title": "ログのローテーションを確認する",
             "body": "監査ログがディスクを使い切らないよう、ローテーションの設定を確認します。",
             "expect": "max_log_file_action が ROTATE で、num_logs が 2 以上（例: 5）であることを確認します。必要に応じて次のように設定します。",
-            "restart": "変更した場合は、前の手順と同じく sudo service auditd restart で再起動します。"
+            "restart": "変更した場合は、前の手順と同じく service auditd restart で再起動します。"
         },
         "token": {
             "title": "トークンを発行する",

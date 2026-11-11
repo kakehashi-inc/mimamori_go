@@ -147,7 +147,7 @@ func AgentInit(o AgentInitOptions) error {
 		fmt.Printf("  rule:        none (the agent only reports host information until a rule is applied)\n")
 	}
 	fmt.Printf("  CA:          %s\n", FormatFingerprint(CAFingerprintsOf(cfg.CAPEMs)[0]))
-	fmt.Printf("Start the agent with: %s agent start\n", AppName)
+	fmt.Printf("Start the agent with: ./%s agent start\n", AppName)
 	return nil
 }
 

@@ -548,7 +548,7 @@
             "title": "Check log rotation",
             "body": "Make sure the audit log is rotated so it does not fill the disk.",
             "expect": "Check that max_log_file_action is ROTATE and num_logs is 2 or more (for example 5). Set them like this if needed:",
-            "restart": "If you changed anything, restart auditd with sudo service auditd restart as in the previous step."
+            "restart": "If you changed anything, restart auditd with service auditd restart as in the previous step."
         },
         "token": {
             "title": "Issue a token",

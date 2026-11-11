@@ -10,23 +10,21 @@ import { agentInitCommand } from '../utils/commands';
 import { formatVersion } from '../utils/format';
 
 // Shell commands shown in the guide. They are not translated.
-const CMD_AUDITD_CHECK = ['sudo systemctl is-enabled auditd', 'sudo systemctl status auditd', 'sudo auditctl -s'].join(
-    '\n'
-);
-const CMD_AUDITD_ENABLE = 'sudo systemctl enable --now auditd';
+const CMD_AUDITD_CHECK = ['systemctl is-enabled auditd', 'systemctl status auditd', 'auditctl -s'].join('\n');
+const CMD_AUDITD_ENABLE = 'systemctl enable --now auditd';
 const CMD_ACTIONS_CHECK =
-    "sudo grep -E '^\\s*(space_left_action|admin_space_left_action|disk_full_action|disk_error_action)\\s*=' /etc/audit/auditd.conf";
+    "grep -E '^\\s*(space_left_action|admin_space_left_action|disk_full_action|disk_error_action)\\s*=' /etc/audit/auditd.conf";
 const CONF_ACTIONS_EXAMPLE = [
     'space_left_action = SYSLOG',
     'admin_space_left_action = SUSPEND',
     'disk_full_action = ROTATE',
     'disk_error_action = SYSLOG',
 ].join('\n');
-const CMD_AUDITD_RESTART = 'sudo service auditd restart';
-const CMD_ROTATE_CHECK = "sudo grep -E '^\\s*(max_log_file|max_log_file_action|num_logs)\\s*=' /etc/audit/auditd.conf";
+const CMD_AUDITD_RESTART = 'service auditd restart';
+const CMD_ROTATE_CHECK = "grep -E '^\\s*(max_log_file|max_log_file_action|num_logs)\\s*=' /etc/audit/auditd.conf";
 const CONF_ROTATE_EXAMPLE = ['max_log_file = 8', 'max_log_file_action = ROTATE', 'num_logs = 5'].join('\n');
-const CMD_AGENT_START = 'sudo mimamori agent start';
-const CMD_NEVER_CHECK = "sudo auditctl -l | grep -- '-a never,task'";
+const CMD_AGENT_START = './mimamori agent start';
+const CMD_NEVER_CHECK = "auditctl -l | grep -- '-a never,task'";
 const RULES_FILE = '/etc/audit/rules.d/zz-mimamori.rules';
 
 function Step({ n, title, children }: { n: number; title: ReactNode; children: ReactNode }) {

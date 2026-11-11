@@ -38,12 +38,12 @@ mimamori detects operations performed with the privileges of selected OS users o
 
     ```bash
     cd <directory of the executable>
-    sudo ./mimamori central config set server_names central.example.com,192.0.2.10
-    sudo ./mimamori central init-admin --name admin
-    sudo ./mimamori central start
+    ./mimamori central config set server_names central.example.com,192.0.2.10
+    ./mimamori central init-admin --name admin
+    ./mimamori central start
     ```
 
-    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it), which may be a symbolic link to another place. `sudo ./mimamori central config list` shows every item; items not set use their defaults. Administrators can also change the configuration on the "System settings" screen. Most changes take effect at once; the listen addresses, workers and the built-in agent take effect after the central restarts, as the screen shows.
+    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it), which may be a symbolic link to another place. `./mimamori central config list` shows every item; items not set use their defaults. Administrators can also change the configuration on the "System settings" screen. Most changes take effect at once; the listen addresses, workers and the built-in agent take effect after the central restarts, as the screen shows.
 
     Set `server_names` to the host names and IP addresses agents use to connect, and the `smtp.*` items for notifications. Run the process as a service (systemd and so on) as suits your environment.
 
@@ -51,16 +51,16 @@ mimamori detects operations performed with the privileges of selected OS users o
 3. On each monitored host, initialize the agent with the token given on standard input, then start it.
 
     ```bash
-    printf '%s\n' '<token>' | sudo mimamori agent init --server https://<central>:8443 --ca-fingerprint <private CA fingerprint>
-    sudo mimamori agent start
+    printf '%s\n' '<token>' | ./mimamori agent init --server https://<central>:8443 --ca-fingerprint <private CA fingerprint>
+    ./mimamori agent start
     ```
 
-    Stop them and check their state with `sudo mimamori central stop` / `sudo mimamori central status` and `sudo mimamori agent stop` / `sudo mimamori agent status` (under a supervisor, SIGTERM stops them).
+    Stop them and check their state with `./mimamori central stop` / `./mimamori central status` and `./mimamori agent stop` / `./mimamori agent status` (under a supervisor, SIGTERM stops them).
 
 4. Use the CLI on the central host when needed. It is not tied to an account and has full authority; it is available to the OS user who can read the central's data directory.
 
     ```bash
-    sudo ./mimamori ctl agents list
+    ./mimamori ctl agents list
     ```
 
     No credential or environment variable is needed: the CLI reads the central's data directory. Start the program with its path (an absolute path or `./mimamori`).

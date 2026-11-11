@@ -266,7 +266,7 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
             </div>
             <div className='flex flex-col gap-2'>
                 <p className='text-xs text-muted'>{t('tokens.showFullCommand')}</p>
-                <CodeBlock code={`sudo ./mimamori ctl tokens show ${issued.token.id}`} />
+                <CodeBlock code={`./mimamori ctl tokens show ${issued.token.id}`} />
             </div>
             <div className='flex flex-col gap-2'>
                 <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
@@ -275,7 +275,7 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
                     <CodeBlock key={url} code={agentInitCommand(url)} />
                 ))}
                 <p className='text-xs text-muted'>
-                    {t('tokens.initThenStart')} <code className='font-mono'>sudo mimamori agent start</code>
+                    {t('tokens.initThenStart')} <code className='font-mono'>./mimamori agent start</code>
                 </p>
                 <p className='text-xs'>
                     <Link to='/guide' className='text-accent hover:text-accent-hover hover:underline'>
