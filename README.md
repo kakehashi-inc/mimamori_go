@@ -157,7 +157,7 @@ yarn setup:fonts
 go run . --data-dir data central start
 ```
 
-The web screens open at http://localhost:9080 (the agent port is 9081). Runtime data (such as the database file) is created in `data/` next to the executable.
+The web screens open at http://localhost:9080 (the agent port is 9081). Runtime data (such as the database file) is created in `data/` in the current directory.
 
 ### Lint and test
 

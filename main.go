@@ -54,10 +54,6 @@ func main() {
 		kong.Vars{"default_agent_port": strconv.Itoa(modules.DefaultAgentPort)},
 	)
 	modules.SetDataDir(cli.DataDir)
-	if err := modules.CheckExePath(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(modules.ExitConfig)
-	}
 
 	err := ctx.Run(&cli.Ctl)
 	if err != nil {

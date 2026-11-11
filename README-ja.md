@@ -157,7 +157,7 @@ yarn setup:fonts
 go run . --data-dir data central start
 ```
 
-http://localhost:9080 でWeb画面が開きます（エージェント用は9081）。実行時データ（DBファイルなど）は実行ファイルと同じ場所の`data/`に作成されます。
+http://localhost:9080 でWeb画面が開きます（エージェント用は9081）。実行時データ（DBファイルなど）はカレントディレクトリの`data/`に作成されます。
 
 ### Lintとテスト
 

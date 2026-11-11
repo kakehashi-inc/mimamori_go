@@ -15,6 +15,6 @@ export function agentInitCommand(
 }
 
 /** The command that changes the central host of an initialized agent. */
-export function agentSetCentralCommand(centralHost: string, centralPort: number | string): string {
-    return `./mimamori agent set-central --central-host ${centralHost} --central-port ${centralPort}`;
+export function agentSetCentralCommand(host: string, port: number | string): string {
+    return `./mimamori agent set-central --host ${host} --port ${port}`;
 }
