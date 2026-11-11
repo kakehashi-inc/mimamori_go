@@ -516,7 +516,7 @@ func (c *CtlRulesEditCmd) Run(p *CtlCmd) error {
 	if err != nil {
 		return NewExitError(ExitExec, err.Error())
 	}
-	proc, err := os.StartProcess(path, []string{path, f.Name()}, &os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}, Env: []string{}})
+	proc, err := os.StartProcess(path, []string{path, f.Name()}, &os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}})
 	if err != nil {
 		return NewExitError(ExitExec, err.Error())
 	}

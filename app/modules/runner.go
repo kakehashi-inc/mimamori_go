@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -19,23 +20,29 @@ type CommandResult struct {
 	ExitCode int
 }
 
-// commandSearchPath lists where external commands are looked for.
-var commandSearchPath = []string{"/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin"}
-
-// LookupCommand finds an executable by name in the fixed system directories
-// (the PATH environment variable is not used). A name containing "/" is used
-// as given.
+// LookupCommand finds an executable by name in the directories of PATH. A
+// name containing "/" is used as given.
 func LookupCommand(name string) (string, error) {
-	if strings.Contains(name, "/") {
-		return name, nil
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("command %q not found in PATH", name)
 	}
-	for _, dir := range commandSearchPath {
-		p := dir + "/" + name
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
-			return p, nil
+	return p, nil
+}
+
+// commandEnv is the environment of the commands whose output is parsed: the
+// environment of this process with the locale and the time zone fixed, so
+// the output format and the times given to the command (ausearch -ts) do
+// not depend on the user's settings.
+func commandEnv() []string {
+	env := []string{}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "LC_ALL=") || strings.HasPrefix(kv, "TZ=") {
+			continue
 		}
+		env = append(env, kv)
 	}
-	return "", fmt.Errorf("command %q not found", name)
+	return append(env, "LC_ALL=C", "TZ=UTC")
 }
 
 // RunCommand runs an external command with a timeout WITHOUT creating any
@@ -68,10 +75,8 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 
 	proc, err := os.StartProcess(path, append([]string{path}, args...), &os.ProcAttr{
 		Files: []*os.File{devnull, outW, errW},
-		// Empty environment: nothing is passed on, so the command uses the
-		// C locale and the system time zone.
-		Env: []string{},
-		Sys: &syscall.SysProcAttr{Setpgid: true},
+		Env:   commandEnv(),
+		Sys:   &syscall.SysProcAttr{Setpgid: true},
 	})
 	outW.Close()
 	errW.Close()
