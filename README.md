@@ -20,25 +20,23 @@ mimamori detects operations performed with the privileges of selected OS users o
 - auditd running on each host (including the central host)
 - An SMTP server for notifications
 
-### Getting started
+### Start and stop
 
-1. On the central host, set the configuration and start the central.
+See the [command reference](Documents/CommandReference.md) for how to use each command.
 
-    ```bash
-    ./mimamori central config set server_names central.example.com
-    ./mimamori central init-admin --name admin
-    ./mimamori central start
-    ```
+Start and stop the central:
 
-2. Open `http://<central>:9080` in a browser, log in, create a monitoring rule and issue a token.
-3. On each monitored host, initialize and start the agent.
+```bash
+./mimamori central start
+./mimamori central stop
+```
 
-    ```bash
-    ./mimamori agent init --central-host <central host name>
-    ./mimamori agent start
-    ```
+Start and stop the agent:
 
-The auditd checks and settings each host needs are shown on the "Setup guide" screen.
+```bash
+./mimamori agent start
+./mimamori agent stop
+```
 
 ## 2. Developer reference
 

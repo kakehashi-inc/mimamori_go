@@ -292,7 +292,7 @@ func (c *CtlAgentsShowCmd) Run(p *CtlCmd) error {
 // --- tokens ---
 
 type CtlTokensCmd struct {
-	Issue   CtlTokensIssueCmd   `cmd:"" help:"Issue a token (the value is shown once)"`
+	Issue   CtlTokensIssueCmd   `cmd:"" help:"Issue a token (the value is shown in full)"`
 	List    CtlTokensListCmd    `cmd:"" help:"List tokens"`
 	Show    CtlTokensShowCmd    `cmd:"" help:"Show a token"`
 	Reissue CtlTokensReissueCmd `cmd:"" help:"Reissue a token with the same name (previous values stop working)"`
@@ -842,7 +842,7 @@ type CtlCertsStatusCmd struct{}
 func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/certificates", nil) }
 
 type CtlHistoryCmd struct {
-	Category string `help:"account, rule, token, certificate, rejected, template, suppression or detection"`
+	Category string `help:"account, rule, token, certificate, rejected, template, suppression, detection or config"`
 	Limit    int    `help:"Maximum rows" default:"50"`
 	Offset   int    `help:"Rows to skip"`
 }

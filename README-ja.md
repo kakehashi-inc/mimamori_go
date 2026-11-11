@@ -20,25 +20,23 @@ mimamori は、各ホストで指定した OS のユーザーの権限で行わ�
 - 各ホスト（セントラルのホストを含む）で auditd が動いていること
 - 通知に使う SMTP サーバー
 
-### 導入の流れ
+### 起動と停止
 
-1. セントラルのホストで設定を行い、起動します。
+各コマンドの使い方は [コマンドリファレンス](Documents/CommandReference-ja.md) を参照してください。
 
-    ```bash
-    ./mimamori central config set server_names central.example.com
-    ./mimamori central init-admin --name admin
-    ./mimamori central start
-    ```
+セントラルの起動と停止:
 
-2. ブラウザで `http://<セントラル>:9080` を開いてログインし、監視ルールの作成とトークンの発行を行います。
-3. 監視対象のホストで、エージェントを初期化して起動します。
+```bash
+./mimamori central start
+./mimamori central stop
+```
 
-    ```bash
-    ./mimamori agent init --central-host <セントラルのホスト名>
-    ./mimamori agent start
-    ```
+エージェントの起動と停止:
 
-各ホストで必要な auditd の確認と設定は、画面の「導入の案内」に表示されます。
+```bash
+./mimamori agent start
+./mimamori agent stop
+```
 
 ## 2. 開発者向けリファレンス
 
