@@ -24,8 +24,10 @@ func DataDir(defaultDir string) string {
 	return defaultDir
 }
 
-// EnsureSecureDir creates dir (and parents) and makes sure it is owned by root
-// and not accessible by others (mode 0700).
+// EnsureSecureDir creates dir (and parents) with mode 0700 and checks that
+// it is owned by the user running the program and not accessible by others.
+// The owner of an existing directory is never changed: a mismatch is
+// reported instead.
 func EnsureSecureDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -33,16 +35,11 @@ func EnsureSecureDir(dir string) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	if os.Geteuid() == 0 {
-		if err := os.Chown(dir, 0, 0); err != nil {
-			return err
-		}
-	}
 	return CheckSecurePath(dir)
 }
 
-// CheckSecurePath verifies that path is owned by the current effective user
-// (root in production) and that group and others have no access.
+// CheckSecurePath verifies that path is owned by the user running the program
+// and that group and others have no access.
 func CheckSecurePath(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {

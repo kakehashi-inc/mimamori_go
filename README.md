@@ -22,7 +22,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 | --- | --- |
 | Executable | `mimamori` (a single Go binary containing the central, the agent and the CLI) |
 | Central | `mimamori central start`. Two listeners: for browsers (HTTP, default `:8080`) and for agents and management (HTTPS with the private CA, default `:8443`) |
-| Agent | `mimamori agent start`. Runs as root on each host and only connects to the central |
+| Agent | `mimamori agent start`. Runs on each host with permission to control auditd (usually root, because `auditctl` requires it) and only connects to the central |
 | Data | SQLite, split into the central management database `central.db` and one database per monitored target `targets/agent-<id>.db` |
 | Flows | One flow for the agent; basically two for the central (central functions and the built-in agent). The maximum number of workers handling requests is configurable (default 1) |
 
@@ -34,7 +34,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 
 ### Getting started
 
-1. On the central host, prepare the configuration file and start the central (as root).
+1. On the central host, prepare the configuration file and start the central. To use the built-in agent too, run it with permission to control auditd (usually root).
 
     ```bash
     sudo install -d -m 700 /etc/mimamori

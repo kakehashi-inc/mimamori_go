@@ -84,3 +84,10 @@ func NameOrID(m map[int]string, id int) string {
 	}
 	return strconv.Itoa(id)
 }
+
+// ReadPasswdName returns the user name of uid from /etc/passwd.
+func ReadPasswdName(uid int) (string, bool) {
+	_, byUID := ReadPasswd()
+	n, ok := byUID[uid]
+	return n, ok
+}

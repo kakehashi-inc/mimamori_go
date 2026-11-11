@@ -74,15 +74,12 @@ type AgentInitOptions struct {
 // AgentInit initializes the agent: it checks the prerequisites in order and
 // saves the configuration only when every check passed.
 func AgentInit(o AgentInitOptions) error {
-	// 1. root
-	if os.Geteuid() != 0 {
-		return NewExitError(ExitAuth, "agent init must be run as root")
-	}
-	// 2. auditd
+	// 1. auditd (the tools exist and auditctl can query the kernel, which
+	// also tells whether this user is permitted to control auditing)
 	if err := CheckAuditd(); err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
-	// 3. existing configuration
+	// 2. existing configuration
 	if _, err := os.Stat(o.ConfigPath); err == nil && !o.Overwrite {
 		return NewExitErrorf(ExitArgument, "%s already exists; use --overwrite to replace it", o.ConfigPath)
 	}
@@ -90,7 +87,7 @@ func AgentInit(o AgentInitOptions) error {
 	if err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	// 4. storage locations
+	// 3. storage locations
 	var created []string
 	for _, d := range []string{filepath.Dir(o.ConfigPath), o.DataDir} {
 		if _, err := os.Stat(d); errors.Is(err, os.ErrNotExist) {
@@ -101,7 +98,7 @@ func AgentInit(o AgentInitOptions) error {
 			return NewExitErrorf(ExitFileIO, "cannot secure %s: %v", d, err)
 		}
 	}
-	// 5. connect, receive the CA, authenticate (binds the token to this machine)
+	// 4. connect, receive the CA, authenticate (binds the token to this machine)
 	cfg, resp, err := initConnect(o, token)
 	if err != nil {
 		removeCreated(created)
@@ -196,9 +193,6 @@ func initConnect(o AgentInitOptions, token string) (*AgentConfig, *SyncResponse,
 // AgentStart runs the agent in the calling flow until SIGINT or SIGTERM.
 func AgentStart(configPath, dataDir string) error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
-	if os.Geteuid() != 0 {
-		return NewExitError(ExitAuth, "the agent must run as root")
-	}
 	if err := CheckAuditd(); err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}

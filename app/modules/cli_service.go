@@ -14,20 +14,10 @@ import (
 // scripts), so scripts and supervisors can test it.
 const ExitNotRunning = 3
 
-func requireRoot() error {
-	if os.Geteuid() != 0 {
-		return NewExitError(ExitAuth, "this command must be run as root")
-	}
-	return nil
-}
-
 func stopService(name, lockPath string, timeout time.Duration) error {
-	if err := requireRoot(); err != nil {
-		return err
-	}
 	pid, running, err := LockHolder(lockPath)
 	if err != nil {
-		return NewExitError(ExitGeneral, err.Error())
+		return NewExitError(ExitFileIO, err.Error())
 	}
 	if !running {
 		fmt.Printf("%s is not running\n", name)
@@ -44,12 +34,9 @@ func stopService(name, lockPath string, timeout time.Duration) error {
 // printRunning prints the common status lines and reports whether the
 // service is running.
 func printRunning(name, lockPath string) (bool, error) {
-	if err := requireRoot(); err != nil {
-		return false, err
-	}
 	pid, running, err := LockHolder(lockPath)
 	if err != nil {
-		return false, NewExitError(ExitGeneral, err.Error())
+		return false, NewExitError(ExitFileIO, err.Error())
 	}
 	if !running {
 		fmt.Printf("%-16s not running\n", name+":")

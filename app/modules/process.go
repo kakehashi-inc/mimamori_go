@@ -49,6 +49,9 @@ func StopProcess(lockPath string, timeout time.Duration) (bool, error) {
 		return false, nil
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			return true, NewExitErrorf(ExitAuth, "not permitted to signal process %d (run as the user running it)", pid)
+		}
 		return true, fmt.Errorf("sending SIGTERM to process %d: %w", pid, err)
 	}
 	deadline := time.Now().Add(timeout)

@@ -2,7 +2,6 @@ package workers
 
 import (
 	"log"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -45,11 +44,6 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	none := func() {}
 	if !*c.cfg.BuiltinAgent {
 		c.setBuiltinStatus(false, "the built-in agent is disabled in the configuration")
-		return none
-	}
-	if os.Geteuid() != 0 {
-		c.setBuiltinStatus(false, "the built-in agent needs root")
-		c.logger.Printf("built-in agent stopped: the central is not running as root")
 		return none
 	}
 	if err := modules.CheckAuditd(); err != nil {

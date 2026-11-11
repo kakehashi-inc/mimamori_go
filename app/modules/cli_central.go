@@ -16,8 +16,8 @@ type CentralCmd struct {
 	Start         CentralStartCmd         `cmd:"" help:"Start the central (browser screens, agent API, management API and the built-in agent)"`
 	Stop          CentralStopCmd          `cmd:"" help:"Stop the running central (sends SIGTERM and waits until it has stopped)"`
 	Status        CentralStatusCmd        `cmd:"" help:"Show whether the central is running (exit code 3 when it is not)"`
-	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run as root on the central host)"`
-	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run as root on the central host)"`
+	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run on the central host with access to its data directory)"`
+	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run on the central host with access to its data directory)"`
 	ExampleConfig CentralExampleConfigCmd `cmd:"" name:"example-config" help:"Print an example configuration file"`
 }
 
@@ -41,10 +41,21 @@ func (c *CentralExampleConfigCmd) Run() error {
 	return nil
 }
 
-func openCentralDBAsRoot() (*sql.DB, error) {
-	if os.Geteuid() != 0 {
-		return nil, NewExitError(ExitAuth, "this command must be run as root on the central host")
+// localOperator names the OS user running a local administration command
+// for the history.
+func localOperator() string {
+	if u := os.Getenv("SUDO_USER"); u != "" {
+		return "local:" + u
 	}
+	if name, ok := ReadPasswdName(os.Getuid()); ok {
+		return "local:" + name
+	}
+	return fmt.Sprintf("local:uid %d", os.Getuid())
+}
+
+// openCentralDBLocal opens the central database directly on the central
+// host. Access is controlled by the permissions of the data directory.
+func openCentralDBLocal() (*sql.DB, error) {
 	dir := DataDir(DefaultCentralDataDir)
 	if err := EnsureSecureDir(dir); err != nil {
 		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
@@ -83,7 +94,7 @@ type CentralInitAdminCmd struct {
 }
 
 func (c *CentralInitAdminCmd) Run() error {
-	db, err := openCentralDBAsRoot()
+	db, err := openCentralDBLocal()
 	if err != nil {
 		return err
 	}
@@ -107,7 +118,7 @@ func (c *CentralInitAdminCmd) Run() error {
 	if err := models.InsertAccount(db, a); err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: "root", Category: models.HistAccount, Action: "created", Target: a.Name, Detail: "first administrator created on the central host"})
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Name, Detail: "first administrator created on the central host"})
 	fmt.Printf("Administrator %q created.\n", a.Name)
 	return nil
 }
@@ -118,7 +129,7 @@ type CentralResetPasswordCmd struct {
 }
 
 func (c *CentralResetPasswordCmd) Run() error {
-	db, err := openCentralDBAsRoot()
+	db, err := openCentralDBLocal()
 	if err != nil {
 		return err
 	}
@@ -147,7 +158,7 @@ func (c *CentralResetPasswordCmd) Run() error {
 	_ = models.SetAccountDisabled(db, a.ID, false)
 	_ = models.DeleteAccountSessions(db, a.ID, "")
 	_ = models.DeleteCLICredentials(db, a.ID)
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: "root", Category: models.HistAccount, Action: "password_reset", Target: a.Name, Detail: "administrator recovered on the central host"})
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Name, Detail: "administrator recovered on the central host"})
 	fmt.Printf("Password of %q reset; the account is enabled and its sessions and CLI credential were invalidated.\n", a.Name)
 	return nil
 }

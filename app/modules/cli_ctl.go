@@ -109,7 +109,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	}
 	pemData, err := os.ReadFile(cfg.CAFile)
 	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "CA certificate %s: %v (run as root or set %s)", cfg.CAFile, err, EnvCLICAFile)
+		return nil, NewExitErrorf(ExitConfig, "CA certificate %s: %v (check its permissions or set %s)", cfg.CAFile, err, EnvCLICAFile)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemData) {
