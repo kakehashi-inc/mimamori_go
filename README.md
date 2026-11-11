@@ -4,79 +4,48 @@
 
 ## 1. Overview
 
-mimamori detects operations performed with the privileges of selected OS users on each host, using auditd and file scans, collects them on a central server and notifies by email. Administrators decide what to monitor and what is important (`alert`) with monitoring rules.
+mimamori detects operations performed with the privileges of selected OS users on each host, using auditd and file scans, collects them on a central server and notifies by email. Administrators decide what to monitor and what is important with monitoring rules.
 
 ### Features
 
-- Monitoring types: program execution, file operations denied by permissions, successful reads of selected directories, network connections started by selected executables, writable files and directories outside the allowed paths, and newly created or changed executable files (such as `.php`) inside the allowed paths
-- Operations of logged-in users and cron jobs can be excluded, so that only processes started by the system are monitored
-- Monitoring rules hold values only and are versioned. They are created by combining built-in templates (`base`, `apache`, `nginx`, `php-fpm`, `laravel`, `ffmpeg`) and administrator templates, and a saved version is applied to selected agents
-- Agents authenticate with tokens (with an expiry, bound to the agent instance that was initialized with them, renewed automatically) and connect over HTTPS with certificates from a private CA that the central creates automatically
-- Detections are grouped by type, OS user, executable and target, and handled with suppression conditions, acknowledgement and notifications (through your own SMTP server) with a minimum interval and repeat suppression
-- The same operations are available in the browser screens (Japanese / English) and in the CLI on the central host. Roles are administrator and viewer
-- The central host itself is monitored by the built-in agent
-
-### Architecture
-
-| Component | Description |
-| --- | --- |
-| Executable | `mimamori` (a single Go binary containing the central, the agent and the CLI) |
-| Central | `mimamori central start`. Two listeners: for browsers (HTTP, default `:9080`) and for agents and management (HTTPS with the private CA, default `:9081`) |
-| Agent | `mimamori agent start`. Runs on each host with permission to control auditd (usually root, because `auditctl` requires it) and only connects to the central |
-| Data | SQLite, split into the central management database `central.db` and one database per monitored target `targets/agent-<id>.db` |
-| Flows | One flow for the agent; basically two for the central (central functions and the built-in agent). The maximum number of workers handling requests is configurable (default 1) |
+- Detection of program execution, file operations denied by permissions, reads of selected directories, network connections by selected executables, writable files and newly created executable files
+- Monitoring rules built from templates, with versions, applied to agents
+- Acknowledgement of detections, suppression conditions and email notifications
+- Management on browser screens (English / Japanese) and with a CLI on the central host
+- Monitoring of the central host itself (built-in agent)
 
 ### Requirements
 
 - Supported OS: Amazon Linux 2023, Rocky Linux 9, AlmaLinux 9, Ubuntu 24.04 (x64)
-- auditd installed and running on every host, including the central host
-- Notifications use your own SMTP server. No external services or database servers are used
+- auditd running on each host (including the central host)
+- An SMTP server for notifications
 
 ### Getting started
 
-1. On the central host, set the configuration and start the central. To use the built-in agent too, run it with permission to control auditd (usually root).
+1. On the central host, set the configuration and start the central.
 
     ```bash
-    cd <directory of the executable>
-    ./mimamori central config set server_names central.example.com,192.0.2.10
+    ./mimamori central config set server_names central.example.com
     ./mimamori central init-admin --name admin
     ./mimamori central start
     ```
 
-    There are no configuration files: the configuration and the data are stored in SQLite databases in the `data/` directory next to the executable (`--data-dir` to change it). `./mimamori central config list` shows every item; items not set use their defaults. Administrators can also change the configuration on the "System settings" screen. Most changes take effect at once; the listen addresses, workers and the built-in agent take effect after the central restarts, as the screen shows.
-
-    Set `server_names` to the host names and IP addresses agents use to connect, and the `smtp.*` items for notifications. Run the process as a service (systemd and so on) as suits your environment.
-
 2. Open `http://<central>:9080` in a browser, log in, create a monitoring rule and issue a token.
-3. On each monitored host, initialize the agent with the token given on standard input, then start it.
+3. On each monitored host, initialize and start the agent.
 
     ```bash
-    printf '%s\n' '<token>' | ./mimamori agent init --server https://<central>:9081 --ca-fingerprint <private CA fingerprint>
+    ./mimamori agent init --server https://<central>:9081
     ./mimamori agent start
     ```
 
-    Stop them and check their state with `./mimamori central stop` / `./mimamori central status` and `./mimamori agent stop` / `./mimamori agent status` (under a supervisor, SIGTERM stops them).
-
-4. Use the CLI on the central host when needed. It is not tied to an account and has full authority; it is available to the OS user who can read the central's data directory.
-
-    ```bash
-    ./mimamori ctl agents list
-    ```
-
-    No credential or environment variable is needed: the CLI reads the central's data directory. Start the program with its path (an absolute path or `./mimamori`).
-
-The setup guide screen explains the auditd checks and settings required on each host.
-
-### Moving the central
-
-Stop the central, move the whole directory of the executable (including `data/`, readable and writable by the user that runs it) to the new host and start it there; it works as it is. The databases hold no absolute paths. Agents keep connecting to the URL given at initialization, so point the host name (DNS) included in `server_names` to the new host.
+The auditd checks and settings each host needs are shown on the "Setup guide" screen.
 
 ### Documents
 
-- [Documents/システム仕様.md](Documents/システム仕様.md): design (terms, flows, CLI, configuration, monitoring rules, communication, auditd handling, notifications, certificates, screens)
-- [Documents/API仕様.md](Documents/API仕様.md): HTTP API
-- [Documents/テーブル定義.md](Documents/テーブル定義.md): table definitions
-- [CHANGELOG.md](CHANGELOG.md): change log
+- [Documents/システム仕様.md](Documents/システム仕様.md): system specification (Japanese)
+- [Documents/API仕様.md](Documents/API仕様.md): HTTP API (Japanese)
+- [Documents/テーブル定義.md](Documents/テーブル定義.md): table definitions (Japanese)
+- [CHANGELOG.md](CHANGELOG.md): changelog
 
 ## 2. Developer reference
 
