@@ -159,7 +159,7 @@ type AgentCmd struct {
 
 // AgentInitCmd initializes the agent.
 type AgentInitCmd struct {
-	Server        string `help:"Central URL, e.g. https://central.example.com:8443" required:""`
+	Server        string `help:"Central URL, e.g. https://central.example.com:9081" required:""`
 	Overwrite     bool   `help:"Replace an existing initialization"`
 	CAFingerprint string `name:"ca-fingerprint" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
 }

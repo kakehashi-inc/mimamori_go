@@ -21,7 +21,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 | Component | Description |
 | --- | --- |
 | Executable | `mimamori` (a single Go binary containing the central, the agent and the CLI) |
-| Central | `mimamori central start`. Two listeners: for browsers (HTTP, default `:8080`) and for agents and management (HTTPS with the private CA, default `:8443`) |
+| Central | `mimamori central start`. Two listeners: for browsers (HTTP, default `:9080`) and for agents and management (HTTPS with the private CA, default `:9081`) |
 | Agent | `mimamori agent start`. Runs on each host with permission to control auditd (usually root, because `auditctl` requires it) and only connects to the central |
 | Data | SQLite, split into the central management database `central.db` and one database per monitored target `targets/agent-<id>.db` |
 | Flows | One flow for the agent; basically two for the central (central functions and the built-in agent). The maximum number of workers handling requests is configurable (default 1) |
@@ -47,11 +47,11 @@ mimamori detects operations performed with the privileges of selected OS users o
 
     Set `server_names` to the host names and IP addresses agents use to connect, and the `smtp.*` items for notifications. Run the process as a service (systemd and so on) as suits your environment.
 
-2. Open `http://<central>:8080` in a browser, log in, create a monitoring rule and issue a token.
+2. Open `http://<central>:9080` in a browser, log in, create a monitoring rule and issue a token.
 3. On each monitored host, initialize the agent with the token given on standard input, then start it.
 
     ```bash
-    printf '%s\n' '<token>' | ./mimamori agent init --server https://<central>:8443 --ca-fingerprint <private CA fingerprint>
+    printf '%s\n' '<token>' | ./mimamori agent init --server https://<central>:9081 --ca-fingerprint <private CA fingerprint>
     ./mimamori agent start
     ```
 

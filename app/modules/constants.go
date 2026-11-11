@@ -41,9 +41,9 @@ const (
 	CLISecretFileName         = "cli.secret"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"
-	DefaultWebListen          = "0.0.0.0:8080"
-	DefaultAgentListen        = "0.0.0.0:8443"
-	DefaultAgentPort          = 8443
+	DefaultWebListen          = "0.0.0.0:9080"
+	DefaultAgentListen        = "0.0.0.0:9081"
+	DefaultAgentPort          = 9081
 	DefaultCheckIntervalSec   = 60
 	DefaultScanIntervalSec    = 3600
 	DefaultTokenValidDays     = 365
