@@ -67,6 +67,10 @@ mimamori detects operations performed with the privileges of selected OS users o
 
 The setup guide screen explains the auditd checks and settings required on each host.
 
+### Moving the central
+
+Stop the central, move the whole directory of the executable (including `data/`, keeping its owner and permissions) to the new host and start it there; it works as it is. The databases hold no absolute paths. If `data/` is a symbolic link, move its target too. Agents keep connecting to the URL given at initialization, so point the host name (DNS) included in `server_names` to the new host.
+
 ### Documents
 
 - [Documents/システム仕様.md](Documents/システム仕様.md): design (terms, flows, CLI, configuration, monitoring rules, communication, auditd handling, notifications, certificates, screens)

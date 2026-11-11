@@ -38,6 +38,8 @@ type CtlCmd struct {
 type ctlClient struct {
 	http *HTTPSClient
 	json bool
+	// full prints every cell in full (long text is shortened otherwise).
+	full bool
 }
 
 func (c *CtlCmd) client() (*ctlClient, error) {
@@ -135,7 +137,7 @@ func (cl *ctlClient) show(v any, columns ...string) {
 		m, _ := r.(map[string]any)
 		var cells []string
 		for _, col := range columns {
-			cells = append(cells, cell(lookup(m, col)))
+			cells = append(cells, cell(lookup(m, col), cl.full))
 		}
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
@@ -193,7 +195,7 @@ func lookup(m map[string]any, path string) any {
 	return cur
 }
 
-func cell(v any) string {
+func cell(v any, full bool) string {
 	switch t := v.(type) {
 	case nil:
 		return "-"
@@ -204,7 +206,7 @@ func cell(v any) string {
 			return "-"
 		}
 		t = localizeText(t)
-		if len(t) > 60 {
+		if !full && len(t) > 60 {
 			return t[:57] + "..."
 		}
 		return t
@@ -224,10 +226,16 @@ func cell(v any) string {
 }
 
 func runCtl(parent *CtlCmd, method, path string, in any, columns ...string) error {
+	return runCtlTable(parent, false, method, path, in, columns...)
+}
+
+// runCtlTable is runCtl with the choice to print every cell in full.
+func runCtlTable(parent *CtlCmd, full bool, method, path string, in any, columns ...string) error {
 	cl, err := parent.client()
 	if err != nil {
 		return err
 	}
+	cl.full = full
 	out, err := cl.call(method, path, in)
 	if err != nil {
 		return err
@@ -314,7 +322,7 @@ func printTokenValue(p *CtlCmd, out any) {
 		return
 	}
 	tok, _ := m["token"].(map[string]any)
-	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell(tok["expires_at"]), m["value"])
+	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell(tok["expires_at"], true), m["value"])
 	fmt.Println("\nThe value is shown only now. Initialize the agent on the target host with:")
 	fmt.Printf("  printf '%%s\\n' '<value>' | sudo %s agent init --server https://<central>:%d\n", AppName, DefaultAgentPort)
 }
@@ -342,7 +350,8 @@ func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {
 	return nil
 }
 func (c *CtlTokensListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/tokens", nil, "id", "name", "status", "expires_at", "last_seen_at", "instance_id", "pending_renewal", "expiring_unconnected")
+	// The token list is printed without shortening any value.
+	return runCtlTable(p, true, "GET", "/tokens", nil, "id", "name", "status", "expires_at", "last_seen_at", "instance_id", "pending_renewal", "expiring_unconnected")
 }
 func (c *CtlTokensShowCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "GET", fmt.Sprintf("/tokens/%d", c.ID), nil)
