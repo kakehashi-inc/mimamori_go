@@ -61,9 +61,10 @@ mimamori detects operations performed with the privileges of selected OS users o
 4. Use the CLI on the central host when needed (issue a CLI credential on the accounts screen).
 
     ```bash
-    export MIMAMORI_CLI_KEY=mmc_...
-    sudo -E mimamori ctl agents list
+    sudo ./mimamori ctl agents list
     ```
+
+    The CLI credential is typed at the terminal when the command runs (it is not echoed). When piping input, put it on the first line of standard input and any further input (a password or JSON) on the following lines. No environment variables are used.
 
 The setup guide screen explains the auditd checks and settings required on each host.
 

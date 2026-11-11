@@ -42,7 +42,6 @@ const (
 	CentralLockFileName       = "central.lock"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"
-	EnvCLIKey                 = "MIMAMORI_CLI_KEY"
 	DefaultWebListen          = "0.0.0.0:8080"
 	DefaultAgentListen        = "0.0.0.0:8443"
 	DefaultAgentPort          = 8443

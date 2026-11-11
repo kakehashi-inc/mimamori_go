@@ -44,9 +44,6 @@ func (c *CentralExampleConfigCmd) Run() error {
 // localOperator names the OS user running a local administration command
 // for the history.
 func localOperator() string {
-	if u := os.Getenv("SUDO_USER"); u != "" {
-		return "local:" + u
-	}
 	if name, ok := ReadPasswdName(os.Getuid()); ok {
 		return "local:" + name
 	}

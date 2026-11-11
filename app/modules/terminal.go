@@ -18,6 +18,11 @@ func isTerminal(fd uintptr) bool {
 	return e == 0
 }
 
+// stdin is the single buffered reader of standard input, shared by every
+// read so that values given one per line (for example a CLI credential
+// followed by a password or JSON) are not lost between reads.
+var stdin = bufio.NewReader(os.Stdin)
+
 // ReadSecret reads a secret without putting it on the command line: from the
 // terminal with echo turned off, or as the first line of standard input when
 // it is redirected (for example from printf in a pipe, which does not appear
@@ -41,7 +46,7 @@ func ReadSecret(prompt string) (string, error) {
 			fmt.Fprintln(os.Stderr)
 		}()
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := stdin.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}

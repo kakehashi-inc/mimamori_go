@@ -61,9 +61,10 @@ mimamori は、各ホストで指定した OS のユーザー（Web サーバー
 4. 必要に応じて、セントラルのホストで CLI を使います（CLI 用の認証情報はアカウントの画面で発行します）。
 
     ```bash
-    export MIMAMORI_CLI_KEY=mmc_...
-    sudo -E mimamori ctl agents list
+    sudo ./mimamori ctl agents list
     ```
+
+    CLI 用の認証情報は、実行時に端末から入力します（表示されません）。パイプで渡す場合は標準入力の1行目に置き、パスワードや JSON などの入力はその後の行に続けます。環境変数は使いません。
 
 各ホストで必要な auditd の確認と設定は、画面の「導入の案内」に表示されます。
 

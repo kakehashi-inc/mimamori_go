@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -21,6 +22,10 @@ import (
 // use the management API over the loopback address.
 type CtlCmd struct {
 	Config string `help:"Central configuration file (the address of the management API is taken from it)" default:"${central_config}" type:"path"`
+
+	// key is the CLI credential. It is read before anything else, so the
+	// credential is always the first line when input is piped.
+	key string
 	JSON   bool   `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
@@ -40,14 +45,25 @@ type ctlClient struct {
 	json bool
 }
 
+// AfterApply runs once a ctl command was selected, before the command reads
+// any other input: it reads the CLI credential from the terminal (without
+// echo) or the first line of standard input, never from an argument or the
+// environment.
+func (c *CtlCmd) AfterApply() error {
+	key, err := ReadSecret("CLI credential: ")
+	if err != nil {
+		return NewExitErrorf(ExitAuth, "CLI credential: %v (issue one on the accounts screen)", err)
+	}
+	c.key = key
+	return nil
+}
+
 func (c *CtlCmd) client() (*ctlClient, error) {
 	// The management API is the central's own listener: its address comes
 	// from the central configuration and its CA from the central's data
-	// directory. Only the credential is given, by the environment.
-	key := os.Getenv(EnvCLIKey)
-	if key == "" {
-		return nil, NewExitErrorf(ExitAuth, "no CLI credential: set %s (issue one on the accounts screen)", EnvCLIKey)
-	}
+	// directory. The credential is read from the terminal (without echo) or
+	// the first line of standard input, never from an argument or the
+	// environment.
 	cc, _, err := LoadCentralConfig(c.Config)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
@@ -69,7 +85,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	hc.Headers["Authorization"] = "Bearer " + key
+	hc.Headers["Authorization"] = "Bearer " + c.key
 	return &ctlClient{http: hc, json: c.JSON}, nil
 }
 
@@ -243,16 +259,7 @@ func readJSONFile(path string) (json.RawMessage, error) {
 }
 
 func readAllStdin() ([]byte, error) {
-	var b strings.Builder
-	buf := make([]byte, 32<<10)
-	for {
-		n, err := os.Stdin.Read(buf)
-		b.Write(buf[:n])
-		if err != nil {
-			break
-		}
-	}
-	return []byte(b.String()), nil
+	return io.ReadAll(stdin)
 }
 
 // --- agents ---
@@ -376,7 +383,7 @@ type CtlRulesCmd struct {
 	Create     CtlRulesCreateCmd     `cmd:"" help:"Create a rule from templates, from a JSON file or empty"`
 	Export     CtlRulesExportCmd     `cmd:"" help:"Print the content of a version as JSON (for editing)"`
 	Save       CtlRulesSaveCmd       `cmd:"" help:"Save edited content as a new version"`
-	Edit       CtlRulesEditCmd       `cmd:"" help:"Edit the latest version in $EDITOR and save it as a new version"`
+	Edit       CtlRulesEditCmd       `cmd:"" help:"Edit the latest version with an editor (--editor) and save it as a new version"`
 	History    CtlRulesHistoryCmd    `cmd:"" help:"List the versions of a rule"`
 	Diff       CtlRulesDiffCmd       `cmd:"" help:"Show the difference between two versions"`
 	Apply      CtlRulesApplyCmd      `cmd:"" help:"Apply a version to agents"`
@@ -408,6 +415,7 @@ type CtlRulesSaveCmd struct {
 type CtlRulesEditCmd struct {
 	ID      int64  `arg:""`
 	Comment string `help:"Comment of the new version"`
+	Editor  string `help:"Editor command" default:"vi"`
 }
 type CtlRulesHistoryCmd struct {
 	ID int64 `arg:""`
@@ -518,11 +526,7 @@ func (c *CtlRulesEditCmd) Run(p *CtlCmd) error {
 		return err
 	}
 	f.Close()
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
-	}
-	path, err := LookupCommand(editor)
+	path, err := LookupCommand(c.Editor)
 	if err != nil {
 		return NewExitError(ExitExec, err.Error())
 	}
