@@ -69,7 +69,7 @@ The setup guide screen explains the auditd checks and settings required on each 
 
 ### Moving the central
 
-Stop the central, move the whole directory of the executable (including `data/`, keeping its owner and permissions) to the new host and start it there; it works as it is. The databases hold no absolute paths. If `data/` is a symbolic link, move its target too. Agents keep connecting to the URL given at initialization, so point the host name (DNS) included in `server_names` to the new host.
+Stop the central, move the whole directory of the executable (including `data/`, readable and writable by the user that runs it) to the new host and start it there; it works as it is. The databases hold no absolute paths. If `data/` is a symbolic link, move its target too. Agents keep connecting to the URL given at initialization, so point the host name (DNS) included in `server_names` to the new host.
 
 ### Documents
 

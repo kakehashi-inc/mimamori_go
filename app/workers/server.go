@@ -24,10 +24,10 @@ func init() {
 func startCentral() error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	dataDir := modules.DataDir()
-	if err := modules.EnsureSecureDir(dataDir); err != nil {
+	if err := modules.EnsureDataDir(dataDir); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory %s: %v", dataDir, err)
 	}
-	if err := modules.EnsureSecureDir(filepath.Join(dataDir, modules.TargetDBDirName)); err != nil {
+	if err := modules.EnsureDataDir(filepath.Join(dataDir, modules.TargetDBDirName)); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory: %v", err)
 	}
 	lock, err := modules.AcquireLock(filepath.Join(dataDir, modules.CentralLockFileName))

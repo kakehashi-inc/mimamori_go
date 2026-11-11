@@ -44,7 +44,7 @@ func localOperator() string {
 // host. Access is controlled by the permissions of the data directory.
 func openCentralDBLocal() (*sql.DB, error) {
 	dir := DataDir()
-	if err := EnsureSecureDir(dir); err != nil {
+	if err := EnsureDataDir(dir); err != nil {
 		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
 	}
 	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)

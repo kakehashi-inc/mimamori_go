@@ -85,9 +85,6 @@ func AgentInit(o AgentInitOptions) error {
 	dbPath := filepath.Join(o.DataDir, AgentLocalDBFileName)
 	agentID := ""
 	if _, err := os.Stat(dbPath); err == nil {
-		if err := CheckSecurePath(o.DataDir); err != nil {
-			return NewExitErrorf(ExitFileIO, "data directory: %v", err)
-		}
 		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 		if err != nil {
 			return NewExitErrorf(ExitFileIO, "local database: %v", err)
@@ -118,7 +115,7 @@ func AgentInit(o AgentInitOptions) error {
 	if _, err := os.Stat(o.DataDir); errors.Is(err, os.ErrNotExist) {
 		created = append(created, o.DataDir)
 	}
-	if err := EnsureSecureDir(o.DataDir); err != nil {
+	if err := EnsureDataDir(o.DataDir); err != nil {
 		removeCreated(created)
 		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
 	}
@@ -223,9 +220,6 @@ func AgentStart(dataDir string) error {
 	dbPath := filepath.Join(dataDir, AgentLocalDBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
 		return NewExitError(ExitConfig, ErrAgentNotInitialized.Error())
-	}
-	if err := CheckSecurePath(dataDir); err != nil {
-		return NewExitErrorf(ExitConfig, "data directory: %v", err)
 	}
 	lock, err := AcquireLock(filepath.Join(dataDir, AgentLockFileName))
 	if err != nil {
