@@ -53,7 +53,7 @@ func CheckExePath() error {
 }
 
 // DataDir returns the data directory: the --data-dir flag, otherwise data/
-// next to the executable. It may be a symbolic link to another place.
+// next to the executable.
 func DataDir() string {
 	if dataDirOverride != "" {
 		return dataDirOverride
@@ -62,9 +62,8 @@ func DataDir() string {
 }
 
 // EnsureDataDir creates dir (mode 0700) when it does not exist. An existing
-// directory, or the directory a symbolic link points to, is used as it is:
-// its owner and mode are neither changed nor checked, and access is decided
-// by the actual permissions when files are opened.
+// one is used as it is: nothing about it is changed or checked, and access
+// is decided by the actual permissions when files are opened.
 func EnsureDataDir(dir string) error {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return os.MkdirAll(dir, 0o700)

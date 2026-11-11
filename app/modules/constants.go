@@ -27,9 +27,9 @@ const (
 // --- Paths ---
 
 const (
-	// Every file is in the data/ directory next to the executable (which may
-	// be a symbolic link, or another directory given with --data-dir). The
-	// configuration is stored in the databases.
+	// Every file is in the data/ directory next to the executable (or the
+	// directory given with --data-dir). The configuration is stored in the
+	// databases.
 	DataDirName             = "data"
 	CentralDBFileName       = "central.db"
 	AgentLocalDBFileName    = "agent.db"
