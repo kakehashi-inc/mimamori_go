@@ -124,7 +124,7 @@ export interface AgentDetail extends AgentSummary {
 export interface Token {
     id: number;
     name: string;
-    /** Shortened value ("mmr_AbCd...WxYz"); the full value is never sent to the browser. */
+    /** Shortened value ("mmr_AbCd...WxYz"); the full value is only in the issue/reissue response. */
     value: string;
     status: TokenStatus;
     expires_at: string;
@@ -149,7 +149,7 @@ export interface TokenIssueRequest {
 
 export interface TokenWithValue {
     token: Token;
-    /** Shortened value, as in Token. */
+    /** The new value in full; the browser receives it only in this response. */
     value: string;
 }
 

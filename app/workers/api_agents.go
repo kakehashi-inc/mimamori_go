@@ -405,7 +405,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		detail += "; rule id " + itoa64(agent.AssignedRuleID.Int64) + " version " + itoa(agent.AssignedRuleVersion)
 	}
 	c.history(p, models.HistToken, "issued", tok.Name, detail)
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok), "value": tokenValueFor(r, value)})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok), "value": value})
 }
 
 func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
@@ -443,7 +443,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, "previous values invalidated; expires "+time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339))
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t), "value": tokenValueFor(r, value)})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t), "value": value})
 }
 
 func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
@@ -478,9 +478,10 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
 }
 
-// tokenValueFor returns a token value as the caller may see it: in full for
-// the management CLI, shortened for the browser screens (the full value is
-// never sent to a browser, administrators included).
+// tokenValueFor returns a stored token value as the caller may see it: in
+// full for the management CLI, shortened for the browser screens. The
+// responses of issuing and reissuing carry the new value in full for both, so
+// the administrator can copy it once.
 func tokenValueFor(r *http.Request, value string) string {
 	if p := principalFrom(r); p != nil && p.ViaCLI {
 		return value

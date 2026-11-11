@@ -495,8 +495,12 @@ func TestTokenValueVisibility(t *testing.T) {
 			Value string `json:"value"`
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
-		if rec.Code != 200 || !strings.Contains(out.Value, "...") {
+		// The new value is given in full once, in the response itself.
+		if rec.Code != 200 || !strings.HasPrefix(out.Value, modules.TokenPrefix) || strings.Contains(out.Value, "...") {
 			t.Fatalf("%s: %d value %q", req.path, rec.Code, out.Value)
+		}
+		if strings.Contains(e.do(e.web, "GET", "/api/v1/tokens", nil, hdr, "192.0.2.1:1000").Body.String(), out.Value) {
+			t.Fatalf("%s: the list must not carry the full value afterwards", req.path)
 		}
 	}
 }

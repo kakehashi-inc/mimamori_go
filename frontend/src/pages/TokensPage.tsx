@@ -243,8 +243,8 @@ export function TokensPage() {
 }
 
 /**
- * Next steps after issuing or reissuing a token. The browser only receives a
- * shortened value; the full value is shown by the CLI on the central host.
+ * The new value (in full until the dialog is closed; the browser shows only a
+ * shortened value afterwards) and the next steps.
  */
 function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
     const { t } = useTranslation();
@@ -259,13 +259,13 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
         : [`https://${guide?.central_hostname || '<host>'}:${guide?.agent_port || '<port>'}`];
     return (
         <div className='flex flex-col gap-4'>
-            <div className='flex flex-col gap-1'>
-                <p className='text-sm font-medium'>{t('tokens.value')}</p>
-                <code className='font-mono text-sm break-all'>{issued.value}</code>
-            </div>
-            <Alert tone='info'>{t('tokens.fullValueNote')}</Alert>
+            <Alert tone='warning'>{t('tokens.fullValueNote')}</Alert>
             <div className='flex flex-col gap-2'>
-                <p className='text-sm font-medium'>{t('tokens.showFullCommand')}</p>
+                <p className='text-sm font-medium'>{t('tokens.value')}</p>
+                <CodeBlock code={issued.value} />
+            </div>
+            <div className='flex flex-col gap-2'>
+                <p className='text-xs text-muted'>{t('tokens.showFullCommand')}</p>
                 <CodeBlock code={`sudo ./mimamori ctl tokens show ${issued.token.id}`} />
             </div>
             <div className='flex flex-col gap-2'>

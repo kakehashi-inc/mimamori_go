@@ -128,7 +128,7 @@ interface HostInfo {
 type TokenStatus = 'unused' | 'active' | 'expired' | 'revoked';
 interface Token {
   id: number; name: string;
-  value: string;                     // /admin/v1（CLI）は値の全体、/api/v1（ブラウザ）は略した形 "mmr_AbCd...WxYz"
+  value: string;                     // /admin/v1（CLI）は値の全体、/api/v1（ブラウザ）は略した形 "mmr_AbCd...WxYz"（発行と再発行の応答の外側の value は除く）
   status: TokenStatus;
   expires_at: string; created_at: string; created_by: string;
   last_seen_at: string | null; instance_id: string; bound_at: string | null;
@@ -139,7 +139,7 @@ interface Token {
 }
 ```
 
-- 発行と再発行の応答の `value` も同じく、CLI には値の全体、ブラウザには略した形を返します。値の全体は、管理者であってもブラウザには送りません。
+- 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザには略した形だけを返します。
 - `valid_days` を省略すると設定の既定値を使います。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
 
 ## 6. 監視ルール
