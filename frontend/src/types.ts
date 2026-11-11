@@ -43,13 +43,6 @@ export interface TokenRef {
     expires_at: string;
 }
 
-export interface AffectedProcess {
-    pid: number;
-    comm: string;
-    user: string;
-    started_at: string;
-}
-
 export interface AuditdStatus {
     running: boolean;
     enabled: number;
@@ -60,7 +53,6 @@ export interface AuditdStatus {
     backlog_wait_time: number;
     failure: number;
     never_rule: boolean;
-    affected_processes: AffectedProcess[] | null;
     halt_actions: string[] | null;
 }
 
@@ -97,19 +89,12 @@ export interface AgentSummary {
     builtin_running: boolean | null;
 }
 
-export type SuggestionKind = 'user' | 'allowed_path' | 'read_dir';
+export type SuggestionKind = 'allowed_path';
 
 export interface Suggestion {
     kind: SuggestionKind;
     value: string;
     reason: string;
-}
-
-export interface HostService {
-    software: string;
-    process: string;
-    users: string[] | null;
-    processes: number;
 }
 
 export interface HostDirectory {
@@ -128,7 +113,6 @@ export interface HostInfo {
     kernel: string;
     agent_version: string;
     auditd: AuditdStatus;
-    services: HostService[] | null;
     scan_base: string;
     directories: HostDirectory[] | null;
     directories_truncated: boolean;
@@ -154,7 +138,7 @@ export interface Token {
     created_at: string;
     created_by: string;
     last_seen_at: string | null;
-    machine_id: string;
+    instance_id: string;
     bound_at: string | null;
     reissued_at: string | null;
     renewed_at: string | null;
@@ -409,7 +393,6 @@ export interface Account {
     disabled: boolean;
     locked_until: string | null;
     created_at: string;
-    has_cli_credential: boolean;
 }
 
 // --- Guide ---

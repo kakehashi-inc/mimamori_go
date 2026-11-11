@@ -136,13 +136,13 @@ export function TokensPage() {
                                             )}
                                         </Td>
                                         <Td>
-                                            {tk.machine_id ? (
+                                            {tk.instance_id ? (
                                                 <>
                                                     <div
                                                         className='max-w-48 truncate font-mono text-xs'
-                                                        title={tk.machine_id}
+                                                        title={tk.instance_id}
                                                     >
-                                                        {tk.machine_id}
+                                                        {tk.instance_id}
                                                     </div>
                                                     <div className='text-xs whitespace-nowrap text-muted'>
                                                         {t('tokens.boundAt', { date: formatDateTime(tk.bound_at) })}
@@ -170,7 +170,7 @@ export function TokensPage() {
                                                     <Button
                                                         size='sm'
                                                         icon='link_off'
-                                                        disabled={!tk.machine_id}
+                                                        disabled={!tk.instance_id}
                                                         onClick={() => setConfirm({ kind: 'unbind', token: tk })}
                                                     >
                                                         {t('tokens.unbind')}

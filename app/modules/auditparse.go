@@ -352,12 +352,13 @@ func (id AuditEventID) After(o AuditEventID) bool {
 // already read. A zero last starts ten minutes back. It returns the events
 // and the new position.
 func CollectAuditEvents(last AuditEventID) ([]*AuditEvent, AuditEventID, error) {
-	start := time.Unix(last.Sec, 0).UTC()
+	start := time.Unix(last.Sec, 0).In(SystemLocation())
 	if last.Sec == 0 {
-		start = time.Now().UTC().Add(-10 * time.Minute)
+		start = time.Now().In(SystemLocation()).Add(-10 * time.Minute)
 	}
-	// ausearch parses -ts with the C locale date format (two-digit year), and
-	// RunCommand runs it with LC_ALL=C and TZ=UTC.
+	// ausearch runs with an empty environment, so it reads -ts in the C
+	// locale date format (two-digit year) and in the system time zone
+	// (/etc/localtime), which SystemLocation also uses.
 	args := []string{"--input-logs", "--raw", "-k", AuditKey, "-ts", start.Format("01/02/06"), start.Format("15:04:05")}
 	res, err := RunCommand(120*time.Second, 256<<20, "ausearch", args...)
 	if err != nil {

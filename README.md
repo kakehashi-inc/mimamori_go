@@ -11,7 +11,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 - Monitoring types: program execution, file operations denied by permissions, successful reads of selected directories, network connections started by selected executables, writable files and directories outside the allowed paths, and newly created or changed executable files (such as `.php`) inside the allowed paths
 - Operations of logged-in users and cron jobs can be excluded, so that only processes started by the system are monitored
 - Monitoring rules hold values only and are versioned. They are created by combining built-in templates (`base`, `apache`, `nginx`, `php-fpm`, `laravel`, `ffmpeg`) and administrator templates, and a saved version is applied to selected agents
-- Agents authenticate with tokens (with an expiry, bound to the host's machine ID, renewed automatically) and connect over HTTPS with certificates from a private CA that the central creates automatically
+- Agents authenticate with tokens (with an expiry, bound to the agent instance that was initialized with them, renewed automatically) and connect over HTTPS with certificates from a private CA that the central creates automatically
 - Detections are grouped by type, OS user, executable and target, and handled with suppression conditions, acknowledgement and notifications (through your own SMTP server) with a minimum interval and repeat suppression
 - The same operations are available in the browser screens (Japanese / English) and in the CLI on the central host. Roles are administrator and viewer
 - The central host itself is monitored by the built-in agent
@@ -58,13 +58,13 @@ mimamori detects operations performed with the privileges of selected OS users o
 
     Stop them and check their state with `sudo mimamori central stop` / `sudo mimamori central status` and `sudo mimamori agent stop` / `sudo mimamori agent status` (under a supervisor, SIGTERM stops them).
 
-4. Use the CLI on the central host when needed (issue a CLI credential on the accounts screen).
+4. Use the CLI on the central host when needed. It is not tied to an account and has full authority; it is available to the OS user who can read the central's data directory.
 
     ```bash
     sudo ./mimamori ctl agents list
     ```
 
-    The CLI credential is typed at the terminal when the command runs (it is not echoed). When piping input, put it on the first line of standard input and any further input (a password or JSON) on the following lines. No environment variables are used.
+    No credential or environment variable is needed: the CLI reads the central's configuration and data directory. Start the program with its path (an absolute path or `./mimamori`).
 
 The setup guide screen explains the auditd checks and settings required on each host.
 

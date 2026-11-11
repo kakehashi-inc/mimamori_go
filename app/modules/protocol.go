@@ -5,8 +5,10 @@ package modules
 // certificates; nothing here can make the agent run a command or load an
 // arbitrary auditd rule.
 
-// HeaderMachineID carries the host's machine id on authenticated requests.
-const HeaderMachineID = "X-Mimamori-Machine-Id"
+// HeaderInstanceID carries the agent's instance ID (created at agent init and
+// kept in its data directory) on authenticated requests; the token is bound
+// to it.
+const HeaderInstanceID = "X-Mimamori-Instance-Id"
 
 // ApplyResult is the outcome of applying a rule on an agent.
 type ApplyResult struct {
@@ -82,6 +84,6 @@ type CAResponse struct {
 
 // Agent transport errors that the agent treats specially.
 var (
-	// ErrUnauthorized means the token or machine binding was rejected.
+	// ErrUnauthorized means the token or its binding was rejected.
 	ErrUnauthorized = &HTTPError{Status: 401, Body: `{"error":"unauthorized"}`}
 )

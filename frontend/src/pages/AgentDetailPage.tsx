@@ -219,7 +219,6 @@ function ApplyResultView({ apply }: { apply: ApplyResult }) {
 
 function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus | null }) {
     const { t } = useTranslation();
-    const services = host.services ?? [];
     const dirs = host.directories ?? [];
     const cas = host.trusted_cas ?? [];
 
@@ -251,37 +250,6 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
                 </Card>
                 {auditd && <AuditdView auditd={auditd} />}
             </div>
-
-            <Card title={t('agentDetail.services')}>
-                {services.length === 0 ? (
-                    <EmptyState icon='apps'>{t('common.empty')}</EmptyState>
-                ) : (
-                    <Table>
-                        <THead>
-                            <Th>{t('agentDetail.software')}</Th>
-                            <Th>{t('agentDetail.process')}</Th>
-                            <Th>{t('agentDetail.users')}</Th>
-                            <Th className='text-right'>{t('agentDetail.processes')}</Th>
-                        </THead>
-                        <TBody>
-                            {services.map((s, i) => (
-                                <Tr key={i}>
-                                    <Td className='font-medium'>{s.software}</Td>
-                                    <Td className='font-mono text-xs'>{s.process}</Td>
-                                    <Td>
-                                        <div className='flex flex-wrap gap-1'>
-                                            {(s.users ?? []).map(u => (
-                                                <Badge key={u}>{u}</Badge>
-                                            ))}
-                                        </div>
-                                    </Td>
-                                    <Td className='text-right'>{s.processes}</Td>
-                                </Tr>
-                            ))}
-                        </TBody>
-                    </Table>
-                )}
-            </Card>
 
             <Card title={t('agentDetail.directories')}>
                 {host.directories_truncated && (
@@ -343,7 +311,6 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
 
 function AuditdView({ auditd }: { auditd: AuditdStatus }) {
     const { t } = useTranslation();
-    const affected = auditd.affected_processes ?? [];
     const halts = auditd.halt_actions ?? [];
     return (
         <Card title={t('agentDetail.auditd')}>
@@ -375,33 +342,6 @@ function AuditdView({ auditd }: { auditd: AuditdStatus }) {
                                 <li key={h}>{h}</li>
                             ))}
                         </ul>
-                    </Alert>
-                )}
-                {affected.length > 0 && (
-                    <Alert tone='warning' title={t('auditd.affectedTitle')}>
-                        <p>{t('auditd.affectedNote')}</p>
-                        <div className='mt-2 overflow-x-auto'>
-                            <table className='min-w-full text-xs'>
-                                <thead>
-                                    <tr className='text-left text-muted'>
-                                        <th className='pr-3 font-medium'>PID</th>
-                                        <th className='pr-3 font-medium'>{t('auditd.comm')}</th>
-                                        <th className='pr-3 font-medium'>{t('auditd.user')}</th>
-                                        <th className='font-medium'>{t('auditd.startedAt')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {affected.map(p => (
-                                        <tr key={p.pid} className='text-ink'>
-                                            <td className='pr-3 font-mono'>{p.pid}</td>
-                                            <td className='pr-3 font-mono'>{p.comm}</td>
-                                            <td className='pr-3'>{p.user}</td>
-                                            <td className='whitespace-nowrap'>{formatDateTime(p.started_at)}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
                     </Alert>
                 )}
             </div>

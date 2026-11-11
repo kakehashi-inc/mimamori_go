@@ -307,7 +307,3 @@ export function setAccountDisabled(id: number, disabled: boolean): Promise<Accou
 export function deleteAccount(id: number): Promise<unknown> {
     return send('DELETE', `/accounts/${id}`);
 }
-
-export function issueCliCredential(id: number): Promise<{ value: string }> {
-    return send<{ value: string }>('POST', `/accounts/${id}/cli-credential`);
-}

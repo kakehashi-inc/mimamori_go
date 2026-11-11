@@ -361,7 +361,4 @@ func TestLockHolder(t *testing.T) {
 	if _, running, _ := LockHolder(path); running {
 		t.Fatal("released lock still reported as running")
 	}
-	if st := ProcessStartTime(os.Getpid()); st.IsZero() || time.Since(st) < 0 {
-		t.Fatalf("start time %v", st)
-	}
 }

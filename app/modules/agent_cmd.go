@@ -16,12 +16,12 @@ import (
 
 // RemoteTransport talks to the central over HTTPS with the agent's token.
 type RemoteTransport struct {
-	client    *HTTPSClient
-	machineID string
+	client     *HTTPSClient
+	instanceID string
 }
 
 // NewRemoteTransport prepares the HTTPS client for an agent configuration.
-func NewRemoteTransport(cfg *AgentConfig, machineID string) (*RemoteTransport, error) {
+func NewRemoteTransport(cfg *AgentConfig, instanceID string) (*RemoteTransport, error) {
 	tlsCfg, err := AgentTLSConfig(cfg.CAPEMs)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func NewRemoteTransport(cfg *AgentConfig, machineID string) (*RemoteTransport, e
 	if err != nil {
 		return nil, err
 	}
-	t := &RemoteTransport{client: c, machineID: machineID}
+	t := &RemoteTransport{client: c, instanceID: instanceID}
 	t.SetToken(cfg.Token)
 	return t, nil
 }
@@ -38,7 +38,7 @@ func NewRemoteTransport(cfg *AgentConfig, machineID string) (*RemoteTransport, e
 // SetToken changes the token used for authentication.
 func (t *RemoteTransport) SetToken(token string) {
 	t.client.Headers["Authorization"] = "Bearer " + token
-	t.client.Headers[HeaderMachineID] = t.machineID
+	t.client.Headers[HeaderInstanceID] = t.instanceID
 }
 
 // SetCAs replaces the trusted CAs.
@@ -101,8 +101,19 @@ func AgentInit(o AgentInitOptions) error {
 		removeCreated(created)
 		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
 	}
-	// 4. connect, receive the CA, authenticate (binds the token to this machine)
-	cfg, resp, err := initConnect(o, token)
+	// The agent ID identifies this installation; the token is bound to it.
+	// It is created once and kept on re-initialization.
+	idPath := filepath.Join(o.DataDir, AgentIDFileName)
+	if _, err := os.Stat(idPath); errors.Is(err, os.ErrNotExist) {
+		created = append(created, idPath)
+	}
+	agentID, err := EnsureAgentID(o.DataDir)
+	if err != nil {
+		removeCreated(created)
+		return NewExitErrorf(ExitFileIO, "agent ID: %v", err)
+	}
+	// 4. connect, receive the CA, authenticate (binds the token to this agent)
+	cfg, resp, err := initConnect(o, token, agentID)
 	if err != nil {
 		removeCreated(created)
 		return NewExitError(ExitExec, err.Error())
@@ -128,13 +139,15 @@ func AgentInit(o AgentInitOptions) error {
 	return nil
 }
 
-func removeCreated(dirs []string) {
-	for i := len(dirs) - 1; i >= 0; i-- {
-		_ = os.Remove(dirs[i]) // only removes empty directories
+// removeCreated removes what this run created, newest first (a directory
+// only when it is empty).
+func removeCreated(paths []string) {
+	for i := len(paths) - 1; i >= 0; i-- {
+		_ = os.Remove(paths[i])
 	}
 }
 
-func initConnect(o AgentInitOptions, token string) (*AgentConfig, *SyncResponse, error) {
+func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *SyncResponse, error) {
 	// Receive the CA without verification first (trust on first use, or the
 	// fingerprint given by the administrator), then verify the server
 	// certificate against it.
@@ -163,11 +176,7 @@ func initConnect(o AgentInitOptions, token string) (*AgentConfig, *SyncResponse,
 	}
 	cfg := &AgentConfig{ServerURL: o.ServerURL, Token: token, InitializedAt: time.Now().Unix()}
 	cfg.MergeCAs(ca.CAPEMs, time.Now())
-	machineID, err := ReadMachineID()
-	if err != nil {
-		return nil, nil, err
-	}
-	tr, err := NewRemoteTransport(cfg, machineID)
+	tr, err := NewRemoteTransport(cfg, agentID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -175,7 +184,7 @@ func initConnect(o AgentInitOptions, token string) (*AgentConfig, *SyncResponse,
 	if err != nil {
 		var he *HTTPError
 		if errors.As(err, &he) && he.Status == 401 {
-			return nil, nil, errors.New("authentication failed: the token is invalid, expired, revoked or bound to another machine")
+			return nil, nil, errors.New("authentication failed: the token is invalid, expired, revoked or bound to another agent instance")
 		}
 		var ue x509.UnknownAuthorityError
 		if errors.As(err, &ue) || IsCertificateError(err) {
@@ -216,11 +225,11 @@ func AgentStart(configPath, dataDir string) error {
 		return NewExitErrorf(ExitConfig, "local database: %v", err)
 	}
 	defer db.Close()
-	machineID, err := ReadMachineID()
+	agentID, err := ReadAgentID(dataDir)
 	if err != nil {
-		return NewExitError(ExitConfig, err.Error())
+		return NewExitErrorf(ExitConfig, "agent ID: %v (run agent init)", err)
 	}
-	tr, err := NewRemoteTransport(cfg, machineID)
+	tr, err := NewRemoteTransport(cfg, agentID)
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}

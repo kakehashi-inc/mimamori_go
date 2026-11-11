@@ -70,7 +70,6 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 	h("POST /accounts/{id}/disable", requireAdmin(c.handleAccountDisable))
 	h("POST /accounts/{id}/enable", requireAdmin(c.handleAccountEnable))
 	h("DELETE /accounts/{id}", requireAdmin(c.handleDeleteAccount))
-	h("POST /accounts/{id}/cli-credential", requireAdmin(c.handleIssueCLICredential))
 }
 
 func cutSpace(s string) (string, string, bool) {

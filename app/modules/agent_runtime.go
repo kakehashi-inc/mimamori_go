@@ -221,7 +221,7 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	var he *HTTPError
 	switch {
 	case errors.As(err, &he) && he.Status == 401:
-		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another machine). Re-initialize the agent with a valid token", op)
+		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another agent instance). Re-initialize the agent with a valid token", op)
 	case IsCertificateError(err):
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
 	default:
@@ -390,22 +390,14 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The directory structure is reported only for the scan origin of the
 	// applied rule; there is no default origin.
-	in := HostInfoInput{LastApply: rt.lastApply, MonitoredUIDs: map[int]bool{}}
+	in := HostInfoInput{LastApply: rt.lastApply}
 	if rt.rule != nil {
 		in.Rule = &RuleRef{ID: rt.rule.ID, Version: rt.rule.Version}
-		if rt.rule.Content.Writable.Base != "" {
-			in.ScanBase = rt.rule.Content.Writable.Base
-		}
-		for _, u := range ResolveRule(&rt.rule.Content).UIDs {
-			in.MonitoredUIDs[u] = true
-		}
+		in.ScanBase = rt.rule.Content.Writable.Base
 	}
 	if rt.Config != nil {
 		in.TrustedCAPEMs = rt.Config.CAPEMs
 	}
-	var st AuditApplyState
-	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateAuditApply)), &st)
-	in.NeverRemovedAt = st.NeverRemovedAt
 	hi := CollectHostInfo(in)
 
 	dropped, _ := strconv.Atoi(models.GetLocalState(rt.DB, stateDroppedPending))

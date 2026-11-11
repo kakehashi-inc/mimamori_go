@@ -31,16 +31,6 @@ CREATE TABLE sessions (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE cli_credentials (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id   INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
-    hash         TEXT    NOT NULL UNIQUE,
-    created_at   INTEGER NOT NULL,
-    last_used_at INTEGER NOT NULL DEFAULT 0
-);
--- +goose StatementEnd
-
--- +goose StatementBegin
 CREATE TABLE rules (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT    NOT NULL UNIQUE,
@@ -86,7 +76,7 @@ CREATE TABLE tokens (
     pending_hash       TEXT    NOT NULL DEFAULT '',
     pending_expires_at INTEGER NOT NULL DEFAULT 0,
     renew_counter      INTEGER NOT NULL DEFAULT 0,
-    machine_id         TEXT    NOT NULL DEFAULT '',
+    instance_id         TEXT    NOT NULL DEFAULT '',
     bound_at           INTEGER NOT NULL DEFAULT 0,
     used_at            INTEGER NOT NULL DEFAULT 0,
     last_seen_at       INTEGER NOT NULL DEFAULT 0,
@@ -231,9 +221,6 @@ DROP TABLE rule_versions;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE rules;
--- +goose StatementEnd
--- +goose StatementBegin
-DROP TABLE cli_credentials;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE sessions;

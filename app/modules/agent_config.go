@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -93,4 +95,34 @@ func CAFingerprintsOf(pems []string) []string {
 		}
 	}
 	return out
+}
+
+// EnsureAgentID returns the agent ID stored in the data directory, creating
+// a random one when there is none. The central binds the token to this ID,
+// so another installation cannot use the same token.
+func EnsureAgentID(dataDir string) (string, error) {
+	if id, err := ReadAgentID(dataDir); err == nil {
+		return id, nil
+	}
+	id, err := RandomHex(16)
+	if err != nil {
+		return "", err
+	}
+	if err := WriteFileAtomic(filepath.Join(dataDir, AgentIDFileName), []byte(id+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// ReadAgentID reads the agent ID from the data directory.
+func ReadAgentID(dataDir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dataDir, AgentIDFileName))
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return "", fmt.Errorf("%s is empty", AgentIDFileName)
+	}
+	return id, nil
 }

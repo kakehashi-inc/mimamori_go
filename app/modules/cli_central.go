@@ -154,9 +154,8 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	_ = models.SetAccountDisabled(db, a.ID, false)
 	_ = models.DeleteAccountSessions(db, a.ID, "")
-	_ = models.DeleteCLICredentials(db, a.ID)
 	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Name, Detail: "administrator recovered on the central host"})
-	fmt.Printf("Password of %q reset; the account is enabled and its sessions and CLI credential were invalidated.\n", a.Name)
+	fmt.Printf("Password of %q reset; the account is enabled and its sessions were invalidated.\n", a.Name)
 	return nil
 }
 

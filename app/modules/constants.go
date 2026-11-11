@@ -22,8 +22,6 @@ const (
 	AuditRulesFile = "/etc/audit/rules.d/zz-mimamori.rules"
 	// AuditdConfFile is read (never written) to warn about halting actions.
 	AuditdConfFile = "/etc/audit/auditd.conf"
-	// MachineIDFile identifies the host a token is bound to.
-	MachineIDFile = "/etc/machine-id"
 )
 
 // --- Paths ---
@@ -32,14 +30,20 @@ const (
 	// Configuration files are placed next to the executable and data files
 	// in its data/ directory (which may be a symbolic link). The CLI has no
 	// configuration of its own: it reads the central's configuration.
-	CentralConfigFileName     = "central.json"
-	AgentConfigFileName       = "agent.json"
-	DataDirName               = "data"
-	CentralDBFileName         = "central.db"
-	AgentLocalDBFileName      = "agent.db"
-	BuiltinAgentLocalDBName   = "builtin-agent.db"
-	TargetDBDirName           = "targets"
-	CentralLockFileName       = "central.lock"
+	CentralConfigFileName   = "central.json"
+	AgentConfigFileName     = "agent.json"
+	DataDirName             = "data"
+	CentralDBFileName       = "central.db"
+	AgentLocalDBFileName    = "agent.db"
+	BuiltinAgentLocalDBName = "builtin-agent.db"
+	TargetDBDirName         = "targets"
+	CentralLockFileName     = "central.lock"
+	// CLISecretFileName holds the secret the central creates at start for
+	// the management CLI; whoever can read the data directory can use it.
+	CLISecretFileName = "cli.secret"
+	// AgentIDFileName holds the ID the agent creates at initialization; the
+	// token is bound to it.
+	AgentIDFileName           = "agent-id"
 	AgentLockFileName         = "agent.lock"
 	CABundleFileName          = "ca.crt"
 	DefaultWebListen          = "0.0.0.0:8080"
@@ -66,10 +70,8 @@ const (
 // --- Secrets ---
 
 const (
-	// TokenPrefix marks agent tokens, CLIKeyPrefix marks CLI credentials and
-	// SessionPrefix marks browser session ids.
+	// TokenPrefix marks agent tokens and SessionPrefix marks browser session ids.
 	TokenPrefix   = "mmr_"
-	CLIKeyPrefix  = "mmc_"
 	SessionPrefix = "mms_"
 	// SecretRandomBytes is the number of random bytes in every secret value.
 	SecretRandomBytes = 32

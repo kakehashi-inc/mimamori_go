@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type core struct {
 	logger    *log.Logger
 	serverKey []byte
 	hostname  string
+	// cliSecret authenticates the management CLI (see writeCLISecret).
+	cliSecret string
 
 	targetsMu sync.Mutex
 	targets   map[int64]*sql.DB
@@ -133,6 +136,20 @@ func (c *core) ensureBuiltinAgent() (*models.Agent, error) {
 		return nil, err
 	}
 	return a, nil
+}
+
+// writeCLISecret creates a new secret for the management CLI at every start
+// and writes it into the data directory (readable by the running user only).
+func (c *core) writeCLISecret() error {
+	v, err := modules.RandomHex(32)
+	if err != nil {
+		return err
+	}
+	if err := modules.WriteFileAtomic(filepath.Join(c.dataDir, modules.CLISecretFileName), []byte(v+"\n"), 0o600); err != nil {
+		return err
+	}
+	c.cliSecret = v
+	return nil
 }
 
 // ensureServerKey loads or creates the secret used to derive renewed tokens.

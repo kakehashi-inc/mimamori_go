@@ -10,10 +10,10 @@
 | --- | --- | --- | --- | --- |
 | ブラウザ用（既定 `0.0.0.0:8080`） | HTTP | `/api/v1/*` | ブラウザ画面 | ログインセッション（Cookie `mimamori_session`） |
 | ブラウザ用 | HTTP | `/*` | ブラウザ | なし（埋め込み SPA） |
-| エージェントおよび管理用（既定 `0.0.0.0:8443`） | HTTPS（独自CA） | `/agent/v1/*` | エージェント | トークン（`Authorization: Bearer mmr_...`）とマシンID |
-| エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がループバックで、CLI用の認証情報（`Authorization: Bearer mmc_...`） |
+| エージェントおよび管理用（既定 `0.0.0.0:8443`） | HTTPS（独自CA） | `/agent/v1/*` | エージェント | トークン（`Authorization: Bearer mmr_...`）とインスタンスID |
+| エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がループバックで、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
-- `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は管理者だけが使えます。
+- `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
 - ループバック以外からの `/admin/v1/*` は 404 を返します。接続元の判定には TCP の接続元アドレスだけを使います。
 - 1 接続で 1 リクエストを処理し、応答は `Connection: close` です。
 
@@ -93,7 +93,6 @@ interface AuditdStatus {
   running: boolean; enabled: number; pid: number; lost: number; backlog: number;
   backlog_limit: number; backlog_wait_time: number; failure: number;
   never_rule: boolean;                                  // 監査を抑制するルールの有無
-  affected_processes: { pid: number; comm: string; user: string; started_at: string }[];
   halt_actions: string[];                               // ホストを停止させる設定（警告用）
 }
 interface AgentDetail extends AgentSummary {
@@ -106,7 +105,6 @@ interface HostInfo {
   collected_at: string; hostname: string; os_name: string; os_version: string; kernel: string;
   agent_version: string;
   auditd: AuditdStatus;
-  services: { software: string; process: string; users: string[]; processes: number }[];
   scan_base: string;
   directories: { path: string; owner: string; group: string; mode: string; depth: number }[];
   directories_truncated: boolean;
@@ -132,7 +130,7 @@ type TokenStatus = 'unused' | 'active' | 'expired' | 'revoked';
 interface Token {
   id: number; name: string; status: TokenStatus;
   expires_at: string; created_at: string; created_by: string;
-  last_seen_at: string | null; machine_id: string; bound_at: string | null;
+  last_seen_at: string | null; instance_id: string; bound_at: string | null;
   reissued_at: string | null; renewed_at: string | null;
   pending_renewal: boolean;          // 自動更新の新しい値を渡し済みで、まだ使われていない
   expiring_unconnected: boolean;     // 期限が近いのにエージェントが接続していない
@@ -304,12 +302,11 @@ interface HistoryItem {
 | POST | `/accounts/{id}/disable` | A | - | `Account` |
 | POST | `/accounts/{id}/enable` | A | - | `Account` |
 | DELETE | `/accounts/{id}` | A | - | `{}` |
-| POST | `/accounts/{id}/cli-credential` | A | - | `{"value":"mmc_..."}`（管理者のアカウントのみ。以前の値は無効） |
 
 ```ts
 interface Account {
   id: number; name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja'; disabled: boolean;
-  locked_until: string | null; created_at: string; has_cli_credential: boolean;
+  locked_until: string | null; created_at: string;
 }
 ```
 
@@ -338,5 +335,5 @@ interface Guide {
 | POST | `/agent/v1/sync` | トークン | `SyncRequest` | `SyncResponse` |
 | POST | `/agent/v1/report` | トークン | `ReportRequest` | `{}` |
 
-- すべての認証付きの要求に `X-Mimamori-Machine-Id`（`/etc/machine-id` の値）を付けます。トークンが無い、無効、期限切れ、失効、マシンIDの不一致の場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
+- すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってデータディレクトリに保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致の場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
 - 詳細は [システム仕様.md](システム仕様.md) の「エージェントとセントラルの通信」を参照してください。

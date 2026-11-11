@@ -38,6 +38,9 @@ func main() {
 	// Files created by this program (databases, configuration, keys) must not
 	// be readable by other users.
 	syscall.Umask(0o077)
+	// Times are shown in the system time zone (/etc/localtime); environment
+	// variables such as TZ are not used.
+	modules.UseSystemLocation()
 
 	// Wire binary-embedded assets into the modules package.
 	modules.MigrationsFS = migrationsFS
@@ -56,6 +59,10 @@ func main() {
 		},
 	)
 	modules.SetDataDir(cli.DataDir)
+	if err := modules.CheckExePath(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(modules.ExitConfig)
+	}
 
 	err := ctx.Run(&cli.Ctl)
 	if err != nil {

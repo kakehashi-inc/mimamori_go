@@ -125,7 +125,7 @@ func ResetLoginFailures(db Execer, id int64) error {
 	return err
 }
 
-// DeleteAccount removes an account (sessions and CLI credentials cascade).
+// DeleteAccount removes an account (sessions cascade).
 func DeleteAccount(db Execer, id int64) error {
 	return execOne(db, `DELETE FROM accounts WHERE id = ?`, id)
 }

@@ -22,11 +22,7 @@ import (
 // use the management API over the loopback address.
 type CtlCmd struct {
 	Config string `help:"Central configuration file (the address of the management API is taken from it)" default:"${central_config}" type:"path"`
-
-	// key is the CLI credential. It is read before anything else, so the
-	// credential is always the first line when input is piped.
-	key  string
-	JSON bool `help:"Print raw JSON"`
+	JSON   bool   `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
 	Tokens       CtlTokensCmd       `cmd:"" help:"Tokens"`
@@ -45,25 +41,11 @@ type ctlClient struct {
 	json bool
 }
 
-// AfterApply runs once a ctl command was selected, before the command reads
-// any other input: it reads the CLI credential from the terminal (without
-// echo) or the first line of standard input, never from an argument or the
-// environment.
-func (c *CtlCmd) AfterApply() error {
-	key, err := ReadSecret("CLI credential: ")
-	if err != nil {
-		return NewExitErrorf(ExitAuth, "CLI credential: %v (issue one on the accounts screen)", err)
-	}
-	c.key = key
-	return nil
-}
-
 func (c *CtlCmd) client() (*ctlClient, error) {
 	// The management API is the central's own listener: its address comes
-	// from the central configuration and its CA from the central's data
-	// directory. The credential is read from the terminal (without echo) or
-	// the first line of standard input, never from an argument or the
-	// environment.
+	// from the central configuration, its CA and the CLI secret from the
+	// central's data directory. Whoever can read that directory can use the
+	// CLI; it is not tied to an account.
 	cc, _, err := LoadCentralConfig(c.Config)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
@@ -85,7 +67,11 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	hc.Headers["Authorization"] = "Bearer " + c.key
+	secret, err := os.ReadFile(filepath.Join(DataDir(), CLISecretFileName))
+	if err != nil {
+		return nil, NewExitErrorf(ExitAuth, "CLI secret of the central: %v (is the central running?)", err)
+	}
+	hc.Headers["Authorization"] = "Bearer " + strings.TrimSpace(string(secret))
 	return &ctlClient{http: hc, json: c.JSON}, nil
 }
 
@@ -288,7 +274,7 @@ type CtlTokensCmd struct {
 	List    CtlTokensListCmd    `cmd:"" help:"List tokens"`
 	Show    CtlTokensShowCmd    `cmd:"" help:"Show a token"`
 	Reissue CtlTokensReissueCmd `cmd:"" help:"Reissue a token with the same name (previous values stop working)"`
-	Unbind  CtlTokensIDCmd      `cmd:"" help:"Remove the machine binding"`
+	Unbind  CtlTokensIDCmd      `cmd:"" help:"Remove the binding to an agent instance"`
 	Revoke  CtlTokensRevokeCmd  `cmd:"" help:"Revoke a token immediately"`
 }
 type CtlTokensIssueCmd struct {
@@ -347,7 +333,7 @@ func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {
 	return nil
 }
 func (c *CtlTokensListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/tokens", nil, "id", "name", "status", "expires_at", "last_seen_at", "machine_id", "pending_renewal", "expiring_unconnected")
+	return runCtl(p, "GET", "/tokens", nil, "id", "name", "status", "expires_at", "last_seen_at", "instance_id", "pending_renewal", "expiring_unconnected")
 }
 func (c *CtlTokensShowCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "GET", fmt.Sprintf("/tokens/%d", c.ID), nil)
@@ -530,7 +516,7 @@ func (c *CtlRulesEditCmd) Run(p *CtlCmd) error {
 	if err != nil {
 		return NewExitError(ExitExec, err.Error())
 	}
-	proc, err := os.StartProcess(path, []string{path, f.Name()}, &os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}})
+	proc, err := os.StartProcess(path, []string{path, f.Name()}, &os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}, Env: []string{}})
 	if err != nil {
 		return NewExitError(ExitExec, err.Error())
 	}
@@ -762,14 +748,13 @@ func (c *CtlSuppressionsDeleteCmd) Run(p *CtlCmd) error {
 // --- accounts ---
 
 type CtlAccountsCmd struct {
-	List          CtlAccountsListCmd     `cmd:"" help:"List accounts"`
-	Create        CtlAccountsCreateCmd   `cmd:"" help:"Create an account (password from standard input)"`
-	Role          CtlAccountsRoleCmd     `cmd:"" help:"Change the role"`
-	Password      CtlAccountsPasswordCmd `cmd:"" help:"Reset the password (from standard input)"`
-	Disable       CtlAccountsIDCmd       `cmd:"" help:"Disable an account"`
-	Enable        CtlAccountsEnableCmd   `cmd:"" help:"Enable an account"`
-	Delete        CtlAccountsDeleteCmd   `cmd:"" help:"Delete an account"`
-	CLICredential CtlAccountsCredCmd     `cmd:"" name:"cli-credential" help:"Issue a CLI credential for an administrator (shown once)"`
+	List     CtlAccountsListCmd     `cmd:"" help:"List accounts"`
+	Create   CtlAccountsCreateCmd   `cmd:"" help:"Create an account (password from standard input)"`
+	Role     CtlAccountsRoleCmd     `cmd:"" help:"Change the role"`
+	Password CtlAccountsPasswordCmd `cmd:"" help:"Reset the password (from standard input)"`
+	Disable  CtlAccountsIDCmd       `cmd:"" help:"Disable an account"`
+	Enable   CtlAccountsEnableCmd   `cmd:"" help:"Enable an account"`
+	Delete   CtlAccountsDeleteCmd   `cmd:"" help:"Delete an account"`
 }
 type CtlAccountsListCmd struct{}
 type CtlAccountsCreateCmd struct {
@@ -793,12 +778,9 @@ type CtlAccountsEnableCmd struct {
 type CtlAccountsDeleteCmd struct {
 	ID int64 `arg:""`
 }
-type CtlAccountsCredCmd struct {
-	ID int64 `arg:""`
-}
 
 func (c *CtlAccountsListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/accounts", nil, "id", "name", "role", "language", "disabled", "locked_until", "has_cli_credential", "created_at")
+	return runCtl(p, "GET", "/accounts", nil, "id", "name", "role", "language", "disabled", "locked_until", "created_at")
 }
 func (c *CtlAccountsCreateCmd) Run(p *CtlCmd) error {
 	pw, err := readNewPassword()
@@ -825,9 +807,6 @@ func (c *CtlAccountsEnableCmd) Run(p *CtlCmd) error {
 }
 func (c *CtlAccountsDeleteCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "DELETE", fmt.Sprintf("/accounts/%d", c.ID), nil)
-}
-func (c *CtlAccountsCredCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "POST", fmt.Sprintf("/accounts/%d/cli-credential", c.ID), nil)
 }
 
 // --- certificates, history ---

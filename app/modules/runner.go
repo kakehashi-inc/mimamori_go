@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -20,17 +19,15 @@ type CommandResult struct {
 	ExitCode int
 }
 
-// commandSearchPath is used to find the audit tools, which live in sbin
-// directories that may be missing from PATH of a service.
+// commandSearchPath lists where external commands are looked for.
 var commandSearchPath = []string{"/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin"}
 
-// LookupCommand finds an executable by name in PATH or the sbin directories.
+// LookupCommand finds an executable by name in the fixed system directories
+// (the PATH environment variable is not used). A name containing "/" is used
+// as given.
 func LookupCommand(name string) (string, error) {
 	if strings.Contains(name, "/") {
 		return name, nil
-	}
-	if p, err := exec.LookPath(name); err == nil {
-		return p, nil
 	}
 	for _, dir := range commandSearchPath {
 		p := dir + "/" + name
@@ -69,11 +66,12 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 	}
 	defer errR.Close()
 
-	env := []string{"LC_ALL=C", "LANG=C", "TZ=UTC", "PATH=/usr/sbin:/sbin:/usr/bin:/bin"}
 	proc, err := os.StartProcess(path, append([]string{path}, args...), &os.ProcAttr{
 		Files: []*os.File{devnull, outW, errW},
-		Env:   env,
-		Sys:   &syscall.SysProcAttr{Setpgid: true},
+		// Empty environment: nothing is passed on, so the command uses the
+		// C locale and the system time zone.
+		Env: []string{},
+		Sys: &syscall.SysProcAttr{Setpgid: true},
 	})
 	outW.Close()
 	errW.Close()

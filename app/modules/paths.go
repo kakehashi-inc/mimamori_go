@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -19,12 +20,37 @@ func SetDataDir(dir string) {
 
 // ExeDir returns the directory of the running executable. Configuration
 // files are placed here.
+//
+// It is derived from the path the program was started with (os.Args[0]),
+// following symbolic links, without reading /proc and without the PATH
+// environment variable; the program is therefore started with a path (an
+// absolute path, or for example ./mimamori). CheckExePath reports when that
+// is not the case.
 func ExeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
+	return filepath.Dir(exePath())
+}
+
+func exePath() string {
+	p := os.Args[0]
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
 	}
-	return filepath.Dir(exe)
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return p
+}
+
+// CheckExePath fails when the program was started by name only (found
+// through PATH), because its directory cannot be determined then.
+func CheckExePath() error {
+	if !strings.Contains(os.Args[0], "/") {
+		return fmt.Errorf("start %s with its path (for example /opt/mimamori/%s or ./%s): its directory holds the configuration and data", AppName, AppName, AppName)
+	}
+	if _, err := os.Stat(exePath()); err != nil {
+		return fmt.Errorf("cannot locate the executable %s: %w", os.Args[0], err)
+	}
+	return nil
 }
 
 // DataDir returns the data directory: the --data-dir flag, otherwise data/

@@ -44,9 +44,6 @@ func printRunning(name, lockPath string) (bool, error) {
 	}
 	fmt.Printf("%-16s running\n", name+":")
 	fmt.Printf("%-16s %d\n", "pid:", pid)
-	if st := ProcessStartTime(pid); !st.IsZero() {
-		fmt.Printf("%-16s %s (uptime %s)\n", "started:", st.Local().Format("2006-01-02 15:04:05"), FormatUptime(time.Since(st)))
-	}
 	return true, nil
 }
 

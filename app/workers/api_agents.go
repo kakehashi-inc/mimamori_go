@@ -77,8 +77,7 @@ type hostInfoJSON struct {
 	OSVersion            string                  `json:"os_version"`
 	Kernel               string                  `json:"kernel"`
 	AgentVersion         string                  `json:"agent_version"`
-	Auditd               auditdJSON              `json:"auditd"`
-	Services             []modules.ServiceInfo   `json:"services"`
+	Auditd               modules.AuditdStatus    `json:"auditd"`
 	ScanBase             string                  `json:"scan_base"`
 	Directories          []modules.DirectoryInfo `json:"directories"`
 	DirectoriesTruncated bool                    `json:"directories_truncated"`
@@ -92,25 +91,9 @@ type trustedCAJSON struct {
 	NotAfter    *string `json:"not_after"`
 }
 
-type affectedJSON struct {
-	PID       int     `json:"pid"`
-	Comm      string  `json:"comm"`
-	User      string  `json:"user"`
-	StartedAt *string `json:"started_at"`
-}
-
-type auditdJSON struct {
-	modules.AuditdStatus
-	AffectedProcesses []affectedJSON `json:"affected_processes"`
-	HaltActions       []string       `json:"halt_actions"`
-}
-
-func auditdOut(a modules.AuditdStatus) auditdJSON {
-	out := auditdJSON{AuditdStatus: a, AffectedProcesses: []affectedJSON{}, HaltActions: nonNil(a.HaltActions)}
-	for _, p := range a.AffectedProcesses {
-		out.AffectedProcesses = append(out.AffectedProcesses, affectedJSON{PID: p.PID, Comm: p.Comm, User: p.User, StartedAt: ts(p.StartedAt)})
-	}
-	return out
+func auditdOut(a modules.AuditdStatus) modules.AuditdStatus {
+	a.HaltActions = nonNil(a.HaltActions)
+	return a
 }
 
 func applyOut(ap *modules.ApplyResult) applyJSON {
@@ -178,9 +161,6 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		var st modules.AuditdStatus
 		if json.Unmarshal([]byte(a.AuditdJSON), &st) == nil {
 			s.Auditd = &st
-			if st.AffectedProcesses == nil {
-				st.AffectedProcesses = []modules.AffectedProcess{}
-			}
 			if st.HaltActions == nil {
 				st.HaltActions = []string{}
 			}
@@ -264,7 +244,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if hi != nil {
 		hj := &hostInfoJSON{CollectedAt: ts(hi.CollectedAt), Hostname: hi.Hostname, OSName: hi.OSName, OSVersion: hi.OSVersion,
-			Kernel: hi.Kernel, AgentVersion: hi.AgentVersion, Auditd: auditdOut(hi.Auditd), Services: nonNil(hi.Services),
+			Kernel: hi.Kernel, AgentVersion: hi.AgentVersion, Auditd: auditdOut(hi.Auditd),
 			ScanBase: hi.ScanBase, Directories: nonNil(hi.Directories), DirectoriesTruncated: hi.DirectoriesTruncated,
 			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}}
 		for _, t := range hi.TrustedCAs {
@@ -285,9 +265,9 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// suggestions proposes rule additions from the reported host information:
-// service users not in the rule, Laravel-like writable directories and
-// configuration directories of running services.
+// suggestions proposes allowed paths for the rule from the reported
+// directory structure (Laravel-like writable directories and upload, cache
+// and log directories not yet covered).
 func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJSON {
 	var content *modules.RuleContent
 	if a.AssignedRuleID.Valid {
@@ -307,18 +287,6 @@ func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJS
 		}
 		seen[k] = true
 		out = append(out, suggestionJSON{Kind: kind, Value: value, Reason: reason})
-	}
-	users := map[string]bool{}
-	for _, u := range content.Users {
-		users[u.Value] = true
-	}
-	for _, s := range hi.Services {
-		for _, u := range s.Users {
-			if u == "root" || users[u] {
-				continue
-			}
-			add("user", u, "runs "+s.Process+" ("+s.Software+")")
-		}
 	}
 	allowed := map[string]bool{}
 	for _, p := range content.Writable.AllowedPaths {
@@ -349,21 +317,6 @@ func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJS
 			add("allowed_path", base, "directory "+d.Path+" owned by "+d.Owner)
 		}
 	}
-	dirs := map[string]bool{}
-	for _, d := range content.Read.Dirs {
-		dirs[d.Value] = true
-	}
-	confDirs := map[string][]string{
-		"apache": {"/etc/httpd", "/etc/apache2"}, "nginx": {"/etc/nginx"},
-		"php-fpm": {"/etc/php-fpm.d", "/etc/php", "/etc/opt/remi"},
-	}
-	for _, s := range hi.Services {
-		for _, d := range confDirs[s.Software] {
-			if !dirs[d] {
-				add("read_dir", d, "configuration of "+s.Software+" (added as ignore-if-missing)")
-			}
-		}
-	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
 	return out
 }
@@ -378,7 +331,7 @@ type tokenJSON struct {
 	CreatedAt           *string `json:"created_at"`
 	CreatedBy           string  `json:"created_by"`
 	LastSeenAt          *string `json:"last_seen_at"`
-	MachineID           string  `json:"machine_id"`
+	InstanceID          string  `json:"instance_id"`
 	BoundAt             *string `json:"bound_at"`
 	ReissuedAt          *string `json:"reissued_at"`
 	RenewedAt           *string `json:"renewed_at"`
@@ -390,7 +343,7 @@ type tokenJSON struct {
 func (c *core) tokenOut(t *models.Token) tokenJSON {
 	now := time.Now().Unix()
 	out := tokenJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
-		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), MachineID: t.MachineID, BoundAt: ts(t.BoundAt),
+		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
 	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
 		near := t.ExpiresAt-now < int64(c.cfg.TokenRenewBeforeDays)*86400
@@ -561,13 +514,13 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 	if t == nil {
 		return
 	}
-	prev := t.MachineID
-	t.MachineID, t.BoundAt = "", 0
+	prev := t.InstanceID
+	t.InstanceID, t.BoundAt = "", 0
 	if err := models.SaveToken(c.db, t); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, "machine binding removed (was "+prev+")")
+	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, "binding to the agent instance removed (was "+prev+")")
 	writeJSON(w, http.StatusOK, c.tokenOut(t))
 }
 

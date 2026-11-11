@@ -129,8 +129,11 @@ func (c *CentralConfig) applyDefaults() {
 func (c *CentralConfig) Validate() error {
 	var errs []string
 	for name, addr := range map[string]string{"web_listen": c.WebListen, "agent_listen": c.AgentListen} {
-		if _, _, err := net.SplitHostPort(addr); err != nil {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+		} else if host != "" && net.ParseIP(host) == nil {
+			errs = append(errs, fmt.Sprintf("%s: the address must be an IP address", name))
 		}
 	}
 	if c.WebListen == c.AgentListen {

@@ -53,11 +53,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := models.InsertAccount(db, admin); err != nil {
 		t.Fatal(err)
 	}
-	key, _ := modules.GenerateSecret(modules.CLIKeyPrefix)
-	if err := models.ReplaceCLICredential(db, admin.ID, modules.HashSecret(key)); err != nil {
+	if err := c.writeCLISecret(); err != nil {
 		t.Fatal(err)
 	}
-	return &testEnv{t: t, c: c, agent: c.agentHandler(), web: c.webHandler(), cliKey: key}
+	return &testEnv{t: t, c: c, agent: c.agentHandler(), web: c.webHandler(), cliKey: c.cliSecret}
 }
 
 func (e *testEnv) do(h http.Handler, method, path string, body any, hdr map[string]string, remote string) *httptest.ResponseRecorder {
@@ -93,7 +92,7 @@ func (e *testEnv) admin(method, path string, body any) map[string]any {
 }
 
 func (e *testEnv) agentCall(path, token, machine string, body any) *httptest.ResponseRecorder {
-	return e.do(e.agent, "POST", "/agent/v1/"+path, body, map[string]string{"Authorization": "Bearer " + token, modules.HeaderMachineID: machine}, "192.0.2.10:4000")
+	return e.do(e.agent, "POST", "/agent/v1/"+path, body, map[string]string{"Authorization": "Bearer " + token, modules.HeaderInstanceID: machine}, "192.0.2.10:4000")
 }
 
 func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
@@ -150,7 +149,7 @@ func TestAgentFlow(t *testing.T) {
 		t.Fatalf("other machine: %d %s", rec.Code, rec.Body.String())
 	}
 	items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", 10, 0)
-	if len(items) == 0 || items[0].Action != "machine id mismatch" {
+	if len(items) == 0 || items[0].Action != "instance id mismatch" {
 		t.Fatalf("rejected connection not recorded: %+v", items)
 	}
 
@@ -282,7 +281,7 @@ func TestBrowserPermissions(t *testing.T) {
 	if rec := e.do(e.web, "GET", "/api/v1/agents", nil, hdr(viewCk, false), "x:1"); rec.Code != 200 {
 		t.Fatalf("viewer list agents: %d", rec.Code)
 	}
-	for _, p := range []string{"/api/v1/tokens", "/api/v1/rules", "/api/v1/suppressions", "/api/v1/accounts/1/cli-credential"} {
+	for _, p := range []string{"/api/v1/tokens", "/api/v1/rules", "/api/v1/suppressions", "/api/v1/accounts"} {
 		if rec := e.do(e.web, "POST", p, map[string]string{}, hdr(viewCk, true), "x:1"); rec.Code != 403 {
 			t.Fatalf("viewer POST %s: %d", p, rec.Code)
 		}

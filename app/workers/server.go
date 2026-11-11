@@ -53,6 +53,9 @@ func startCentral(configPath string) error {
 	if err := c.ensureServerKey(); err != nil {
 		return err
 	}
+	if err := c.writeCLISecret(); err != nil {
+		return fmt.Errorf("CLI secret: %w", err)
+	}
 	builtin, err := c.ensureBuiltinAgent()
 	if err != nil {
 		return err

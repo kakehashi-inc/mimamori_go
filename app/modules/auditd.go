@@ -14,26 +14,16 @@ import (
 // AuditdStatus is the state of auditd as reported by "auditctl -s" plus the
 // suppression-rule check.
 type AuditdStatus struct {
-	Running           bool              `json:"running"`
-	Enabled           int               `json:"enabled"`
-	PID               int               `json:"pid"`
-	Lost              int64             `json:"lost"`
-	Backlog           int64             `json:"backlog"`
-	BacklogLimit      int64             `json:"backlog_limit"`
-	BacklogWaitTime   int64             `json:"backlog_wait_time"`
-	Failure           int               `json:"failure"`
-	NeverRule         bool              `json:"never_rule"`
-	AffectedProcesses []AffectedProcess `json:"affected_processes"`
-	HaltActions       []string          `json:"halt_actions"`
-}
-
-// AffectedProcess is a running process that started while the rule
-// suppressing all syscall auditing was in effect, so it is not audited.
-type AffectedProcess struct {
-	PID       int    `json:"pid"`
-	Comm      string `json:"comm"`
-	User      string `json:"user"`
-	StartedAt int64  `json:"started_at"`
+	Running         bool     `json:"running"`
+	Enabled         int      `json:"enabled"`
+	PID             int      `json:"pid"`
+	Lost            int64    `json:"lost"`
+	Backlog         int64    `json:"backlog"`
+	BacklogLimit    int64    `json:"backlog_limit"`
+	BacklogWaitTime int64    `json:"backlog_wait_time"`
+	Failure         int      `json:"failure"`
+	NeverRule       bool     `json:"never_rule"`
+	HaltActions     []string `json:"halt_actions"`
 }
 
 // neverRuleLine is how auditctl -l prints the rule that disables syscall
@@ -70,11 +60,8 @@ func ReadAuditdStatus() (*AuditdStatus, error) {
 			st.BacklogWaitTime = v
 		}
 	}
-	if st.PID > 0 {
-		if _, err := os.Stat(fmt.Sprintf("/proc/%d", st.PID)); err == nil {
-			st.Running = true
-		}
-	}
+	// auditctl reports pid 0 when no audit daemon is registered.
+	st.Running = st.PID > 0
 	return st, nil
 }
 

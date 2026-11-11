@@ -19,7 +19,7 @@ type Token struct {
 	PendingHash      string
 	PendingExpiresAt int64
 	RenewCounter     int
-	MachineID        string
+	InstanceID       string
 	BoundAt          int64
 	UsedAt           int64
 	LastSeenAt       int64
@@ -30,12 +30,12 @@ type Token struct {
 	CreatedBy        string
 }
 
-const tokenCols = `id, name, hash, expires_at, pending_hash, pending_expires_at, renew_counter, machine_id, bound_at, used_at, last_seen_at, revoked_at, reissued_at, renewed_at, created_at, created_by`
+const tokenCols = `id, name, hash, expires_at, pending_hash, pending_expires_at, renew_counter, instance_id, bound_at, used_at, last_seen_at, revoked_at, reissued_at, renewed_at, created_at, created_by`
 
 func scanToken(s rowScanner) (*Token, error) {
 	t := &Token{}
 	if err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.ExpiresAt, &t.PendingHash, &t.PendingExpiresAt, &t.RenewCounter,
-		&t.MachineID, &t.BoundAt, &t.UsedAt, &t.LastSeenAt, &t.RevokedAt, &t.ReissuedAt, &t.RenewedAt, &t.CreatedAt, &t.CreatedBy); err != nil {
+		&t.InstanceID, &t.BoundAt, &t.UsedAt, &t.LastSeenAt, &t.RevokedAt, &t.ReissuedAt, &t.RenewedAt, &t.CreatedAt, &t.CreatedBy); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -91,7 +91,7 @@ func ListTokens(db Execer) ([]*Token, error) {
 // SaveToken writes every mutable column of the token.
 func SaveToken(db Execer, t *Token) error {
 	return execOne(db, `UPDATE tokens SET hash = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renew_counter = ?,
-		machine_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?, revoked_at = ?, reissued_at = ?, renewed_at = ? WHERE id = ?`,
-		t.Hash, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.MachineID, t.BoundAt, t.UsedAt,
+		instance_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?, revoked_at = ?, reissued_at = ?, renewed_at = ? WHERE id = ?`,
+		t.Hash, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.InstanceID, t.BoundAt, t.UsedAt,
 		t.LastSeenAt, t.RevokedAt, t.ReissuedAt, t.RenewedAt, t.ID)
 }

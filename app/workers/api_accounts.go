@@ -23,14 +23,13 @@ var dummyPasswordHash = sync.OnceValue(func() string {
 })
 
 type accountJSON struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Role             string  `json:"role"`
-	Language         string  `json:"language"`
-	Disabled         bool    `json:"disabled"`
-	LockedUntil      *string `json:"locked_until"`
-	CreatedAt        *string `json:"created_at"`
-	HasCLICredential bool    `json:"has_cli_credential"`
+	ID          int64   `json:"id"`
+	Name        string  `json:"name"`
+	Role        string  `json:"role"`
+	Language    string  `json:"language"`
+	Disabled    bool    `json:"disabled"`
+	LockedUntil *string `json:"locked_until"`
+	CreatedAt   *string `json:"created_at"`
 }
 
 func (c *core) accountOut(a *models.Account) accountJSON {
@@ -39,7 +38,7 @@ func (c *core) accountOut(a *models.Account) accountJSON {
 		locked = 0
 	}
 	return accountJSON{ID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, Disabled: a.Disabled, LockedUntil: ts(locked),
-		CreatedAt: ts(a.CreatedAt), HasCLICredential: models.HasCLICredential(c.db, a.ID)}
+		CreatedAt: ts(a.CreatedAt)}
 }
 
 func (c *core) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -377,26 +376,4 @@ func (c *core) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	c.history(principalFrom(r), models.HistAccount, "deleted", a.Name, "")
 	writeJSON(w, http.StatusOK, map[string]any{})
-}
-
-func (c *core) handleIssueCLICredential(w http.ResponseWriter, r *http.Request) {
-	a := c.loadAccount(w, r)
-	if a == nil {
-		return
-	}
-	if a.Role != models.RoleAdmin || a.Disabled {
-		writeError(w, http.StatusConflict, "CLI credentials can be issued only to enabled administrators")
-		return
-	}
-	value, err := modules.GenerateSecret(modules.CLIKeyPrefix)
-	if err != nil {
-		c.internalError(w, r, err)
-		return
-	}
-	if err := models.ReplaceCLICredential(c.db, a.ID, modules.HashSecret(value)); err != nil {
-		c.internalError(w, r, err)
-		return
-	}
-	c.history(principalFrom(r), models.HistAccount, "cli_credential_issued", a.Name, "previous CLI credential (if any) invalidated")
-	writeJSON(w, http.StatusOK, map[string]string{"value": value})
 }

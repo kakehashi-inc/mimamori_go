@@ -129,9 +129,7 @@
         "detection": "検知"
     },
     "suggestionKind": {
-        "user": "ユーザー",
-        "allowed_path": "書き込みを許可するパス",
-        "read_dir": "読み込みを監視するディレクトリ"
+        "allowed_path": "書き込みを許可するパス"
     },
     "certStatus": {
         "active": "使用中",
@@ -183,12 +181,7 @@
         "failure": "failure",
         "neverRuleLabel": "監査を抑制するルール",
         "haltActionsTitle": "ホストを停止させる設定があります",
-        "haltActionsNote": "auditd.conf の次の項目が halt または single です。ディスクの残量不足などでホストが停止するおそれがあります。導入の案内を参照して変更してください。",
-        "affectedTitle": "監査されていないプロセスがあります",
-        "affectedNote": "監査を抑制するルールを外す前から動いているプロセスは、再起動するまで監査されません。Webサーバーや php-fpm などを再起動してください。",
-        "comm": "コマンド",
-        "user": "ユーザー",
-        "startedAt": "開始時刻"
+        "haltActionsNote": "auditd.conf の次の項目が halt または single です。ディスクの残量不足などでホストが停止するおそれがあります。導入の案内を参照して変更してください。"
     },
     "agentDetail": {
         "title": "エージェントの詳細",
@@ -215,11 +208,6 @@
         "scanBase": "走査の起点",
         "hostRule": "報告された監視ルール",
         "auditd": "auditd の状態",
-        "services": "サービス",
-        "software": "ソフトウェア",
-        "process": "プロセス",
-        "users": "実行ユーザー",
-        "processes": "プロセス数",
         "directories": "ディレクトリ",
         "directoriesTruncated": "ディレクトリの数が多いため、一部だけを表示しています。",
         "trustedCas": "信頼しているCA",
@@ -251,7 +239,7 @@
         "expiresAt": "期限",
         "renewedAt": "自動更新 {{date}}",
         "reissuedAt": "再発行 {{date}}",
-        "machine": "マシンID",
+        "machine": "インスタンスID",
         "boundAt": "紐付け {{date}}",
         "unbound": "未紐付け",
         "lastSeen": "最後の接続",
@@ -265,8 +253,8 @@
         "reissueTitle": "トークン {{name}} の再発行",
         "reissueNote": "再発行すると以前の値は使えなくなります。エージェントで新しい値を使って初期化し直す必要があります。",
         "unbind": "紐付け解除",
-        "unbindTitle": "マシンIDの紐付けを解除",
-        "unbindConfirm": "トークン {{name}} とマシンIDの紐付けを解除しますか？次に接続したマシンに紐付けられます。",
+        "unbindTitle": "インスタンスIDの紐付けを解除",
+        "unbindConfirm": "トークン {{name}} とインスタンスIDの紐付けを解除しますか？次に接続したエージェントに紐付けられます。",
         "revoke": "失効",
         "revokeTitle": "トークンの失効",
         "revokeConfirm": "トークン {{name}} を失効させますか？このトークンを使うエージェントは接続できなくなります。元に戻せません。",
@@ -503,8 +491,6 @@
         "enabled": "有効",
         "disabled": "無効",
         "lockedUntil": "ロック中（{{date}}まで）",
-        "cliCredential": "CLI用の認証情報",
-        "cliIssued": "発行済み",
         "createdAt": "作成日時",
         "you": "（自分）",
         "changeRole": "権限の変更",
@@ -520,12 +506,6 @@
         "enableConfirm": "{{name}} を有効にしますか？",
         "deleteTitle": "アカウントの削除",
         "deleteConfirm": "{{name}} を削除しますか？元に戻せません。",
-        "issueCli": "CLI用の認証情報",
-        "issueCliTitle": "CLI用の認証情報の発行",
-        "issueCliConfirm": "{{name}} のCLI用の認証情報を発行しますか？",
-        "issueCliReplace": "{{name}} のCLI用の認証情報を発行し直しますか？以前の値は使えなくなります。",
-        "cliIssuedTitle": "{{name}} のCLI用の認証情報",
-        "cliNote": "CLI はセントラルのホスト上（ループバック）からだけ使えます。",
         "language": "表示言語"
     },
     "password": {
@@ -581,7 +561,7 @@
             "title": "トークンを発行する",
             "body": "管理者がホストごとにトークンを発行します。",
             "link": "トークンの画面へ",
-            "note": "トークンの値は発行時にだけ表示されます。初めて接続したホストのマシンIDに紐付けられ、ほかのホストでは使えません。"
+            "note": "トークンの値は発行時にだけ表示されます。初期化したエージェントのインスタンスID（エージェントが初期化時に作り、データディレクトリに保存する値）に紐付けられ、ほかのエージェントでは使えません。"
         },
         "init": {
             "title": "エージェントを初期化して起動する",

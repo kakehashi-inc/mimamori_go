@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import {
     createAccount,
     deleteAccount,
-    issueCliCredential,
     listAccounts,
     resetAccountPassword,
     setAccountDisabled,
@@ -16,7 +15,6 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Field, inputClass } from '../components/FormControls';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
-import { SecretValueModal } from '../components/SecretValueModal';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { RoleBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
@@ -32,7 +30,6 @@ type Dialog =
     | { kind: 'password'; account: Account }
     | { kind: 'toggle'; account: Account }
     | { kind: 'delete'; account: Account }
-    | { kind: 'cli'; account: Account }
     | null;
 
 export function AccountsPage() {
@@ -41,7 +38,6 @@ export function AccountsPage() {
     const { showToast } = useToast();
     const { data, error, loading, reload } = useApi(listAccounts, []);
     const [dialog, setDialog] = useState<Dialog>(null);
-    const [cliValue, setCliValue] = useState<{ name: string; value: string } | null>(null);
     const close = () => setDialog(null);
     const done = (message: string) => {
         showToast(message);
@@ -78,7 +74,6 @@ export function AccountsPage() {
                                 <Th>{t('accounts.role')}</Th>
                                 <Th>{t('accounts.language')}</Th>
                                 <Th>{t('accounts.state')}</Th>
-                                <Th>{t('accounts.cliCredential')}</Th>
                                 <Th>{t('accounts.createdAt')}</Th>
                                 <Th className='text-right'>{t('common.actions')}</Th>
                             </THead>
@@ -111,15 +106,6 @@ export function AccountsPage() {
                                                 )}
                                             </div>
                                         </Td>
-                                        <Td>
-                                            {a.has_cli_credential ? (
-                                                <Badge tone='accent' icon='terminal'>
-                                                    {t('accounts.cliIssued')}
-                                                </Badge>
-                                            ) : (
-                                                <span className='text-muted'>-</span>
-                                            )}
-                                        </Td>
                                         <Td className='whitespace-nowrap'>{formatDateTime(a.created_at)}</Td>
                                         <Td className='text-right'>
                                             <div className='flex flex-wrap justify-end gap-1'>
@@ -137,15 +123,6 @@ export function AccountsPage() {
                                                 >
                                                     {t('accounts.resetPassword')}
                                                 </Button>
-                                                {a.role === 'admin' && (
-                                                    <Button
-                                                        size='sm'
-                                                        icon='terminal'
-                                                        onClick={() => setDialog({ kind: 'cli', account: a })}
-                                                    >
-                                                        {t('accounts.issueCli')}
-                                                    </Button>
-                                                )}
                                                 <Button
                                                     size='sm'
                                                     icon={a.disabled ? 'check_circle' : 'do_not_disturb_on'}
@@ -221,38 +198,6 @@ export function AccountsPage() {
                     done(t('common.deleted'));
                 }}
             />
-            <ConfirmDialog
-                open={dialog?.kind === 'cli'}
-                title={t('accounts.issueCliTitle')}
-                message={
-                    dialog?.kind === 'cli'
-                        ? t(
-                              dialog.account.has_cli_credential
-                                  ? 'accounts.issueCliReplace'
-                                  : 'accounts.issueCliConfirm',
-                              {
-                                  name: dialog.account.name,
-                              }
-                          )
-                        : ''
-                }
-                confirmLabel={t('accounts.issueCli')}
-                onClose={close}
-                onConfirm={async () => {
-                    if (dialog?.kind !== 'cli') return;
-                    const r = await issueCliCredential(dialog.account.id);
-                    setCliValue({ name: dialog.account.name, value: r.value });
-                    reload();
-                }}
-            />
-            <SecretValueModal
-                open={cliValue !== null}
-                title={t('accounts.cliIssuedTitle', { name: cliValue?.name ?? '' })}
-                value={cliValue?.value ?? ''}
-                onClose={() => setCliValue(null)}
-            >
-                <p className='text-xs text-muted'>{t('accounts.cliNote')}</p>
-            </SecretValueModal>
         </>
     );
 }

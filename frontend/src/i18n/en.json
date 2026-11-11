@@ -129,9 +129,7 @@
         "detection": "Detection"
     },
     "suggestionKind": {
-        "user": "User",
-        "allowed_path": "Allowed write path",
-        "read_dir": "Directory to watch for reads"
+        "allowed_path": "Allowed write path"
     },
     "certStatus": {
         "active": "Active",
@@ -183,12 +181,7 @@
         "failure": "failure",
         "neverRuleLabel": "Audit suppression rule",
         "haltActionsTitle": "Settings that can halt the host",
-        "haltActionsNote": "These auditd.conf entries are set to halt or single. The host may stop when the disk runs low. See the setup guide to change them.",
-        "affectedTitle": "Some processes are not audited",
-        "affectedNote": "Processes started before the suppression rule was removed are not audited until they restart. Restart the web server, php-fpm and similar services.",
-        "comm": "Command",
-        "user": "User",
-        "startedAt": "Started at"
+        "haltActionsNote": "These auditd.conf entries are set to halt or single. The host may stop when the disk runs low. See the setup guide to change them."
     },
     "agentDetail": {
         "title": "Agent details",
@@ -215,11 +208,6 @@
         "scanBase": "Scan base",
         "hostRule": "Reported rule",
         "auditd": "auditd status",
-        "services": "Services",
-        "software": "Software",
-        "process": "Process",
-        "users": "Users",
-        "processes": "Processes",
         "directories": "Directories",
         "directoriesTruncated": "There are many directories, so only part of them is shown.",
         "trustedCas": "Trusted CAs",
@@ -251,7 +239,7 @@
         "expiresAt": "Expires",
         "renewedAt": "Renewed {{date}}",
         "reissuedAt": "Reissued {{date}}",
-        "machine": "Machine ID",
+        "machine": "Instance ID",
         "boundAt": "Bound {{date}}",
         "unbound": "Not bound",
         "lastSeen": "Last seen",
@@ -265,8 +253,8 @@
         "reissueTitle": "Reissue token {{name}}",
         "reissueNote": "Reissuing invalidates the previous value. The agent must be re-initialized with the new value.",
         "unbind": "Unbind",
-        "unbindTitle": "Unbind machine ID",
-        "unbindConfirm": "Unbind token {{name}} from its machine ID? It will be bound to the next machine that connects.",
+        "unbindTitle": "Unbind instance ID",
+        "unbindConfirm": "Unbind token {{name}} from its instance ID? It will be bound to the next agent that connects.",
         "revoke": "Revoke",
         "revokeTitle": "Revoke token",
         "revokeConfirm": "Revoke token {{name}}? Agents using it will no longer be able to connect. This cannot be undone.",
@@ -503,8 +491,6 @@
         "enabled": "Enabled",
         "disabled": "Disabled",
         "lockedUntil": "Locked until {{date}}",
-        "cliCredential": "CLI credential",
-        "cliIssued": "Issued",
         "createdAt": "Created",
         "you": "(you)",
         "changeRole": "Change role",
@@ -520,12 +506,6 @@
         "enableConfirm": "Enable {{name}}?",
         "deleteTitle": "Delete account",
         "deleteConfirm": "Delete {{name}}? This cannot be undone.",
-        "issueCli": "CLI credential",
-        "issueCliTitle": "Issue CLI credential",
-        "issueCliConfirm": "Issue a CLI credential for {{name}}?",
-        "issueCliReplace": "Issue a new CLI credential for {{name}}? The previous value stops working.",
-        "cliIssuedTitle": "CLI credential for {{name}}",
-        "cliNote": "The CLI works only on the central host itself (loopback).",
         "language": "Display language"
     },
     "password": {
@@ -581,7 +561,7 @@
             "title": "Issue a token",
             "body": "An administrator issues one token per host.",
             "link": "Go to tokens",
-            "note": "The token value is shown only when issued. It is bound to the machine ID of the first host that connects and cannot be used on other hosts."
+            "note": "The token value is shown only when issued. It is bound to the instance ID of the agent that is initialized with it (created by the agent at initialization and kept in its data directory) and cannot be used by other agents."
         },
         "init": {
             "title": "Initialize and start the agent",

@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -70,7 +71,9 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 }
 
 // adminAPIAuth guards the management API: loopback source address only
-// (otherwise it does not exist), and an administrator's CLI credential.
+// (otherwise it does not exist), and the CLI secret the central wrote into
+// its data directory at start. The CLI is not tied to an account and has
+// full authority.
 func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isLoopback(r.RemoteAddr) {
@@ -78,22 +81,11 @@ func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 			return
 		}
 		v := bearer(r)
-		if !strings.HasPrefix(v, modules.CLIKeyPrefix) {
-			writeError(w, http.StatusUnauthorized, "CLI credential required")
+		if c.cliSecret == "" || subtle.ConstantTimeCompare([]byte(v), []byte(c.cliSecret)) != 1 {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		cred, err := models.GetCLICredentialByHash(c.db, modules.HashSecret(v))
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid CLI credential")
-			return
-		}
-		a, err := models.GetAccount(c.db, cred.AccountID)
-		if err != nil || a.Disabled || a.Role != models.RoleAdmin {
-			writeError(w, http.StatusUnauthorized, "invalid CLI credential")
-			return
-		}
-		_ = models.TouchCLICredential(c.db, cred.ID, time.Now().Unix())
-		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, ViaCLI: true}))
+		next.ServeHTTP(w, withPrincipal(r, &principal{Name: cliOperator, Role: models.RoleAdmin, ViaCLI: true}))
 	})
 }
 
@@ -119,17 +111,19 @@ func requireAny(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// invalidateAccount ends every session and CLI credential of an account.
+// invalidateAccount ends every session of an account.
 func (c *core) invalidateAccount(id int64, keepSession string) {
 	_ = models.DeleteAccountSessions(c.db, id, keepSession)
-	_ = models.DeleteCLICredentials(c.db, id)
 }
+
+// cliOperator is the name recorded in the history for CLI operations.
+const cliOperator = "cli"
 
 // --- agent authentication ---
 
 var errAgentAuth = errors.New("unauthorized")
 
-// authenticateAgent checks the token and machine id of an agent request.
+// authenticateAgent checks the token and instance ID of an agent request.
 // Every failure is answered without details and recorded in the history.
 func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent, error) {
 	reject := func(reason, target string) (*models.Token, *models.Agent, error) {
@@ -154,12 +148,12 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	if t.RevokedAt > 0 {
 		return reject("revoked token", t.Name)
 	}
-	machine := strings.TrimSpace(r.Header.Get(modules.HeaderMachineID))
-	if machine == "" || len(machine) > 128 {
-		return reject("missing machine id", t.Name)
+	instance := strings.TrimSpace(r.Header.Get(modules.HeaderInstanceID))
+	if instance == "" || len(instance) > 128 {
+		return reject("missing instance id", t.Name)
 	}
-	if t.MachineID != "" && t.MachineID != machine {
-		return reject("machine id mismatch", t.Name)
+	if t.InstanceID != "" && t.InstanceID != instance {
+		return reject("instance id mismatch", t.Name)
 	}
 	usedPending := t.PendingHash != "" && h == t.PendingHash
 	if usedPending {
@@ -174,9 +168,9 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	} else if t.ExpiresAt <= now {
 		return reject("expired token", t.Name)
 	}
-	if t.MachineID == "" {
-		t.MachineID, t.BoundAt = machine, now
-		c.history(nil, models.HistToken, "bound", t.Name, "bound to machine id "+machine)
+	if t.InstanceID == "" {
+		t.InstanceID, t.BoundAt = instance, now
+		c.history(nil, models.HistToken, "bound", t.Name, "bound to agent instance "+instance)
 	}
 	if t.UsedAt == 0 {
 		t.UsedAt = now
