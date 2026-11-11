@@ -131,7 +131,6 @@
     "suggestionKind": {
         "user": "User",
         "allowed_path": "Allowed write path",
-        "scan_base": "Scan base",
         "read_dir": "Directory to watch for reads"
     },
     "certStatus": {

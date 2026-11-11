@@ -47,7 +47,6 @@ type SyncResponse struct {
 	TokenExpiresAt     int64           `json:"token_expires_at"`
 	Rule               *RuleAssignment `json:"rule"`
 	DefaultIntervalSec int             `json:"default_interval_sec"`
-	DefaultScanBase    string          `json:"default_scan_base"`
 	TokenRenewal       *TokenRenewal   `json:"token_renewal,omitempty"`
 	CAPEMs             []string        `json:"ca_pems,omitempty"`
 }

@@ -97,7 +97,7 @@ export interface AgentSummary {
     builtin_running: boolean | null;
 }
 
-export type SuggestionKind = 'user' | 'allowed_path' | 'scan_base' | 'read_dir';
+export type SuggestionKind = 'user' | 'allowed_path' | 'read_dir';
 
 export interface Suggestion {
     kind: SuggestionKind;

@@ -131,7 +131,6 @@
     "suggestionKind": {
         "user": "ユーザー",
         "allowed_path": "書き込みを許可するパス",
-        "scan_base": "走査の起点",
         "read_dir": "読み込みを監視するディレクトリ"
     },
     "certStatus": {

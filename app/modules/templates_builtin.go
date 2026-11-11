@@ -34,7 +34,7 @@ var builtinTemplates = []BuiltinTemplate{
 			Denied:             CategoryOnly{Category: CategoryNormal},
 			Read:               ReadSpec{Dirs: ign("/etc/ssh", "/home"), Category: CategoryAlert},
 			Network:            NetworkSpec{Category: CategoryAlert},
-			Writable:           WritableSpec{Base: DefaultScanBase, Category: CategoryAlert},
+			Writable:           WritableSpec{Base: "/opt", Category: CategoryAlert},
 			ExecFiles: ExecFilesSpec{
 				Extensions:    []string{".php", ".phar", ".phtml", ".js", ".mjs", ".html", ".htm", ".svg", ".xhtml"},
 				OtherCategory: CategoryAlert,

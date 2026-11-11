@@ -277,6 +277,11 @@ func TestRunCommandTimeout(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(res.Stdout)) != "hello" || res.ExitCode != 3 || strings.TrimSpace(string(res.Stderr)) != "err" {
 		t.Fatalf("run: %+v %v", res, err)
 	}
+	// Output much larger than a pipe buffer must not block the command.
+	big, err := RunCommand(10*time.Second, 1<<20, "head", "-c", "5000000", "/dev/zero")
+	if err != nil || big.ExitCode != 0 || len(big.Stdout) != 1<<20 {
+		t.Fatalf("large output: exit %v len %d err %v", big.ExitCode, len(big.Stdout), err)
+	}
 	start := time.Now()
 	if _, err := RunCommand(300*time.Millisecond, 1<<20, "sleep", "5"); err == nil || time.Since(start) > 3*time.Second {
 		t.Fatalf("timeout not enforced: %v", err)

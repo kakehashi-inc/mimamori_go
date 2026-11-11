@@ -320,9 +320,6 @@ func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJS
 			add("user", u, "runs "+s.Process+" ("+s.Software+")")
 		}
 	}
-	if content.Writable.Base == "" && hi.ScanBase != "" {
-		add("scan_base", hi.ScanBase, "default scan origin")
-	}
 	allowed := map[string]bool{}
 	for _, p := range content.Writable.AllowedPaths {
 		allowed[p] = true

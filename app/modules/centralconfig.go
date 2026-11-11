@@ -47,7 +47,6 @@ type CentralConfig struct {
 	TokenRenewBeforeDays    int          `json:"token_renew_before_days"`
 	RetentionDays           int          `json:"retention_days"`
 	DefaultCheckIntervalSec int          `json:"default_check_interval_sec"`
-	DefaultScanBase         string       `json:"default_scan_base"`
 	SessionHours            int          `json:"session_hours"`
 	SessionRememberDays     int          `json:"session_remember_days"`
 	BuiltinAgent            *bool        `json:"builtin_agent"`
@@ -86,9 +85,6 @@ func (c *CentralConfig) applyDefaults() {
 	}
 	if c.DefaultCheckIntervalSec <= 0 {
 		c.DefaultCheckIntervalSec = DefaultCheckIntervalSec
-	}
-	if c.DefaultScanBase == "" {
-		c.DefaultScanBase = DefaultScanBase
 	}
 	if c.SessionHours <= 0 {
 		c.SessionHours = DefaultSessionHours
@@ -150,9 +146,6 @@ func (c *CentralConfig) Validate() error {
 	}
 	if c.Workers > 64 {
 		errs = append(errs, "workers must be 64 or less")
-	}
-	if err := ValidateAbsPath(c.DefaultScanBase); err != nil {
-		errs = append(errs, "default_scan_base: "+err.Error())
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))

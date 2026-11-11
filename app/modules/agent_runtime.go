@@ -46,7 +46,6 @@ type AgentRuntime struct {
 	OnTokenRenewed func(token string)
 
 	defaultInterval int
-	defaultScanBase string
 	rule            *RuleAssignment
 	lastApply       *ApplyResult
 	// failedRule is the rule version whose application failed. It is not
@@ -61,7 +60,7 @@ type AgentRuntime struct {
 // NewAgentRuntime loads the stored state.
 func NewAgentRuntime(db *sql.DB, tr AgentTransport, dataDir string, logger *log.Logger) *AgentRuntime {
 	rt := &AgentRuntime{DB: db, Transport: tr, DataDir: dataDir, Logger: logger,
-		defaultInterval: DefaultCheckIntervalSec, defaultScanBase: DefaultScanBase}
+		defaultInterval: DefaultCheckIntervalSec}
 	if v := models.GetLocalState(db, stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
@@ -160,9 +159,6 @@ func (rt *AgentRuntime) sync() {
 	}
 	if resp.DefaultIntervalSec > 0 {
 		rt.defaultInterval = resp.DefaultIntervalSec
-	}
-	if resp.DefaultScanBase != "" {
-		rt.defaultScanBase = resp.DefaultScanBase
 	}
 	if rt.Config != nil {
 		rt.saveConfigUpdates(resp)
@@ -392,7 +388,9 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 }
 
 func (rt *AgentRuntime) report(detections []DetectionReport) {
-	in := HostInfoInput{ScanBase: rt.defaultScanBase, LastApply: rt.lastApply, MonitoredUIDs: map[int]bool{}}
+	// The directory structure is reported only for the scan origin of the
+	// applied rule; there is no default origin.
+	in := HostInfoInput{LastApply: rt.lastApply, MonitoredUIDs: map[int]bool{}}
 	if rt.rule != nil {
 		in.Rule = &RuleRef{ID: rt.rule.ID, Version: rt.rule.Version}
 		if rt.rule.Content.Writable.Base != "" {

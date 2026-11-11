@@ -3,7 +3,6 @@ package modules
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -43,9 +42,11 @@ func LookupCommand(name string) (string, error) {
 }
 
 // RunCommand runs an external command with a timeout WITHOUT creating any
-// goroutine: the process writes to unlinked temporary files and is reaped by
-// polling wait4 with WNOHANG from the calling flow. On timeout the whole
-// process group is killed. maxOutput limits how much of stdout is read.
+// goroutine and without writing any file: the output is read from pipes
+// whose reads are bounded by an immediate deadline, and the process is
+// reaped by polling wait4 with WNOHANG, all from the calling flow. On timeout
+// the whole process group is killed. maxOutput limits how much of stdout is
+// kept (the rest is read and discarded so the command never blocks).
 func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...string) (*CommandResult, error) {
 	path, err := LookupCommand(name)
 	if err != nil {
@@ -56,34 +57,39 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 		return nil, err
 	}
 	defer devnull.Close()
-	outF, err := os.CreateTemp("", "mimamori-out-*")
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	_ = os.Remove(outF.Name())
-	defer outF.Close()
-	errF, err := os.CreateTemp("", "mimamori-err-*")
+	defer outR.Close()
+	errR, errW, err := os.Pipe()
 	if err != nil {
+		outW.Close()
 		return nil, err
 	}
-	_ = os.Remove(errF.Name())
-	defer errF.Close()
+	defer errR.Close()
 
 	env := []string{"LC_ALL=C", "LANG=C", "TZ=UTC", "PATH=/usr/sbin:/sbin:/usr/bin:/bin"}
 	proc, err := os.StartProcess(path, append([]string{path}, args...), &os.ProcAttr{
-		Files: []*os.File{devnull, outF, errF},
+		Files: []*os.File{devnull, outW, errW},
 		Env:   env,
 		Sys:   &syscall.SysProcAttr{Setpgid: true},
 	})
+	outW.Close()
+	errW.Close()
 	if err != nil {
 		return nil, err
 	}
+	stdout := &limitedBuffer{limit: maxOutput}
+	stderr := &limitedBuffer{limit: 64 << 10}
 	pid := proc.Pid
 	deadline := time.Now().Add(timeout)
 	var ws syscall.WaitStatus
 	timedOut := false
 	sleep := 2 * time.Millisecond
 	for {
+		drain(outR, stdout)
+		drain(errR, stderr)
 		wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
 		if werr == syscall.EINTR {
 			continue
@@ -112,25 +118,68 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 		}
 	}
 	_ = proc.Release()
+	// Read what is left after the process ended (until end of file).
+	drainAll(outR, stdout)
+	drainAll(errR, stderr)
 
-	res := &CommandResult{ExitCode: ws.ExitStatus()}
+	res := &CommandResult{ExitCode: ws.ExitStatus(), Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if ws.Signaled() {
 		res.ExitCode = 128 + int(ws.Signal())
 	}
-	res.Stdout = readBack(outF, maxOutput)
-	res.Stderr = readBack(errF, 64<<10)
 	if timedOut {
 		return res, fmt.Errorf("%s: %w after %s", name, ErrCommandTimeout, timeout)
 	}
 	return res, nil
 }
 
-func readBack(f *os.File, limit int64) []byte {
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil
+// limitedBuffer keeps at most limit bytes and discards the rest.
+type limitedBuffer struct {
+	buf   []byte
+	limit int64
+}
+
+func (b *limitedBuffer) Write(p []byte) {
+	if room := b.limit - int64(len(b.buf)); room > 0 {
+		if int64(len(p)) > room {
+			p = p[:room]
+		}
+		b.buf = append(b.buf, p...)
 	}
-	b, _ := io.ReadAll(io.LimitReader(f, limit))
-	return b
+}
+
+func (b *limitedBuffer) Bytes() []byte { return b.buf }
+
+// drain reads whatever is available on the pipe now, waiting at most a
+// millisecond. (A deadline that has already passed would make the read fail
+// before looking at the pipe, so it is set slightly in the future.)
+func drain(f *os.File, dst *limitedBuffer) {
+	buf := make([]byte, 64<<10)
+	for {
+		_ = f.SetReadDeadline(time.Now().Add(time.Millisecond))
+		n, err := f.Read(buf)
+		if n > 0 {
+			dst.Write(buf[:n])
+		}
+		if err != nil || n == 0 {
+			return
+		}
+	}
+}
+
+// drainAll reads the pipe until end of file (the writer has exited), bounded
+// by a short deadline in case a child of the command still holds it open.
+func drainAll(f *os.File, dst *limitedBuffer) {
+	buf := make([]byte, 64<<10)
+	_ = f.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			dst.Write(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // RunSimple runs a short command with the default timeout and returns an

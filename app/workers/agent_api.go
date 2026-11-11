@@ -88,7 +88,6 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	resp := &modules.SyncResponse{
 		AgentName:          modules.BuiltinAgentName,
 		DefaultIntervalSec: c.cfg.DefaultCheckIntervalSec,
-		DefaultScanBase:    c.cfg.DefaultScanBase,
 	}
 	// The assigned version is always sent, so the agent can tell whether it
 	// runs the assigned version (it applies only a different one).

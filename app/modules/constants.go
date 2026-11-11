@@ -50,7 +50,6 @@ const (
 	DefaultWebListen          = "0.0.0.0:8080"
 	DefaultAgentListen        = "0.0.0.0:8443"
 	DefaultAgentPort          = 8443
-	DefaultScanBase           = "/opt"
 	DefaultCheckIntervalSec   = 60
 	DefaultScanIntervalSec    = 3600
 	DefaultTokenValidDays     = 365

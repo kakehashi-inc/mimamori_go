@@ -27,7 +27,7 @@ type CLIConfig struct {
 // CtlCmd groups the management commands. They run on the central host and
 // use the management API over the loopback address.
 type CtlCmd struct {
-	CLIConfig string `name:"cli-config" help:"CLI configuration file (JSON with url, key, ca_file; default: cli.json next to the executable). Environment variables MIMAMORI_URL, MIMAMORI_CLI_KEY and MIMAMORI_CA_FILE take precedence" type:"path"`
+	CLIConfig string `name:"cli-config" help:"Optional CLI configuration file (JSON with url, key, ca_file; cli.json next to the executable is read when it exists). Usually only MIMAMORI_CLI_KEY is needed: the address comes from central.json and the CA from the data directory" type:"path"`
 	JSON      bool   `help:"Print raw JSON"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
@@ -47,31 +47,34 @@ type ctlClient struct {
 	json bool
 }
 
+// loadCLIConfig resolves the connection settings. Only the credential has to
+// be given (MIMAMORI_CLI_KEY, or "key" in a CLI configuration file); the
+// address comes from agent_listen of central.json and the CA certificate
+// from the data directory, both next to the executable. A CLI configuration
+// file is read only when given with --cli-config or MIMAMORI_CLI_CONFIG, or
+// when cli.json exists next to the executable. Environment variables take
+// precedence over the file.
 func loadCLIConfig(path string) (*CLIConfig, error) {
 	cfg := &CLIConfig{}
-	candidates := []string{path, os.Getenv(EnvCLIConfig)}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".config", AppName, "cli.json"))
+	explicit := path
+	if explicit == "" {
+		explicit = os.Getenv(EnvCLIConfig)
 	}
-	candidates = append(candidates, ConfigPath(CLIConfigFileName))
-	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			if p == path {
-				return nil, err
-			}
-			continue
-		}
+	file := explicit
+	if file == "" {
+		file = ConfigPath(CLIConfigFileName)
+	}
+	data, err := os.ReadFile(file)
+	switch {
+	case err == nil:
 		if err := json.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+			return nil, fmt.Errorf("%s: %w", file, err)
 		}
-		if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 != 0 && cfg.Key != "" {
-			fmt.Fprintf(os.Stderr, "Warning: %s holds a credential and is readable by others; chmod 600 it\n", p)
+		if fi, err := os.Stat(file); err == nil && fi.Mode().Perm()&0o077 != 0 && cfg.Key != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s holds a credential and is readable by others; chmod 600 it\n", file)
 		}
-		break
+	case explicit != "":
+		return nil, err
 	}
 	if v := os.Getenv(EnvCLIURL); v != "" {
 		cfg.URL = v
@@ -84,6 +87,11 @@ func loadCLIConfig(path string) (*CLIConfig, error) {
 	}
 	if cfg.URL == "" {
 		cfg.URL = DefaultCLIURL
+		if cc, _, err := LoadCentralConfig(ConfigPath(CentralConfigFileName)); err == nil {
+			if _, port, err := net.SplitHostPort(cc.AgentListen); err == nil {
+				cfg.URL = "https://" + net.JoinHostPort("127.0.0.1", port)
+			}
+		}
 	}
 	if cfg.CAFile == "" {
 		cfg.CAFile = filepath.Join(DataDir(), CABundleFileName)
@@ -557,7 +565,9 @@ func (c *CtlRulesEditCmd) Run(p *CtlCmd) error {
 	}
 	m, _ := out.(map[string]any)
 	orig := marshalIndent(m["content"])
-	f, err := os.CreateTemp("", "mimamori-rule-*.json")
+	// The temporary file is kept in the data directory (next to the
+	// executable) and removed afterwards.
+	f, err := os.CreateTemp(DataDir(), ".rule-edit-*.json")
 	if err != nil {
 		return err
 	}
