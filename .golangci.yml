@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Errors of these calls are intentionally ignored: they release
+      # resources on read paths or after a failure that is already being
+      # returned, or write to the terminal. Nothing useful can be done with
+      # their error and checking it would hide the original error.
+      exclude-functions:
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*os.File).Close
+        - os.Remove
+        - (*text/tabwriter.Writer).Flush
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (io.ReadCloser).Close
+        - (*net.TCPListener).Close
+        - (*crypto/tls.Conn).Close
+        - (*net/smtp.Client).Close

@@ -1,60 +1,78 @@
-# システム名をここに記載
+# mimamori
 
-## 1. システム概要
+[日本語](README-ja.md)
 
-システムの概略をここに記載してください。
+## 1. Overview
 
-事前の変更点は以下のキーワードでファイル名、またはファイル内容を検索しアプリ名に置き換えてください。
+mimamori detects operations performed with the privileges of selected OS users on each host (for example the users that run the web server or php-fpm), using auditd and file scans, collects them on a central server and notifies by email. Administrators decide what to monitor and what is important (`alert`) with monitoring rules.
 
-ファイル名キーワード:
+### Features
 
-- develop_app
+- Monitoring types: program execution, file operations denied by permissions, successful reads of selected directories, network connections started by selected executables, writable files and directories outside the allowed paths, and newly created or changed executable files (such as `.php`) inside the allowed paths
+- Operations of logged-in users and cron jobs can be excluded, so that only processes started by the system are monitored
+- Monitoring rules hold values only and are versioned. They are created by combining built-in templates (`base`, `apache`, `nginx`, `php-fpm`, `laravel`, `ffmpeg`) and administrator templates, and a saved version is applied to selected agents
+- Agents authenticate with tokens (with an expiry, bound to the host's machine ID, renewed automatically) and connect over HTTPS with certificates from a private CA that the central creates automatically
+- Detections are grouped by type, OS user, executable and target, and handled with suppression conditions, acknowledgement and notifications (through your own SMTP server) with a minimum interval and repeat suppression
+- The same operations are available in the browser screens (Japanese / English) and in the CLI on the central host. Roles are administrator and viewer
+- The central host itself is monitored by the built-in agent
 
-ファイル内容検索キーワード:
+### Architecture
 
-- develop_app
-- develop app
-- システム名をここに記載
-- 8080（Webサーバーの待受ポート）
-- 8081（APIサーバーの待受ポート）
-- dap_（APIトークンの接頭辞）
-- settings（サーバー設定の保存に暫定利用しているテーブルと処理。不要な場合は削除）
+| Component | Description |
+| --- | --- |
+| Executable | `mimamori` (a single Go binary containing the central, the agent and the CLI) |
+| Central | `mimamori central start`. Two listeners: for browsers (HTTP, default `:8080`) and for agents and management (HTTPS with the private CA, default `:8443`) |
+| Agent | `mimamori agent start`. Runs as root on each host and only connects to the central |
+| Data | SQLite, split into the central management database `central.db` and one database per monitored target `targets/agent-<id>.db` |
+| Flows | One flow for the agent; basically two for the central (central functions and the built-in agent). The maximum number of workers handling requests is configurable (default 1) |
 
-現在の概要に記載されている内容は`システムの概略をここに記載してください。`を残し削除してください。
+### Requirements
 
-APIサーバーを使わずWebサーバーのみの1サーバー構成にする場合:
+- Supported OS: Amazon Linux 2023, Rocky Linux 9, AlmaLinux 9, Ubuntu 24.04 (x64)
+- auditd installed and running on every host, including the central host
+- Notifications use your own SMTP server. No external services or database servers are used
 
-- `app/workers/api_server.go`の`/control/*`（ハンドラとループバック制限）を`web_server.go`の`webHandler`へ移し、`api_server.go`を削除する
-- `app/workers/server.go`の`startServer`からAPI側（`apiSrv` / `apiLns`、`apiPort == webPort`の検査）を外し、Web側のリスナーを`listenWithLoopback`で開く
-- `api_listen` / `api_port`の定数・設定キー（`app/modules/constants.go`）、`--api-listen` / `--api-port`フラグ（`app/modules/cli.go`）、`StartServer`の引数（`service.go` / `main.go`）を削除し、`service stop` / `status`はWebポートへ接続する
+### Getting started
 
-詳細設計書に含めるもの:
+1. On the central host, prepare the configuration file and start the central (as root).
 
-- テーブル定義: Documents/テーブル定義.mdに作成してそれを指示してもよい。
-- 用語定義: 関係する人の役割、各種用語などは全て定義しておくこと。これは日本語(English)の形式で必ず英語も用意しておく。
+    ```bash
+    sudo install -d -m 700 /etc/mimamori
+    mimamori central example-config | sudo tee /etc/mimamori/central.json >/dev/null
+    sudo chmod 600 /etc/mimamori/central.json
+    sudo mimamori central init-admin --name admin
+    sudo mimamori central start
+    ```
 
-プロンプト依頼例:
+    Set `server_names` to the host names and IP addresses agents use to connect. Run the process as a service (systemd and so on) as suits your environment.
 
-```text
-以下の詳細設計書を元に実装をしてください。
-Go言語用にプロジェクトの基本構造などは既に作成済みです。
-起動パラメータ解析処理は`main.go`へ実装してください。
+2. Open `http://<central>:8080` in a browser, log in, create a monitoring rule and issue a token.
+3. On each monitored host, initialize the agent with the token given on standard input, then start it.
 
-`app/models`ディレクトリ内にデータ構造（モデル）を定義してください。
-`app/modules`ディレクトリ内に実際の処理や部品を定義してください。
-`app/workers`ディレクトリ内にHTTPサーバーのルーティングとハンドラを定義してください。
-Web画面は`frontend/src`内に実装してください。
+    ```bash
+    printf '%s\n' '<token>' | sudo mimamori agent init --server https://<central>:8443 --ca-fingerprint <private CA fingerprint>
+    sudo mimamori agent start
+    ```
 
-README.mdを確認し、プロジェクトの開発方法などを読み解いてください。**`開発ルール`セクションを確認し遵守してください。**
-すべての実装が完了したらREADME.mdのプロジェクトの概要部分を更新してください。
-最終的な成果物として、テーブル定義.md、システム設計書.mdをDocumentsに配置してください。
+4. Use the CLI on the central host when needed (issue a CLI credential on the accounts screen).
 
-これ以降が詳細設計書です。
-```
+    ```bash
+    export MIMAMORI_CLI_KEY=mmc_...
+    sudo -E mimamori ctl agents list
+    ```
 
-## 2. 開発者向けリファレンス
+The setup guide screen explains the auditd checks and settings required on each host.
 
-### アイコン生成
+### Documents
+
+- [Documents/システム仕様.md](Documents/システム仕様.md): design (terms, flows, CLI, configuration, monitoring rules, communication, auditd handling, notifications, certificates, screens)
+- [Documents/API仕様.md](Documents/API仕様.md): HTTP API
+- [Documents/テーブル定義.md](Documents/テーブル定義.md): table definitions
+- [CHANGELOG.md](CHANGELOG.md): change log
+
+## 2. Developer reference
+
+### Generating icons
 
 ```bash
 convert frontend/public/icons/app-icon-org.png -define icon:auto-resize=256,128,96,64,48,32,24,16 frontend/public/favicon.ico
@@ -70,123 +88,123 @@ convert frontend/public/icons/app-icon-org.png -resize 512x512 frontend/public/i
 convert frontend/public/icons/app-icon-org.png -resize 180x180 frontend/public/icons/apple-touch-icon.png
 ```
 
-### Go 操作コマンド
+### Go commands
 
-デバッグモジュールの追加・更新
+Add or update the debugger
 
 ```bash
 go install github.com/go-delve/delve/cmd/dlv@latest
 ```
 
-モジュールの追加
+Add a module
 
 ```bash
 go get <package-name>
 ```
 
-モジュールの追加・ビルド
+Add and build a module
 
 ```bash
 go install <package-name>
 ```
 
-モジュールファイルの作成
+Create the module file
 
 ```bash
 go mod init <module-name>
 ```
 
-モジュールのダウンロード（モジュール名を省略するとgo.modの全て）
+Download modules (all of go.mod when the module name is omitted)
 
 ```bash
 go mod download <module-name>
 ```
 
-モジュールの最適化（ソースとgo.modの双方向での一致）
+Tidy modules (keep the sources and go.mod in sync)
 
 ```bash
 go mod tidy
 ```
 
-モジュールの最新化
+Update modules to the latest versions
 
 ```bash
 go get -u
 ```
 
-Go バージョンの更新
+Update the Go version
 
 ```bash
 go mod tidy --go=1.25
 ```
 
-キャッシュのクリア
+Clear the caches
 
 ```bash
 go clean --cache --testcache
 ```
 
-### フロントエンド操作コマンド
+### Frontend commands
 
-依存パッケージのインストール
+Install dependencies
 
 ```bash
 cd frontend
 yarn install
 ```
 
-ビルド（`frontend/dist`に出力。Goの`go:embed`が参照するため、`go build`や`go vet`の前に必要）
+Build (output to `frontend/dist`; required before `go build` or `go vet` because Go's `go:embed` refers to it)
 
 ```bash
 cd frontend
 yarn build
 ```
 
-型チェック
+Type check
 
 ```bash
 cd frontend
 yarn lint
 ```
 
-整形（`src`配下）
+Format (under `src`)
 
 ```bash
 cd frontend
 yarn format
 ```
 
-Material Iconsフォントの配置（`node_modules`から`public/fonts`へコピー）
+Place the Material Icons fonts (copy from `node_modules` to `public/fonts`)
 
 ```bash
 cd frontend
 yarn setup:fonts
 ```
 
-### 起動
+### Start
 
 ```bash
 go run . service start
 ```
 
-http://localhost:8080 でWeb画面が開きます（APIサーバーは8081。`service stop` / `status`はAPIポートへ接続します）。実行時データ（DBファイルなど）は実行ファイルと同じ場所の`data/`に作成されます。
+The web screens open at http://localhost:8080 (the API server is on 8081; `service stop` / `status` connect to the API port). Runtime data (such as the database file) is created in `data/` next to the executable.
 
-### Lintとテスト
+### Lint and test
 
 ```bash
 make lint
 make test
 ```
 
-### ビルドやリリース方法
+### Build and release
 
-ビルド（事前に`cd frontend && yarn build`が必要）
+Build (`cd frontend && yarn build` is required first)
 
 ```bash
 go build
 ```
 
-リリース
+Release
 
 ```bash
 make

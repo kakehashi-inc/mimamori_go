@@ -1,4 +1,4 @@
-EXECUTABLE=develop_app
+EXECUTABLE=mimamori
 WINDOWS_AMD64=$(EXECUTABLE)_windows_amd64.exe
 WINDOWS_ARM64=$(EXECUTABLE)_windows_arm64.exe
 LINUX_AMD64=$(EXECUTABLE)_linux_amd64
@@ -40,7 +40,9 @@ frontend:
 	@test -d $(FRONTEND_DIR)/node_modules || (cd $(FRONTEND_DIR) && yarn install)
 	cd $(FRONTEND_DIR) && yarn build
 
-build: frontend windows linux darwin
+# mimamori uses Linux-specific system calls (flock, termios, /proc), so only
+# Linux binaries are built. The supported target is linux/amd64.
+build: frontend linux
 
 # Format the Go sources (gofmt via go fmt) and the frontend sources (Prettier).
 format:
@@ -49,11 +51,14 @@ format:
 	cd $(FRONTEND_DIR) && yarn format
 
 # Static checks for both halves. Requires a frontend build once (the Go embed
-# pattern needs frontend/dist to exist) and staticcheck on PATH:
-#   go install honnef.co/go/tools/cmd/staticcheck@latest
+# pattern needs frontend/dist to exist), staticcheck and golangci-lint on PATH
+# built with the same Go version as go.mod:
+#   GOTOOLCHAIN=go1.27.3 go install honnef.co/go/tools/cmd/staticcheck@latest
+#   GOTOOLCHAIN=go1.27.3 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 lint: frontend
 	go vet ./...
 	staticcheck ./...
+	golangci-lint run ./...
 	cd $(FRONTEND_DIR) && yarn lint
 
 test: frontend
@@ -86,12 +91,8 @@ $(eval $(call build-target,$(DARWIN_ARM64),darwin,arm64))
 # Zip each binary from $(BIN_DIR) into $(RELEASE_DIR).
 pack:
 	$(MKDIR_RELEASE)
-	$(call ZIP_FILE,$(WINDOWS_AMD64),$(EXECUTABLE)_$(VERSION)_windows_amd64.zip,$(EXECUTABLE).exe)
-	$(call ZIP_FILE,$(WINDOWS_ARM64),$(EXECUTABLE)_$(VERSION)_windows_arm64.zip,$(EXECUTABLE).exe)
 	$(call ZIP_FILE,$(LINUX_AMD64),$(EXECUTABLE)_$(VERSION)_linux_amd64.zip,$(EXECUTABLE))
 	$(call ZIP_FILE,$(LINUX_ARM64),$(EXECUTABLE)_$(VERSION)_linux_arm64.zip,$(EXECUTABLE))
-	$(call ZIP_FILE,$(DARWIN_AMD64),$(EXECUTABLE)_$(VERSION)_macos_amd64.zip,$(EXECUTABLE))
-	$(call ZIP_FILE,$(DARWIN_ARM64),$(EXECUTABLE)_$(VERSION)_macos_arm64.zip,$(EXECUTABLE))
 
 clean:
 	$(RM)

@@ -1,0 +1,180 @@
+package modules
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"mimamori/app/models"
+)
+
+// CentralCmd groups the central's commands.
+type CentralCmd struct {
+	Start         CentralStartCmd         `cmd:"" help:"Start the central (browser screens, agent API, management API and the built-in agent)"`
+	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run as root on the central host)"`
+	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run as root on the central host)"`
+	ExampleConfig CentralExampleConfigCmd `cmd:"" name:"example-config" help:"Print an example configuration file"`
+}
+
+// CentralStartCmd starts the central.
+type CentralStartCmd struct {
+	Config string `help:"Configuration file" default:"${central_config}" type:"path"`
+}
+
+func (c *CentralStartCmd) Run() error {
+	if StartCentral == nil {
+		return NewExitError(ExitGeneral, "central not linked")
+	}
+	return StartCentral(c.Config)
+}
+
+// CentralExampleConfigCmd prints an example configuration.
+type CentralExampleConfigCmd struct{}
+
+func (c *CentralExampleConfigCmd) Run() error {
+	fmt.Println(ExampleCentralConfig())
+	return nil
+}
+
+func openCentralDBAsRoot() (*sql.DB, error) {
+	if os.Geteuid() != 0 {
+		return nil, NewExitError(ExitAuth, "this command must be run as root on the central host")
+	}
+	dir := DataDir(DefaultCentralDataDir)
+	if err := EnsureSecureDir(dir); err != nil {
+		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
+	}
+	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	if err != nil {
+		return nil, NewExitErrorf(ExitConfig, "database: %v", err)
+	}
+	return db, nil
+}
+
+func readNewPassword() (string, error) {
+	p, err := ReadSecret("New password: ")
+	if err != nil {
+		return "", NewExitError(ExitArgument, err.Error())
+	}
+	if isTerminal(os.Stdin.Fd()) {
+		again, err := ReadSecret("Repeat the password: ")
+		if err != nil {
+			return "", NewExitError(ExitArgument, err.Error())
+		}
+		if again != p {
+			return "", NewExitError(ExitArgument, "the passwords do not match")
+		}
+	}
+	if err := ValidatePassword(p); err != nil {
+		return "", NewExitError(ExitArgument, err.Error())
+	}
+	return p, nil
+}
+
+// CentralInitAdminCmd creates the first administrator.
+type CentralInitAdminCmd struct {
+	Name string `help:"Account name" required:""`
+}
+
+func (c *CentralInitAdminCmd) Run() error {
+	db, err := openCentralDBAsRoot()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	n, err := models.CountAdmins(db)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return NewExitError(ExitArgument, "an administrator already exists; use reset-password or the accounts screen")
+	}
+	p, err := readNewPassword()
+	if err != nil {
+		return err
+	}
+	hash, err := HashPassword(p)
+	if err != nil {
+		return err
+	}
+	a := &models.Account{Name: strings.TrimSpace(c.Name), Role: models.RoleAdmin, PasswordHash: hash}
+	if err := models.InsertAccount(db, a); err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: "root", Category: models.HistAccount, Action: "created", Target: a.Name, Detail: "first administrator created on the central host"})
+	fmt.Printf("Administrator %q created.\n", a.Name)
+	return nil
+}
+
+// CentralResetPasswordCmd resets an administrator's password.
+type CentralResetPasswordCmd struct {
+	Name string `help:"Administrator account name" required:""`
+}
+
+func (c *CentralResetPasswordCmd) Run() error {
+	db, err := openCentralDBAsRoot()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	a, err := models.GetAccountByName(db, c.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NewExitErrorf(ExitArgument, "account %q not found", c.Name)
+	}
+	if err != nil {
+		return err
+	}
+	if a.Role != models.RoleAdmin {
+		return NewExitError(ExitArgument, "only administrators can be recovered here; administrators reset other accounts on the accounts screen")
+	}
+	p, err := readNewPassword()
+	if err != nil {
+		return err
+	}
+	hash, err := HashPassword(p)
+	if err != nil {
+		return err
+	}
+	if err := models.UpdateAccountPassword(db, a.ID, hash); err != nil {
+		return err
+	}
+	_ = models.SetAccountDisabled(db, a.ID, false)
+	_ = models.DeleteAccountSessions(db, a.ID, "")
+	_ = models.DeleteCLICredentials(db, a.ID)
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: "root", Category: models.HistAccount, Action: "password_reset", Target: a.Name, Detail: "administrator recovered on the central host"})
+	fmt.Printf("Password of %q reset; the account is enabled and its sessions and CLI credential were invalidated.\n", a.Name)
+	return nil
+}
+
+// AgentCmd groups the agent's commands.
+type AgentCmd struct {
+	Init  AgentInitCmd  `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
+	Start AgentStartCmd `cmd:"" help:"Start the agent"`
+}
+
+// AgentInitCmd initializes the agent.
+type AgentInitCmd struct {
+	Server        string `help:"Central URL, e.g. https://central.example.com:8443" required:""`
+	Overwrite     bool   `help:"Replace an existing configuration"`
+	CAFingerprint string `name:"ca-fingerprint" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
+	Config        string `help:"Configuration file" default:"${agent_config}" type:"path"`
+}
+
+func (c *AgentInitCmd) Run() error {
+	return AgentInit(AgentInitOptions{
+		ServerURL: c.Server, Overwrite: c.Overwrite, CAFingerprint: c.CAFingerprint,
+		ConfigPath: c.Config, DataDir: DataDir(DefaultAgentDataDir),
+	})
+}
+
+// AgentStartCmd starts the agent.
+type AgentStartCmd struct {
+	Config string `help:"Configuration file" default:"${agent_config}" type:"path"`
+}
+
+func (c *AgentStartCmd) Run() error {
+	return AgentStart(c.Config, DataDir(DefaultAgentDataDir))
+}

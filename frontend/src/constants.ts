@@ -11,4 +11,9 @@ export const DEFAULT_LANG: Lang = SUPPORTED_LANGS[0];
 // localStorage key that remembers an explicitly chosen language. It is only
 // written when the user picks a language from the menu, so browser detection
 // keeps working for everyone else.
-export const LANG_STORAGE_KEY = 'develop_app.lang';
+export const LANG_STORAGE_KEY = 'mimamori.lang';
+
+// --- Accounts ---
+
+// Minimum password length enforced by the server.
+export const MIN_PASSWORD_LENGTH = 10;

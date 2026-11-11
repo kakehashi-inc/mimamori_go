@@ -4,7 +4,7 @@ import "io/fs"
 
 // Embedded filesystems are injected from package main at startup.
 //
-//   - MigrationsFS: root contains "app/migrations/*.sql" (goose migrations).
+//   - MigrationsFS: root contains "app/migrations/<schema>/*.sql" (goose migrations).
 //   - FrontendFS:   root contains "frontend/dist/**" (the built SPA).
 //
 // They are package-level variables (mirroring the StartServer pattern) so that

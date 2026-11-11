@@ -1,140 +1,97 @@
 package models
 
-import (
-	"database/sql"
-	"time"
+// Token statuses (derived, not stored).
+const (
+	TokenUnused  = "unused"
+	TokenActive  = "active"
+	TokenExpired = "expired"
+	TokenRevoked = "revoked"
 )
 
-// Token represents a row in the tokens table.
+// Token is a row of the tokens table: the credential of one agent. Only the
+// SHA-256 hash of the value is stored. PendingHash is the hash of the value
+// handed out by automatic renewal and not yet used by the agent.
 type Token struct {
-	ID         int64        `json:"-"`
-	Identifier string       `json:"identifier"`
-	Name       string       `json:"name"`
-	Token      string       `json:"token"`
-	IsDefault  bool         `json:"is_default"`
-	ExpiresAt  sql.NullTime `json:"-"`
-	CreatedAt  time.Time    `json:"-"`
+	ID               int64
+	Name             string
+	Hash             string
+	ExpiresAt        int64
+	PendingHash      string
+	PendingExpiresAt int64
+	RenewCounter     int
+	MachineID        string
+	BoundAt          int64
+	UsedAt           int64
+	LastSeenAt       int64
+	RevokedAt        int64
+	ReissuedAt       int64
+	RenewedAt        int64
+	CreatedAt        int64
+	CreatedBy        string
 }
 
-// IsExpired reports whether the token has an expiry that has already passed.
-func (t *Token) IsExpired() bool {
-	return t.ExpiresAt.Valid && t.ExpiresAt.Time.Before(time.Now())
-}
-
-// InsertToken creates a new token row.
-func InsertToken(db *sql.DB, t *Token) error {
-	res, err := db.Exec(
-		`INSERT INTO tokens (identifier, name, token, is_default, expires_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		t.Identifier, t.Name, t.Token, boolToInt(t.IsDefault), t.ExpiresAt, time.Now().UTC(),
-	)
-	if err != nil {
-		return err
-	}
-	id, err := res.LastInsertId()
-	if err == nil {
-		t.ID = id
-	}
-	return nil
-}
-
-// ListTokens returns all tokens ordered by creation time.
-func ListTokens(db *sql.DB) ([]*Token, error) {
-	rows, err := db.Query(
-		`SELECT id, identifier, name, token, is_default, expires_at, created_at
-		 FROM tokens ORDER BY created_at ASC, id ASC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var tokens []*Token
-	for rows.Next() {
-		t, err := scanToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, t)
-	}
-	return tokens, rows.Err()
-}
-
-// GetTokenByIdentifier returns the token with the given identifier.
-func GetTokenByIdentifier(db *sql.DB, identifier string) (*Token, error) {
-	row := db.QueryRow(
-		`SELECT id, identifier, name, token, is_default, expires_at, created_at
-		 FROM tokens WHERE identifier = ?`, identifier,
-	)
-	return scanToken(row)
-}
-
-// GetTokenByValue returns the token matching the given bearer token value.
-func GetTokenByValue(db *sql.DB, value string) (*Token, error) {
-	row := db.QueryRow(
-		`SELECT id, identifier, name, token, is_default, expires_at, created_at
-		 FROM tokens WHERE token = ?`, value,
-	)
-	return scanToken(row)
-}
-
-// GetDefaultToken returns the default token, or sql.ErrNoRows if none exists.
-func GetDefaultToken(db *sql.DB) (*Token, error) {
-	row := db.QueryRow(
-		`SELECT id, identifier, name, token, is_default, expires_at, created_at
-		 FROM tokens WHERE is_default = 1 ORDER BY id ASC LIMIT 1`,
-	)
-	return scanToken(row)
-}
-
-// CountTokens returns the number of tokens.
-func CountTokens(db *sql.DB) (int, error) {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM tokens`).Scan(&n)
-	return n, err
-}
-
-// SetDefaultToken marks the given identifier as the only default token.
-func SetDefaultToken(db *sql.DB, identifier string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE tokens SET is_default = 0`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE tokens SET is_default = 1 WHERE identifier = ?`, identifier); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// DeleteToken removes a token row by identifier. Deleting the default token
-// does not promote another one; the server creates a new default on its next
-// start.
-func DeleteToken(db *sql.DB, identifier string) error {
-	_, err := db.Exec(`DELETE FROM tokens WHERE identifier = ?`, identifier)
-	return err
-}
-
-// rowScanner abstracts *sql.Row and *sql.Rows.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
+const tokenCols = `id, name, hash, expires_at, pending_hash, pending_expires_at, renew_counter, machine_id, bound_at, used_at, last_seen_at, revoked_at, reissued_at, renewed_at, created_at, created_by`
 
 func scanToken(s rowScanner) (*Token, error) {
 	t := &Token{}
-	var isDefault int
-	if err := s.Scan(&t.ID, &t.Identifier, &t.Name, &t.Token, &isDefault, &t.ExpiresAt, &t.CreatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Name, &t.Hash, &t.ExpiresAt, &t.PendingHash, &t.PendingExpiresAt, &t.RenewCounter,
+		&t.MachineID, &t.BoundAt, &t.UsedAt, &t.LastSeenAt, &t.RevokedAt, &t.ReissuedAt, &t.RenewedAt, &t.CreatedAt, &t.CreatedBy); err != nil {
 		return nil, err
 	}
-	t.IsDefault = isDefault != 0
 	return t, nil
 }
 
-func boolToInt(b bool) int {
-	if b {
-		return 1
+// Status derives the token status at time now.
+func (t *Token) Status(now int64) string {
+	switch {
+	case t.RevokedAt > 0:
+		return TokenRevoked
+	case t.ExpiresAt <= now && (t.PendingHash == "" || t.PendingExpiresAt <= now):
+		return TokenExpired
+	case t.UsedAt == 0:
+		return TokenUnused
+	default:
+		return TokenActive
 	}
-	return 0
+}
+
+// InsertToken creates a token.
+func InsertToken(db Execer, t *Token) error {
+	t.CreatedAt = Now()
+	res, err := db.Exec(`INSERT INTO tokens (name, hash, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
+		t.Name, t.Hash, t.ExpiresAt, t.CreatedAt, t.CreatedBy)
+	if err != nil {
+		return err
+	}
+	t.ID, _ = res.LastInsertId()
+	return nil
+}
+
+// GetToken returns the token by id.
+func GetToken(db Execer, id int64) (*Token, error) {
+	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE id = ?`, id))
+}
+
+// GetTokenByName returns the token by name.
+func GetTokenByName(db Execer, name string) (*Token, error) {
+	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE name = ?`, name))
+}
+
+// FindTokenByHash returns the token whose current or pending value has hash.
+func FindTokenByHash(db Execer, hash string) (*Token, error) {
+	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ? OR (pending_hash <> '' AND pending_hash = ?)`, hash, hash))
+}
+
+// ListTokens returns all tokens ordered by name.
+func ListTokens(db Execer) ([]*Token, error) {
+	rows, err := db.Query(`SELECT ` + tokenCols + ` FROM tokens ORDER BY name`)
+	return collect(rows, err, scanToken)
+}
+
+// SaveToken writes every mutable column of the token.
+func SaveToken(db Execer, t *Token) error {
+	return execOne(db, `UPDATE tokens SET hash = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renew_counter = ?,
+		machine_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?, revoked_at = ?, reissued_at = ?, renewed_at = ? WHERE id = ?`,
+		t.Hash, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.MachineID, t.BoundAt, t.UsedAt,
+		t.LastSeenAt, t.RevokedAt, t.ReissuedAt, t.RenewedAt, t.ID)
 }

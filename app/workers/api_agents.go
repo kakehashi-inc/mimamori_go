@@ -1,0 +1,579 @@
+package workers
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"mimamori/app/models"
+	"mimamori/app/modules"
+)
+
+type tokenRefJSON struct {
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	Status    string  `json:"status"`
+	ExpiresAt *string `json:"expires_at"`
+}
+
+type agentRuleJSON struct {
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	AssignedVersion int    `json:"assigned_version"`
+	ReportedVersion *int   `json:"reported_version"`
+	LatestVersion   int    `json:"latest_version"`
+	Outdated        bool   `json:"outdated"`
+}
+
+type applyJSON struct {
+	Status   string   `json:"status"`
+	Message  string   `json:"message"`
+	Version  *int     `json:"version"`
+	At       *string  `json:"at"`
+	Warnings []string `json:"warnings"`
+}
+
+type agentSummaryJSON struct {
+	ID                 int64                 `json:"id"`
+	Kind               string                `json:"kind"`
+	DisplayName        string                `json:"display_name"`
+	Hostname           string                `json:"hostname"`
+	Token              *tokenRefJSON         `json:"token"`
+	LastReportAt       *string               `json:"last_report_at"`
+	SecondsSinceReport *int64                `json:"seconds_since_report"`
+	Rule               *agentRuleJSON        `json:"rule"`
+	Apply              applyJSON             `json:"apply"`
+	UnackedAlerts      int                   `json:"unacked_alerts"`
+	Auditd             *modules.AuditdStatus `json:"auditd"`
+	CAUpToDate         bool                  `json:"ca_up_to_date"`
+	BuiltinRunning     *bool                 `json:"builtin_running"`
+}
+
+type suggestionJSON struct {
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
+type agentDetailJSON struct {
+	agentSummaryJSON
+	HostInfo     *hostInfoJSON    `json:"host_info"`
+	Suggestions  []suggestionJSON `json:"suggestions"`
+	TokenHistory []historyJSON    `json:"token_history"`
+	DroppedTotal int64            `json:"dropped_total"`
+}
+
+// hostInfoJSON converts Unix times of modules.HostInfo for the API.
+type hostInfoJSON struct {
+	CollectedAt          *string                 `json:"collected_at"`
+	Hostname             string                  `json:"hostname"`
+	OSName               string                  `json:"os_name"`
+	OSVersion            string                  `json:"os_version"`
+	Kernel               string                  `json:"kernel"`
+	AgentVersion         string                  `json:"agent_version"`
+	Auditd               auditdJSON              `json:"auditd"`
+	Services             []modules.ServiceInfo   `json:"services"`
+	ScanBase             string                  `json:"scan_base"`
+	Directories          []modules.DirectoryInfo `json:"directories"`
+	DirectoriesTruncated bool                    `json:"directories_truncated"`
+	Rule                 *modules.RuleRef        `json:"rule"`
+	LastApply            applyJSON               `json:"last_apply"`
+	TrustedCAs           []trustedCAJSON         `json:"trusted_cas"`
+}
+
+type trustedCAJSON struct {
+	Fingerprint string  `json:"fingerprint"`
+	NotAfter    *string `json:"not_after"`
+}
+
+type affectedJSON struct {
+	PID       int     `json:"pid"`
+	Comm      string  `json:"comm"`
+	User      string  `json:"user"`
+	StartedAt *string `json:"started_at"`
+}
+
+type auditdJSON struct {
+	modules.AuditdStatus
+	AffectedProcesses []affectedJSON `json:"affected_processes"`
+	HaltActions       []string       `json:"halt_actions"`
+}
+
+func auditdOut(a modules.AuditdStatus) auditdJSON {
+	out := auditdJSON{AuditdStatus: a, AffectedProcesses: []affectedJSON{}, HaltActions: nonNil(a.HaltActions)}
+	for _, p := range a.AffectedProcesses {
+		out.AffectedProcesses = append(out.AffectedProcesses, affectedJSON{PID: p.PID, Comm: p.Comm, User: p.User, StartedAt: ts(p.StartedAt)})
+	}
+	return out
+}
+
+func applyOut(ap *modules.ApplyResult) applyJSON {
+	if ap == nil {
+		return applyJSON{Status: "none", Warnings: []string{}}
+	}
+	v := ap.Version
+	return applyJSON{Status: ap.Status, Message: ap.Message, Version: &v, At: ts(ap.At), Warnings: nonNil(ap.Warnings)}
+}
+
+// agentSummary builds the list entry of an agent.
+func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64]*models.Rule) agentSummaryJSON {
+	now := time.Now().Unix()
+	s := agentSummaryJSON{ID: a.ID, Kind: a.Kind, DisplayName: c.agentDisplayName(a), Hostname: a.Hostname,
+		LastReportAt: ts(a.LastReportAt)}
+	if a.LastReportAt > 0 {
+		d := now - a.LastReportAt
+		s.SecondsSinceReport = &d
+	}
+	if a.Kind == models.AgentBuiltin {
+		running, _ := c.builtinStatus()
+		s.BuiltinRunning = &running
+		if s.Hostname == "" {
+			s.Hostname = c.hostname
+		}
+		s.CAUpToDate = true
+	} else if a.TokenID.Valid {
+		if t, err := models.GetToken(c.db, a.TokenID.Int64); err == nil {
+			s.Token = &tokenRefJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt)}
+		}
+		var fps []string
+		_ = json.Unmarshal([]byte(a.CAFingerprints), &fps)
+		s.CAUpToDate = true
+		for _, fp := range latestCAs {
+			if !slices.Contains(fps, fp) {
+				s.CAUpToDate = false
+			}
+		}
+	}
+	if a.AssignedRuleID.Valid {
+		r := rules[a.AssignedRuleID.Int64]
+		if r == nil {
+			r, _ = models.GetRule(c.db, a.AssignedRuleID.Int64)
+		}
+		if r != nil {
+			ar := &agentRuleJSON{ID: r.ID, Name: r.Name, AssignedVersion: a.AssignedRuleVersion, LatestVersion: r.LatestVersion,
+				Outdated: a.AssignedRuleVersion != r.LatestVersion}
+			if a.ReportedRuleID == r.ID && a.ReportedRuleVersion > 0 {
+				v := a.ReportedRuleVersion
+				ar.ReportedVersion = &v
+			}
+			s.Rule = ar
+		}
+	}
+	s.Apply = applyJSON{Status: a.ApplyStatus, Message: a.ApplyMessage, At: ts(a.ApplyAt), Warnings: []string{}}
+	if a.ApplyVersion > 0 {
+		v := a.ApplyVersion
+		s.Apply.Version = &v
+	}
+	_ = json.Unmarshal([]byte(a.ApplyWarnings), &s.Apply.Warnings)
+	if s.Apply.Warnings == nil {
+		s.Apply.Warnings = []string{}
+	}
+	if a.AuditdJSON != "" {
+		var st modules.AuditdStatus
+		if json.Unmarshal([]byte(a.AuditdJSON), &st) == nil {
+			s.Auditd = &st
+			if st.AffectedProcesses == nil {
+				st.AffectedProcesses = []modules.AffectedProcess{}
+			}
+			if st.HaltActions == nil {
+				st.HaltActions = []string{}
+			}
+		}
+	}
+	if tdb, err := c.targetDB(a); err == nil {
+		s.UnackedAlerts, _ = models.CountUnackedAlerts(tdb)
+	}
+	return s
+}
+
+// latestCAFingerprints returns the CA fingerprints every agent should have.
+func (c *core) latestCAFingerprints() []string {
+	var out []string
+	for _, ca := range c.trustedCAs() {
+		if ca.Status == models.CertActive || ca.Status == models.CertNext {
+			out = append(out, ca.Fingerprint)
+		}
+	}
+	return out
+}
+
+func (c *core) rulesByID() map[int64]*models.Rule {
+	m := map[int64]*models.Rule{}
+	if list, err := models.ListRules(c.db); err == nil {
+		for _, r := range list {
+			m[r.ID] = r
+		}
+	}
+	return m
+}
+
+func (c *core) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	list, err := models.ListAgents(c.db)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	cas := c.latestCAFingerprints()
+	rules := c.rulesByID()
+	out := make([]agentSummaryJSON, 0, len(list))
+	for _, a := range list {
+		out = append(out, c.agentSummary(a, cas, rules))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (c *core) loadAgent(w http.ResponseWriter, r *http.Request, name string) *models.Agent {
+	id, ok := pathID(r, name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return nil
+	}
+	a, err := models.GetAgent(c.db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return nil
+	}
+	if err != nil {
+		c.internalError(w, r, err)
+		return nil
+	}
+	return a
+}
+
+func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
+	a := c.loadAgent(w, r, "id")
+	if a == nil {
+		return
+	}
+	out := agentDetailJSON{agentSummaryJSON: c.agentSummary(a, c.latestCAFingerprints(), c.rulesByID()),
+		Suggestions: []suggestionJSON{}, TokenHistory: []historyJSON{}, DroppedTotal: a.DroppedTotal}
+	var hi *modules.HostInfo
+	if tdb, err := c.targetDB(a); err == nil {
+		if rep, err := models.LatestHostReport(tdb); err == nil {
+			var h modules.HostInfo
+			if json.Unmarshal([]byte(rep.HostInfo), &h) == nil {
+				hi = &h
+			}
+		}
+	}
+	if hi != nil {
+		hj := &hostInfoJSON{CollectedAt: ts(hi.CollectedAt), Hostname: hi.Hostname, OSName: hi.OSName, OSVersion: hi.OSVersion,
+			Kernel: hi.Kernel, AgentVersion: hi.AgentVersion, Auditd: auditdOut(hi.Auditd), Services: nonNil(hi.Services),
+			ScanBase: hi.ScanBase, Directories: nonNil(hi.Directories), DirectoriesTruncated: hi.DirectoriesTruncated,
+			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}}
+		for _, t := range hi.TrustedCAs {
+			hj.TrustedCAs = append(hj.TrustedCAs, trustedCAJSON{Fingerprint: t.Fingerprint, NotAfter: ts(t.NotAfter)})
+		}
+		out.HostInfo = hj
+		out.Suggestions = c.suggestions(a, hi)
+	}
+	name := out.DisplayName
+	if a.Kind == models.AgentToken {
+		items, _, err := models.ListHistory(c.db, models.HistToken, name, 100, 0)
+		if err == nil {
+			for _, h := range items {
+				out.TokenHistory = append(out.TokenHistory, historyOut(h))
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// suggestions proposes rule additions from the reported host information:
+// service users not in the rule, Laravel-like writable directories and
+// configuration directories of running services.
+func (c *core) suggestions(a *models.Agent, hi *modules.HostInfo) []suggestionJSON {
+	var content *modules.RuleContent
+	if a.AssignedRuleID.Valid {
+		if ra, err := c.ruleAssignment(a.AssignedRuleID.Int64, a.AssignedRuleVersion); err == nil {
+			content = &ra.Content
+		}
+	}
+	if content == nil {
+		content = &modules.RuleContent{}
+	}
+	out := []suggestionJSON{}
+	seen := map[string]bool{}
+	add := func(kind, value, reason string) {
+		k := kind + "\x00" + value
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, suggestionJSON{Kind: kind, Value: value, Reason: reason})
+	}
+	users := map[string]bool{}
+	for _, u := range content.Users {
+		users[u.Value] = true
+	}
+	for _, s := range hi.Services {
+		for _, u := range s.Users {
+			if u == "root" || users[u] {
+				continue
+			}
+			add("user", u, "runs "+s.Process+" ("+s.Software+")")
+		}
+	}
+	if content.Writable.Base == "" && hi.ScanBase != "" {
+		add("scan_base", hi.ScanBase, "default scan origin")
+	}
+	allowed := map[string]bool{}
+	for _, p := range content.Writable.AllowedPaths {
+		allowed[p] = true
+	}
+	for _, d := range hi.Directories {
+		base := filepath.Base(d.Path)
+		parent := filepath.Base(filepath.Dir(d.Path))
+		switch {
+		case base == "storage" && !allowed["storage"]:
+			add("allowed_path", "storage", "directory "+d.Path+" owned by "+d.Owner)
+		case base == "cache" && parent == "bootstrap" && !allowed["bootstrap/cache"]:
+			add("allowed_path", "bootstrap/cache", "directory "+d.Path+" owned by "+d.Owner)
+		case (base == "uploads" || base == "upload" || base == "tmp" || base == "cache" || base == "logs") && !allowed[base] && d.Depth >= 2:
+			add("allowed_path", base, "directory "+d.Path+" owned by "+d.Owner)
+		}
+	}
+	dirs := map[string]bool{}
+	for _, d := range content.Read.Dirs {
+		dirs[d.Value] = true
+	}
+	confDirs := map[string][]string{
+		"apache": {"/etc/httpd", "/etc/apache2"}, "nginx": {"/etc/nginx"},
+		"php-fpm": {"/etc/php-fpm.d", "/etc/php", "/etc/opt/remi"},
+	}
+	for _, s := range hi.Services {
+		for _, d := range confDirs[s.Software] {
+			if !dirs[d] {
+				add("read_dir", d, "configuration of "+s.Software+" (added as ignore-if-missing)")
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// --- tokens ---
+
+type tokenJSON struct {
+	ID                  int64   `json:"id"`
+	Name                string  `json:"name"`
+	Status              string  `json:"status"`
+	ExpiresAt           *string `json:"expires_at"`
+	CreatedAt           *string `json:"created_at"`
+	CreatedBy           string  `json:"created_by"`
+	LastSeenAt          *string `json:"last_seen_at"`
+	MachineID           string  `json:"machine_id"`
+	BoundAt             *string `json:"bound_at"`
+	ReissuedAt          *string `json:"reissued_at"`
+	RenewedAt           *string `json:"renewed_at"`
+	PendingRenewal      bool    `json:"pending_renewal"`
+	ExpiringUnconnected bool    `json:"expiring_unconnected"`
+	AgentID             int64   `json:"agent_id"`
+}
+
+func (c *core) tokenOut(t *models.Token) tokenJSON {
+	now := time.Now().Unix()
+	out := tokenJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
+		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), MachineID: t.MachineID, BoundAt: ts(t.BoundAt),
+		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
+	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
+		near := t.ExpiresAt-now < int64(c.cfg.TokenRenewBeforeDays)*86400
+		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.cfg.DefaultCheckIntervalSec)+600
+		out.ExpiringUnconnected = near && stale
+	}
+	if a, err := models.GetAgentByToken(c.db, t.ID); err == nil {
+		out.AgentID = a.ID
+	}
+	return out
+}
+
+func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
+	list, err := models.ListTokens(c.db)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	out := make([]tokenJSON, 0, len(list))
+	for _, t := range list {
+		out = append(out, c.tokenOut(t))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusNotFound, "token not found")
+		return nil
+	}
+	t, err := models.GetToken(c.db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "token not found")
+		return nil
+	}
+	if err != nil {
+		c.internalError(w, r, err)
+		return nil
+	}
+	return t
+}
+
+func (c *core) handleGetToken(w http.ResponseWriter, r *http.Request) {
+	if t := c.loadToken(w, r); t != nil {
+		writeJSON(w, http.StatusOK, c.tokenOut(t))
+	}
+}
+
+func (c *core) validDays(v *int) (int, error) {
+	if v == nil || *v == 0 {
+		return c.cfg.TokenValidDays, nil
+	}
+	if *v < 1 || *v > 3650 {
+		return 0, errors.New("valid_days must be between 1 and 3650")
+	}
+	return *v, nil
+}
+
+func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name        string `json:"name"`
+		ValidDays   *int   `json:"valid_days"`
+		RuleID      *int64 `json:"rule_id"`
+		RuleVersion *int   `json:"rule_version"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	if !tokenNameRe.MatchString(in.Name) {
+		writeError(w, http.StatusBadRequest, "token name must be 1-64 characters of A-Z a-z 0-9 . _ -")
+		return
+	}
+	days, err := c.validDays(in.ValidDays)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	agent := &models.Agent{Kind: models.AgentToken}
+	if in.RuleID != nil && *in.RuleID > 0 {
+		rule, err := models.GetRule(c.db, *in.RuleID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "rule not found")
+			return
+		}
+		ver := rule.LatestVersion
+		if in.RuleVersion != nil && *in.RuleVersion > 0 {
+			ver = *in.RuleVersion
+		}
+		if _, err := models.GetRuleVersion(c.db, rule.ID, ver); err != nil {
+			writeError(w, http.StatusBadRequest, "rule version not found")
+			return
+		}
+		agent.AssignedRuleID = sql.NullInt64{Int64: rule.ID, Valid: true}
+		agent.AssignedRuleVersion = ver
+		agent.AssignedAt = time.Now().Unix()
+	}
+	value, err := modules.GenerateSecret(modules.TokenPrefix)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	p := principalFrom(r)
+	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.Name}
+	if err := models.InsertToken(c.db, tok); err != nil {
+		if isUniqueErr(err) {
+			writeError(w, http.StatusConflict, "a token with this name already exists")
+			return
+		}
+		c.internalError(w, r, err)
+		return
+	}
+	agent.TokenID = sql.NullInt64{Int64: tok.ID, Valid: true}
+	if err := c.createAgent(agent); err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	detail := "expires " + time.Unix(tok.ExpiresAt, 0).UTC().Format(time.RFC3339)
+	if agent.AssignedRuleID.Valid {
+		detail += "; rule id " + itoa64(agent.AssignedRuleID.Int64) + " version " + itoa(agent.AssignedRuleVersion)
+	}
+	c.history(p, models.HistToken, "issued", tok.Name, detail)
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(tok), "value": value})
+}
+
+func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
+	t := c.loadToken(w, r)
+	if t == nil {
+		return
+	}
+	var in struct {
+		ValidDays *int `json:"valid_days"`
+	}
+	if r.ContentLength != 0 {
+		if err := readJSON(r, &in); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	days, err := c.validDays(in.ValidDays)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	value, err := modules.GenerateSecret(modules.TokenPrefix)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	now := time.Now().Unix()
+	// Every previous value (current and pending renewal) stops working.
+	t.Hash = modules.HashSecret(value)
+	t.ExpiresAt = now + int64(days)*86400
+	t.PendingHash, t.PendingExpiresAt = "", 0
+	t.UsedAt, t.RevokedAt, t.ReissuedAt = 0, 0, now
+	if err := models.SaveToken(c.db, t); err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, "previous values invalidated; expires "+time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(t), "value": value})
+}
+
+func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
+	t := c.loadToken(w, r)
+	if t == nil {
+		return
+	}
+	prev := t.MachineID
+	t.MachineID, t.BoundAt = "", 0
+	if err := models.SaveToken(c.db, t); err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, "machine binding removed (was "+prev+")")
+	writeJSON(w, http.StatusOK, c.tokenOut(t))
+}
+
+func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	t := c.loadToken(w, r)
+	if t == nil {
+		return
+	}
+	if t.RevokedAt == 0 {
+		t.RevokedAt = time.Now().Unix()
+		t.PendingHash, t.PendingExpiresAt = "", 0
+		if err := models.SaveToken(c.db, t); err != nil {
+			c.internalError(w, r, err)
+			return
+		}
+		c.history(principalFrom(r), models.HistToken, "revoked", t.Name, "")
+	}
+	writeJSON(w, http.StatusOK, c.tokenOut(t))
+}

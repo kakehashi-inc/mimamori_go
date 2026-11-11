@@ -27,6 +27,24 @@ export default {
           DEFAULT: "light-dark(#4f46e5, #818cf8)",
           hover: "light-dark(#4338ca, #a5b4fc)",
           contrast: "light-dark(#ffffff, #0b0f17)",
+          // Tinted background for selected rows and informational notes.
+          soft: "light-dark(#eef2ff, #1e1b4b)",
+        },
+        // Status colors: text/icon color and a tinted background for badges,
+        // alerts and diff lines.
+        danger: {
+          DEFAULT: "light-dark(#dc2626, #f87171)",
+          hover: "light-dark(#b91c1c, #fca5a5)",
+          contrast: "light-dark(#ffffff, #0b0f17)",
+          soft: "light-dark(#fef2f2, #2a1215)",
+        },
+        warning: {
+          DEFAULT: "light-dark(#b45309, #fbbf24)",
+          soft: "light-dark(#fffbeb, #2a2010)",
+        },
+        success: {
+          DEFAULT: "light-dark(#15803d, #4ade80)",
+          soft: "light-dark(#f0fdf4, #0f2417)",
         },
       },
     },

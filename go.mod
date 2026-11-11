@@ -1,4 +1,4 @@
-module develop_app
+module mimamori
 
 go 1.27.3
 

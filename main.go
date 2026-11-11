@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
+	"syscall"
 
-	"develop_app/app/modules"
-	_ "develop_app/app/workers" // registers modules.StartServer via init()
+	"mimamori/app/modules"
+	_ "mimamori/app/workers" // registers modules.StartCentral via init()
 
 	"github.com/alecthomas/kong"
 )
@@ -16,12 +16,13 @@ import (
 var version = "dev"
 
 // CLI defines the top-level command structure. Startup parameter parsing lives
-// here; the commands themselves are implemented in app/modules/cli.go.
+// here; the commands themselves are implemented in app/modules.
 type CLI struct {
-	DataDir string `help:"Data directory (default: <executable dir>/data)" name:"data-dir" type:"path" placeholder:"DIR"`
+	DataDir string `help:"Data directory (default: /var/lib/mimamori/central for the central, /var/lib/mimamori/agent for the agent)" name:"data-dir" type:"path" placeholder:"DIR"`
 
-	Token   modules.TokenCmd   `cmd:"" help:"Manage access tokens"`
-	Service modules.ServiceCmd `cmd:"" help:"Manage the API + Web server"`
+	Central modules.CentralCmd `cmd:"" help:"Central service and its local administration"`
+	Agent   modules.AgentCmd   `cmd:"" help:"Agent initialization and service"`
+	Ctl     modules.CtlCmd     `cmd:"" help:"Management commands (run on the central host; uses the management API on the loopback address)"`
 	Version VersionCmd         `cmd:"" help:"Show version"`
 }
 
@@ -34,6 +35,10 @@ func (v *VersionCmd) Run() error {
 }
 
 func main() {
+	// Files created by this program (databases, configuration, keys) must not
+	// be readable by other users.
+	syscall.Umask(0o077)
+
 	// Wire binary-embedded assets into the modules package.
 	modules.MigrationsFS = migrationsFS
 	modules.FrontendFS = frontendFS
@@ -42,20 +47,17 @@ func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
 		kong.Name(modules.AppName),
-		kong.Description("Develop App: Web server with an embedded SPA and a SQLite database."),
+		kong.Description("mimamori: detects and reports operations performed by selected OS users on each host."),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
-		// Defaults are referenced from constants so help text never drifts.
 		kong.Vars{
-			"default_api_listen": modules.DefaultApiListenAddr,
-			"default_web_listen": modules.DefaultWebListenAddr,
-			"default_api_port":   strconv.Itoa(modules.DefaultApiPort),
-			"default_web_port":   strconv.Itoa(modules.DefaultWebPort),
+			"central_config": modules.DefaultCentralConfigFile,
+			"agent_config":   modules.DefaultAgentConfigFile,
 		},
 	)
 	modules.SetDataDir(cli.DataDir)
 
-	err := ctx.Run()
+	err := ctx.Run(&cli.Ctl)
 	if err != nil {
 		var exitErr *modules.ExitError
 		if errors.As(err, &exitErr) {

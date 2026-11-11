@@ -2,7 +2,7 @@ package main
 
 import "embed"
 
-//go:embed app/migrations/*.sql
+//go:embed app/migrations/*/*.sql
 var migrationsFS embed.FS
 
 //go:embed all:frontend/dist

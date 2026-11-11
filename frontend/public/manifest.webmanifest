@@ -1,6 +1,6 @@
 {
-    "name": "Develop App",
-    "short_name": "Develop App",
+    "name": "mimamori",
+    "short_name": "mimamori",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#f8fafc",

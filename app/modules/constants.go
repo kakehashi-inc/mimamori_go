@@ -5,46 +5,128 @@ import "time"
 // --- Application ---
 
 const (
-	// AppName is the executable name, also used as the CLI name and in status
-	// output. Replace "develop_app" when starting a project from this template.
-	AppName = "develop_app"
-	// DBFileName is the SQLite database file created inside the data directory.
-	DBFileName = "develop_app.db"
+	// AppName is the executable name, also used as the CLI name.
+	AppName = "mimamori"
+	// BuiltinAgentName is the fixed display name of the built-in agent (the
+	// central host monitoring itself).
+	BuiltinAgentName = "(central)"
+	// AuditKey is the auditd rule key attached to every rule this system loads.
+	// Only rules carrying this key are added, replaced or removed by the agent.
+	AuditKey = "mimamori"
+	// AuditRulesFile holds the persistent copy of the generated rules so that
+	// they are reloaded by augenrules at boot. It never edits other files.
+	AuditRulesFile = "/etc/audit/rules.d/99-mimamori.rules"
+	// AuditdConfFile is read (never written) to warn about halting actions.
+	AuditdConfFile = "/etc/audit/auditd.conf"
+	// MachineIDFile identifies the host a token is bound to.
+	MachineIDFile = "/etc/machine-id"
 )
 
-// --- Token ---
+// --- Default paths ---
 
 const (
-	// TokenPrefix is prepended to the random part of every bearer token.
-	TokenPrefix = "dap_"
-	// TokenRandomBytes is the number of random bytes (hex-encoded) in a token.
-	TokenRandomBytes = 20 // -> 40 hex chars, full token "dap_" + 40 = 44 chars
+	DefaultConfigDir          = "/etc/mimamori"
+	DefaultCentralConfigFile  = "/etc/mimamori/central.json"
+	DefaultAgentConfigFile    = "/etc/mimamori/agent.json"
+	DefaultCLIConfigFile      = "/etc/mimamori/cli.json"
+	DefaultCentralDataDir     = "/var/lib/mimamori/central"
+	DefaultAgentDataDir       = "/var/lib/mimamori/agent"
+	CentralDBFileName         = "central.db"
+	AgentLocalDBFileName      = "agent.db"
+	BuiltinAgentLocalDBName   = "builtin-agent.db"
+	TargetDBDirName           = "targets"
+	CentralLockFileName       = "central.lock"
+	AgentLockFileName         = "agent.lock"
+	CABundleFileName          = "ca.crt"
+	EnvCLIURL                 = "MIMAMORI_URL"
+	EnvCLIKey                 = "MIMAMORI_CLI_KEY"
+	EnvCLICAFile              = "MIMAMORI_CA_FILE"
+	EnvCLIConfig              = "MIMAMORI_CLI_CONFIG"
+	DefaultCLIURL             = "https://127.0.0.1:8443"
+	DefaultWebListen          = "0.0.0.0:8080"
+	DefaultAgentListen        = "0.0.0.0:8443"
+	DefaultAgentPort          = 8443
+	DefaultScanBase           = "/opt"
+	DefaultCheckIntervalSec   = 60
+	DefaultScanIntervalSec    = 3600
+	DefaultTokenValidDays     = 365
+	DefaultTokenRenewDays     = 30
+	DefaultRetentionDays      = 180
+	DefaultNotifyIntervalMin  = 30
+	DefaultNotifyDedupeHours  = 24
+	DefaultNotifyMaxLines     = 200
+	DefaultWorkers            = 1
+	DefaultQueueTimeoutSec    = 10
+	DefaultSessionHours       = 12
+	DefaultSMTPTimeoutSec     = 30
+	DefaultCommandTimeoutSec  = 60
+	DefaultHTTPTimeoutSec     = 30
+	DefaultOutboxMaxDetection = 10000
 )
 
-// --- Server defaults ---
+// --- Secrets ---
 
 const (
-	// The API and Web servers have independent listen addresses.
-	DefaultApiListenAddr = "0.0.0.0"
-	DefaultWebListenAddr = "0.0.0.0"
-	DefaultApiPort       = 8081 // API port (JSON API + local control endpoints)
-	DefaultWebPort       = 8080 // Web UI port (SPA)
-	// ReadHeaderTimeout bounds how long a client may take to send its request
-	// headers (protects the servers from slowloris-style connections).
-	ReadHeaderTimeout = 10 * time.Second
-	// ShutdownGraceTimeout bounds how long a graceful shutdown waits for the HTTP
-	// servers to drain in-flight requests before giving up.
-	ShutdownGraceTimeout = 5 * time.Second
+	// TokenPrefix marks agent tokens, CLIKeyPrefix marks CLI credentials and
+	// SessionPrefix marks browser session ids.
+	TokenPrefix   = "mmr_"
+	CLIKeyPrefix  = "mmc_"
+	SessionPrefix = "mms_"
+	// SecretRandomBytes is the number of random bytes in every secret value.
+	SecretRandomBytes = 32
 )
 
-// --- Settings keys ---
-//
-// Keys of the settings table. A key is stored only when its value differs from
-// the code default, so a later change to a default takes effect on its own.
+// --- Server ---
 
 const (
-	SettingApiListen = "api_listen"
-	SettingWebListen = "web_listen"
-	SettingApiPort   = "api_port"
-	SettingWebPort   = "web_port"
+	// ConnHeaderTimeout bounds TLS handshake and request header reading.
+	ConnHeaderTimeout = 10 * time.Second
+	// ConnTotalTimeout bounds one whole request (read, handle, write).
+	ConnTotalTimeout = 60 * time.Second
+	// MaxRequestBody limits a request body (agent reports are the largest).
+	MaxRequestBody = 32 << 20
+	// AcceptPollInterval is how long one listener is polled before the next.
+	AcceptPollInterval = 20 * time.Millisecond
+	// MaxPendingConns bounds connections accepted but not yet handled.
+	MaxPendingConns = 256
+	// PeriodicTick is the interval of the central periodic tasks.
+	PeriodicTick = 30 * time.Second
+	// LoginMaxFailures and LoginLockDuration implement the login lockout.
+	LoginMaxFailures  = 5
+	LoginLockDuration = 15 * time.Minute
+	// MinPasswordLength is the minimum length of account passwords.
+	MinPasswordLength = 10
+	// PasswordIterations is the PBKDF2-SHA256 iteration count.
+	PasswordIterations = 600000
+)
+
+// --- Certificates ---
+
+const (
+	CAValidity            = 5 * 365 * 24 * time.Hour
+	CARotateBefore        = 180 * 24 * time.Hour // create the next CA this long before expiry
+	CASwitchAfter         = 30 * 24 * time.Hour  // switch the server certificate this long after
+	ServerCertValidity    = 397 * 24 * time.Hour
+	ServerCertRenewBefore = 30 * 24 * time.Hour
+)
+
+// --- Rules ---
+
+const (
+	MaxRuleElements   = 200
+	MaxExtensions     = 50
+	MinCheckInterval  = 10
+	MaxCheckInterval  = 3600
+	MinScanInterval   = 60
+	MaxScanInterval   = 7 * 24 * 3600
+	MaxTargetLength   = 512
+	MaxDetectionsSend = 5000
+	// AuditBacklogLimit is the backlog size the agent sets (-b).
+	AuditBacklogLimit = 8192
+	// MaxScanEntries bounds the number of entries one scan visits.
+	MaxScanEntries = 2000000
+	// MaxDirectoryEntries bounds the reported directory structure.
+	MaxDirectoryEntries = 300
+	// DirectoryDepth is the depth of the reported directory structure.
+	DirectoryDepth = 3
 )
