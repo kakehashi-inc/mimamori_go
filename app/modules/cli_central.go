@@ -14,6 +14,8 @@ import (
 // CentralCmd groups the central's commands.
 type CentralCmd struct {
 	Start         CentralStartCmd         `cmd:"" help:"Start the central (browser screens, agent API, management API and the built-in agent)"`
+	Stop          CentralStopCmd          `cmd:"" help:"Stop the running central (sends SIGTERM and waits until it has stopped)"`
+	Status        CentralStatusCmd        `cmd:"" help:"Show whether the central is running (exit code 3 when it is not)"`
 	InitAdmin     CentralInitAdminCmd     `cmd:"" name:"init-admin" help:"Create the first administrator (only while no administrator exists; run as root on the central host)"`
 	ResetPassword CentralResetPasswordCmd `cmd:"" name:"reset-password" help:"Reset an administrator's password (run as root on the central host)"`
 	ExampleConfig CentralExampleConfigCmd `cmd:"" name:"example-config" help:"Print an example configuration file"`
@@ -152,8 +154,10 @@ func (c *CentralResetPasswordCmd) Run() error {
 
 // AgentCmd groups the agent's commands.
 type AgentCmd struct {
-	Init  AgentInitCmd  `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
-	Start AgentStartCmd `cmd:"" help:"Start the agent"`
+	Init   AgentInitCmd   `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
+	Start  AgentStartCmd  `cmd:"" help:"Start the agent"`
+	Stop   AgentStopCmd   `cmd:"" help:"Stop the running agent (sends SIGTERM and waits until it has finished its cycle)"`
+	Status AgentStatusCmd `cmd:"" help:"Show whether the agent is running and its state (exit code 3 when it is not)"`
 }
 
 // AgentInitCmd initializes the agent.

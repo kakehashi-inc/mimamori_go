@@ -54,6 +54,8 @@ mimamori は、各ホストで指定した OS のユーザー（Web サーバー
     sudo mimamori agent start
     ```
 
+    停止と状態の確認は `sudo mimamori central stop` / `sudo mimamori central status`、エージェントは `sudo mimamori agent stop` / `sudo mimamori agent status` です（supervisor などから常駐させる場合は SIGTERM で終了します）。
+
 4. 必要に応じて、セントラルのホストで CLI を使います（CLI 用の認証情報はアカウントの画面で発行します）。
 
     ```bash

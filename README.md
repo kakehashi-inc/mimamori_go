@@ -54,6 +54,8 @@ mimamori detects operations performed with the privileges of selected OS users o
     sudo mimamori agent start
     ```
 
+    Stop them and check their state with `sudo mimamori central stop` / `sudo mimamori central status` and `sudo mimamori agent stop` / `sudo mimamori agent status` (under a supervisor, SIGTERM stops them).
+
 4. Use the CLI on the central host when needed (issue a CLI credential on the accounts screen).
 
     ```bash

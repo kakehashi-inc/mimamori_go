@@ -61,7 +61,11 @@ func main() {
 	if err != nil {
 		var exitErr *modules.ExitError
 		if errors.As(err, &exitErr) {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", exitErr.Message)
+			// An empty message only sets the exit code (for example "status"
+			// of a service that is not running, which is not an error).
+			if exitErr.Message != "" {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", exitErr.Message)
+			}
 			os.Exit(exitErr.Code)
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

@@ -51,3 +51,10 @@ func OutboxDetectionCount(db Execer) int {
 	_ = db.QueryRow(`SELECT COALESCE(SUM(alert_count + normal_count), 0) FROM outbox`).Scan(&n)
 	return n
 }
+
+// CountOutbox returns the number of queued reports.
+func CountOutbox(db Execer) int {
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&n)
+	return n
+}

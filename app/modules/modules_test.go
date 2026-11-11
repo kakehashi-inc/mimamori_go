@@ -335,3 +335,28 @@ func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
 		})
 	}
 }
+
+func TestLockHolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.lock")
+	if _, running, err := LockHolder(path); err != nil || running {
+		t.Fatalf("missing lock file: running=%v err=%v", running, err)
+	}
+	l, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, running, err := LockHolder(path)
+	if err != nil || !running || pid != os.Getpid() {
+		t.Fatalf("held lock: pid=%d running=%v err=%v", pid, running, err)
+	}
+	if _, err := AcquireLock(path); err == nil {
+		t.Fatal("a second instance must not get the lock")
+	}
+	l.Release()
+	if _, running, _ := LockHolder(path); running {
+		t.Fatal("released lock still reported as running")
+	}
+	if st := ProcessStartTime(os.Getpid()); st.IsZero() || time.Since(st) < 0 {
+		t.Fatalf("start time %v", st)
+	}
+}
