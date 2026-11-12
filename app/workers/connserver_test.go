@@ -391,8 +391,11 @@ func TestConnServerFullQueueOfBodiesAndReaders(t *testing.T) {
 			held = append(held, c)
 		}
 		time.Sleep(500 * time.Millisecond)
+		// A connection is dropped only after EvictGrace in its state (the
+		// readers' responses may have been finished late under -race), so
+		// a new client may wait that long in the backlog.
 		for i := 0; i < 3; i++ {
-			ts.checkFast(t, time.Second, "with a table full of waiting bodies and readers")
+			ts.checkFast(t, modules.EvictGrace+time.Second, "with a table full of waiting bodies and readers")
 		}
 		// Each further connection evicts the oldest: the remaining readers
 		// of a large response (closed; the kernel still sends what it
@@ -404,7 +407,7 @@ func TestConnServerFullQueueOfBodiesAndReaders(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		ts.checkFast(t, time.Second, "after the readers were dropped")
+		ts.checkFast(t, modules.EvictGrace+time.Second, "after the readers were dropped")
 		if line := statusLine(held[readers], 5*time.Second); !strings.Contains(line, " 503 ") {
 			t.Fatalf("oldest large-body connection: %q, want 503", line)
 		}
@@ -1286,4 +1289,30 @@ func TestConnServerUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+// A table full of connections that may already be evicted does not make
+// the accepting flow spin: the listeners stay in the poll set, so ppoll
+// waits for a new connection (or the next deadline) instead of returning
+// at once. Only a future eviction time shortens the wait.
+func TestPollTimeoutFullTableDoesNotSpin(t *testing.T) {
+	s := newConnServer(nil, 2, 10*time.Second, log.New(io.Discard, "", 0))
+	now := time.Now()
+	for i := 0; i < modules.MaxPendingConns; i++ {
+		s.conns = append(s.conns, &conn{state: stateRequest, stateAt: now.Add(-2 * modules.EvictGrace), deadline: now.Add(5 * time.Second)})
+	}
+	if !s.hasRoom(now) {
+		t.Fatal("a full table of evictable connections has no room")
+	}
+	if d := s.pollTimeout(now); d < modules.LoopWakeInterval {
+		t.Fatalf("pollTimeout = %v with every connection evictable already, want %v", d, modules.LoopWakeInterval)
+	}
+	s.conns[0].stateAt = now.Add(-modules.EvictGrace + 100*time.Millisecond)
+	if d := s.pollTimeout(now); d <= 0 || d > 150*time.Millisecond {
+		t.Fatalf("pollTimeout = %v with one connection evictable in 100 ms", d)
+	}
+	s.conns[1].state, s.conns[1].stateAt = stateDraining, now.Add(-time.Second)
+	if d := s.pollTimeout(now); d <= 0 {
+		t.Fatalf("pollTimeout = %v with a draining connection in a full table", d)
+	}
 }

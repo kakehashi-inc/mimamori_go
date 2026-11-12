@@ -426,7 +426,10 @@ func (s *connServer) pollTimeout(now time.Time) time.Duration {
 		if until := c.deadline.Sub(now) + time.Millisecond; until < d {
 			d = until
 		}
-		if at, ok := c.evictableAt(); full && ok {
+		// A connection that may be evicted already keeps the listeners in
+		// the poll set (hasRoom), so only a future eviction time is a
+		// reason to wake (otherwise the loop would spin).
+		if at, ok := c.evictableAt(); full && ok && at.After(now) {
 			d = min(d, at.Sub(now)+time.Millisecond)
 		}
 	}
@@ -485,9 +488,12 @@ func (s *connServer) collect() {
 // acceptAll takes every connection waiting on a listener that ppoll
 // reported ready, so that the time a connection waits is counted from its
 // arrival. It stops when the table is full and no connection may be
-// evicted; the rest wait in the kernel's backlog until there is room.
+// evicted; the rest wait in the kernel's backlog until there is room. It
+// also stops after listenBacklog connections, so that a source whose
+// connections are closed at once (refused after a stalled handshake) and
+// that keeps connecting cannot hold the accepting flow here.
 func (s *connServer) acceptAll(sp *listenerSpec, now time.Time) {
-	for first := true; first || pollReady(sp.fd); first = false {
+	for n := 0; n < listenBacklog && (n == 0 || pollReady(sp.fd)); n++ {
 		if !s.makeRoom(now) || !s.accept(sp, now) {
 			return
 		}

@@ -210,3 +210,59 @@ func TestClearStoredRuleRestoresGlobals(t *testing.T) {
 		t.Fatal("cleared twice")
 	}
 }
+
+// The record survives what happens between the first application and the
+// removal: a later application while nothing of this system is loaded (for
+// example after "auditctl -D") does not replace it with the values this
+// system set, and "agent init --overwrite" keeps it, so the removal after
+// it still sets back the values from before the first application, once.
+func TestAuditGlobalsKeptAcrossReapplyAndReinit(t *testing.T) {
+	state, _ := fakeAuditctl(t, "1", nil)
+	rt, done := openAgentDB(t)
+	defer done()
+	record := func(g AuditGlobals) error { return recordAuditGlobals(rt.DB, g) }
+	if _, err := ApplyAuditRules([]string{ownConnectRule}, record); err != nil {
+		t.Fatal(err)
+	}
+	// The loaded rules and the rules file disappear; the settings stay.
+	if err := os.WriteFile(state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(auditRulesFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyAuditRules([]string{ownConnectRule}, record); err != nil {
+		t.Fatal(err)
+	}
+	if g := storedAuditGlobals(rt.DB); g == nil || *g != fakeOriginalGlobals {
+		t.Fatalf("the record must keep the values from before the first application: %+v", g)
+	}
+
+	// agent init --overwrite between the application and the removal.
+	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
+	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	if err := resetStoredRule(rt.DB); err != nil {
+		t.Fatal(err)
+	}
+	if g := storedAuditGlobals(rt.DB); g == nil || *g != fakeOriginalGlobals {
+		t.Fatalf("agent init must keep the record: %+v", g)
+	}
+
+	// The next sync has no rule: the runtime as it starts after the init.
+	rt2 := NewAgentRuntime(rt.DB, &fakeTransport{fail: true}, nil)
+	rt2.removeRule()
+	if got := globalsFromFake(t); got != fakeOriginalGlobals || readFile(t, state) != "" {
+		t.Fatalf("settings after the removal: %+v", got)
+	}
+	if storedAuditGlobals(rt.DB) != nil {
+		t.Fatal("the record must be forgotten")
+	}
+	// Set back once: a later check changes nothing.
+	if err := os.WriteFile(fakeSettings(state), []byte("failure 1\nbacklog_limit 999\nbacklog_wait_time 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt2.removeRule()
+	if got := globalsFromFake(t); got != (AuditGlobals{BacklogLimit: 999, BacklogWaitTime: 1, Failure: 1}) {
+		t.Fatalf("the settings were set back twice: %+v", got)
+	}
+}
