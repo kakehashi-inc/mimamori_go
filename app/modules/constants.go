@@ -88,9 +88,10 @@ const (
 	// ConnHeaderTimeout bounds the TLS handshake and the reading of the
 	// request head after a connection was handed to a worker. A connection is
 	// handed over only when it has sent data (for plain HTTP: the complete
-	// head), so this only has to cover the rest of the handshake (one more
-	// round trip of the client); it is half the default queue timeout so
-	// that a client that stops in the middle cannot hold a worker for long.
+	// head; for TLS: the complete ClientHello), so this only has to cover
+	// the rest of the handshake (one more round trip of the client); it is
+	// half the default queue timeout so that a client that stops in the
+	// middle cannot hold a worker for long.
 	ConnHeaderTimeout = 5 * time.Second
 	// ConnBodyTimeout bounds the reading of the body of a request that is
 	// served before its caller is authenticated (the login routes; their
@@ -114,6 +115,9 @@ const (
 	MaxRequestBody = 32 << 20
 	// AcceptPollInterval is how long one listener is polled before the next.
 	AcceptPollInterval = 20 * time.Millisecond
+	// ProbeInterval is how often the queued connections that have not sent
+	// enough yet are looked at again.
+	ProbeInterval = 10 * time.Millisecond
 	// MaxPendingConns bounds connections accepted but not yet handled.
 	MaxPendingConns = 256
 	// PeriodicTick is the interval of the central periodic tasks.

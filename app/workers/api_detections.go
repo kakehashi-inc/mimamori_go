@@ -384,8 +384,9 @@ func (c *core) applySuppression(s *models.Suppression) int {
 // another suppression matches them (they are then recorded under that one).
 // A released detection that was skipped takes part in the next notification
 // unless the same detection was notified within the dedupe period, as when a
-// new occurrence is merged. Acknowledged detections stay as they are. It
-// returns the number of released detections.
+// new occurrence is merged. Acknowledged detections stay as they are. The
+// detections of one target change in one transaction. It returns the number
+// of released detections.
 func (c *core) releaseSuppression(s *models.Suppression) int {
 	agents, err := models.ListAgents(c.db)
 	if err != nil {
@@ -397,9 +398,6 @@ func (c *core) releaseSuppression(s *models.Suppression) int {
 		c.logger.Printf("release suppression %d: %v", s.ID, err)
 		return 0
 	}
-	now := time.Now().Unix()
-	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
-	t, f := true, false
 	n := 0
 	for _, a := range agents {
 		if s.AgentID.Valid && s.AgentID.Int64 != a.ID {
@@ -409,29 +407,55 @@ func (c *core) releaseSuppression(s *models.Suppression) int {
 		if err != nil {
 			continue
 		}
-		list, _, err := models.ListDetections(tdb, models.DetectionFilter{Acknowledged: &f, Suppressed: &t}, 100000)
+		released, err := c.releaseSuppressionOf(tdb, a.ID, s.ID, sups)
 		if err != nil {
 			c.logger.Printf("release suppression %d: agent %d: %v", s.ID, a.ID, err)
 			continue
 		}
-		for _, d := range list {
-			if d.SuppressionID != s.ID {
-				continue
-			}
-			if other := findSuppression(sups, a.ID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
-				_ = models.MoveDetectionSuppression(tdb, d.ID, s.ID, other.ID)
-				continue
-			}
-			state := d.NotifyState
-			if state == models.NotifySkipped && now-models.LastNotifiedAt(tdb, d.Fingerprint) >= dedupe {
-				state = models.NotifyPending
-			}
-			if models.ReleaseDetectionSuppression(tdb, d.ID, s.ID, state) == nil {
-				n++
-			}
-		}
+		n += released
 	}
 	return n
+}
+
+// releaseSuppressionOf does releaseSuppression for the detections of one
+// target, in one transaction.
+func (c *core) releaseSuppressionOf(tdb *sql.DB, agentID, suppressionID int64, sups []*models.Suppression) (int, error) {
+	tx, err := tdb.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	t, f := true, false
+	list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &t}, 100000)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().Unix()
+	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
+	n := 0
+	for _, d := range list {
+		if d.SuppressionID != suppressionID {
+			continue
+		}
+		if other := findSuppression(sups, agentID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
+			if err := models.MoveDetectionSuppression(tx, d.ID, suppressionID, other.ID); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		state := d.NotifyState
+		if state == models.NotifySkipped && now-models.LastNotifiedAt(tx, d.Fingerprint) >= dedupe {
+			state = models.NotifyPending
+		}
+		if err := models.ReleaseDetectionSuppression(tx, d.ID, suppressionID, state); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (c *core) handleDeleteSuppression(w http.ResponseWriter, r *http.Request) {

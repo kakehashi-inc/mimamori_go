@@ -40,6 +40,8 @@ type job struct {
 	// ready is set when the connection has sent what a worker needs to start
 	// on it without waiting (probeConn). Only ready jobs are handed over.
 	ready bool
+	// probed is set once the connection was probed.
+	probed bool
 }
 
 // connServer accepts connections on several listeners from ONE flow and
@@ -62,8 +64,10 @@ type connServer struct {
 	lastPoll time.Time
 	wg       sync.WaitGroup
 	taskBusy atomic.Bool
-	// probeBuf is the buffer of probeConn (used by the accepting flow only).
-	probeBuf []byte
+	// probeBuf is the buffer of probeConn and lastProbe the time every
+	// waiting connection was last probed (used by the accepting flow only).
+	probeBuf  []byte
+	lastProbe time.Time
 }
 
 func newConnServer(specs []*listenerSpec, workers int, queueTimeout time.Duration, logger *log.Logger) *connServer {
@@ -144,11 +148,19 @@ func (s *connServer) take(i int) job {
 }
 
 // probeQueue marks the queued connections that have sent data as ready and
-// closes those whose client has gone. It never blocks.
+// closes those whose client has gone. It never blocks. A new connection is
+// probed at once; connections already probed are probed again every
+// ProbeInterval, so that the loop does not spend its time on them while it
+// waits for a free worker.
 func (s *connServer) probeQueue() {
+	all := time.Since(s.lastProbe) >= modules.ProbeInterval
+	if all {
+		s.lastProbe = time.Now()
+	}
 	kept := s.queue[:0]
 	for _, j := range s.queue {
-		if !j.ready {
+		if !j.ready && (all || !j.probed) {
+			j.probed = true
 			ready, gone := probeConn(j.conn, j.spec.tls == nil, s.probeBuf)
 			if gone {
 				_ = j.conn.Close()
@@ -163,10 +175,10 @@ func (s *connServer) probeQueue() {
 
 // probeConn looks at the data a client has sent without consuming it and
 // without blocking (recv with MSG_PEEK|MSG_DONTWAIT). A TLS connection is
-// ready when anything has arrived (the start of the handshake); a plain HTTP
-// connection when the complete request head has arrived, or as much of a
-// head as fills buf. gone is true when the client closed the connection
-// without sending anything, or the connection failed.
+// ready when its first record (the ClientHello) has arrived completely; a
+// plain HTTP connection when the complete request head has arrived. Data
+// that fills buf is ready as well. gone is true when the client closed the
+// connection without sending anything, or the connection failed.
 func probeConn(c net.Conn, plain bool, buf []byte) (ready, gone bool) {
 	sc, ok := c.(syscall.Conn)
 	if !ok {
@@ -189,11 +201,28 @@ func probeConn(c net.Conn, plain bool, buf []byte) (ready, gone bool) {
 		return false, false
 	case rerr != nil, n <= 0:
 		return false, true
-	case !plain, n >= len(buf):
+	case n >= len(buf):
 		return true, false
+	case !plain:
+		return tlsRecordComplete(buf[:n]), false
 	}
 	head := buf[:n]
 	return bytes.Contains(head, []byte("\r\n\r\n")) || bytes.Contains(head, []byte("\n\n")), false
+}
+
+// tlsRecordComplete reports whether b holds the first TLS record
+// completely (a 5-byte header whose last two bytes are the length of the
+// rest). Data that is not a handshake record is complete at once: the
+// handshake then fails without waiting.
+func tlsRecordComplete(b []byte) bool {
+	const recordTypeHandshake = 0x16
+	if b[0] != recordTypeHandshake {
+		return true
+	}
+	if len(b) < 5 {
+		return false
+	}
+	return len(b) >= 5+(int(b[3])<<8|int(b[4]))
 }
 
 func (s *connServer) workerLoop() {
@@ -529,8 +558,9 @@ func isLocalPeer(remoteAddr string, local net.Addr) bool {
 	if err != nil {
 		return false
 	}
+	zone := ""
 	if i := strings.IndexByte(host, '%'); i >= 0 {
-		host = host[:i] // the zone of a link-local address
+		host, zone = host[:i], host[i+1:] // the zone of a link-local address
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -540,5 +570,5 @@ func isLocalPeer(remoteAddr string, local net.Addr) bool {
 		return true
 	}
 	ta, ok := local.(*net.TCPAddr)
-	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip)
+	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip) && (zone == "" || ta.Zone == "" || zone == ta.Zone)
 }

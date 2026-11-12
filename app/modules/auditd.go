@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -306,11 +305,11 @@ func writeAuditRulesFile(content []byte) (string, error) {
 const neverCancelLine = "-d never,task"
 
 // auditRulesFileContent is the content of the rules file: the global
-// settings and the rules, and, when the suppression rule had to be cancelled
-// or a distribution rule file adds it, the line that cancels it. That line
-// comes last: augenrules loads the files in name order, so at boot the
-// suppression is loaded before and cancelled at the end (if it was not
-// loaded, only that last line fails). Without rules there is no file (nil).
+// settings and the rules, and, when a distribution rule file adds the
+// suppression rule, the line that cancels it. That line comes last:
+// augenrules loads the files in name order, so at boot the suppression is
+// loaded before and cancelled at the end. Without rules there is no file
+// (nil).
 func auditRulesFileContent(lines []string, cancelNever bool) []byte {
 	if len(lines) == 0 {
 		return nil
@@ -457,7 +456,11 @@ func ApplyAuditRules(lines []string) ([]string, error) {
 
 	// Keep for the next boot (augenrules loads rules.d in name order, so
 	// this file comes after the OS defaults and overrides their settings).
-	content := auditRulesFileContent(lines, slices.Contains(before, neverRuleLine) || neverRuleInRulesDir())
+	// The cancelling line is written only when a rule file loaded at boot
+	// adds the suppression rule: without it the line would fail at boot, and
+	// auditctl -R stops at the first failing line (augenrules puts the -e
+	// setting after it).
+	content := auditRulesFileContent(lines, neverRuleInRulesDir())
 	var warnings []string
 	if w, err := writeAuditRulesFile(content); err != nil {
 		return rollback(err)

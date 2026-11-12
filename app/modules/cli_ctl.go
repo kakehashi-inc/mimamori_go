@@ -102,8 +102,9 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 const ctlServerName = "127.0.0.1"
 
 // CtlTarget returns the address and port ctl connects to for the central's
-// agent_listen: the IPv4 loopback address when the central listens on every
-// address (empty host, 0.0.0.0 or ::), otherwise the listen IP itself.
+// agent_listen: the loopback address when the central listens on every
+// address (127.0.0.1 for an empty host or 0.0.0.0, ::1 for ::), otherwise
+// the listen IP itself.
 func CtlTarget(agentListen string) (string, int, error) {
 	host, port, err := net.SplitHostPort(agentListen)
 	if err != nil {
@@ -121,6 +122,11 @@ func CtlTarget(agentListen string) (string, int, error) {
 		return "", 0, fmt.Errorf("%s: the listen address must be an IP address", agentListen)
 	}
 	if ip.IsUnspecified() {
+		// An IPv6 wildcard socket takes IPv4 connections only when the
+		// system allows it (net.ipv6.bindv6only), so ::1 is used for it.
+		if ip.To4() == nil {
+			return "::1", portNum, nil
+		}
 		return "127.0.0.1", portNum, nil
 	}
 	return ip.String(), portNum, nil

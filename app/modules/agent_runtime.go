@@ -699,9 +699,18 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 				}
 			} else {
+				// From the second before the start of the previous full
+				// pass: a root made in that same second after the pass had
+				// walked past its place has files of that second (as the
+				// since times of the executed-file scan, which end one
+				// second before the check).
+				rootFrom := lastFull
+				if rootFrom > 0 {
+					rootFrom--
+				}
 				for _, r := range wr.AllowedRoots {
 					if !known[r] {
-						setRootSince(r, lastFull)
+						setRootSince(r, rootFrom)
 					}
 				}
 			}

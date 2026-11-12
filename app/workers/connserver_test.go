@@ -2,6 +2,7 @@ package workers
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"io"
@@ -41,6 +42,8 @@ func TestIsLocalPeer(t *testing.T) {
 		{"192.0.2.7:5000", nil, false},
 		{"192.0.2.7:5000", local6, false},
 		{"0.0.0.0:5000", &net.TCPAddr{IP: net.IPv4zero}, false},
+		{"[fe80::7%eth0]:5000", &net.TCPAddr{IP: net.ParseIP("fe80::7"), Zone: "eth0"}, true},
+		{"[fe80::7%eth1]:5000", &net.TCPAddr{IP: net.ParseIP("fe80::7"), Zone: "eth0"}, false},
 		{"garbage", local, false},
 	}
 	for _, c := range cases {
@@ -280,18 +283,106 @@ func TestConnServerSlowLoginBody(t *testing.T) {
 	}
 }
 
-// A TLS client that stops in the middle of the handshake holds the worker
-// for ConnHeaderTimeout at most.
+// A TLS client that has not sent its ClientHello completely never reaches
+// the worker; one that sent it and then stops holds the worker for
+// ConnHeaderTimeout at most.
 func TestConnServerStalledHandshake(t *testing.T) {
 	ts := startConnTestServer(t, 30*time.Second)
-	c := dialSilent(t, ts.agnt, 1)[0]
-	// The start of a ClientHello record, never completed.
-	if _, err := c.Write([]byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc}); err != nil {
-		t.Fatal(err)
+	// The start of a ClientHello record, never completed (five times).
+	for _, c := range dialSilent(t, ts.agnt, 5) {
+		if _, err := c.Write([]byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	time.Sleep(200 * time.Millisecond)
 	line, d := ts.webRaw(t, healthRequest)
+	if !strings.Contains(line, " 200 ") || d > time.Second {
+		t.Fatalf("request behind incomplete ClientHellos: %q after %v", line, d)
+	}
+
+	// A complete ClientHello, then nothing.
+	c := dialSilent(t, ts.agnt, 1)[0]
+	if _, err := c.Write(clientHello(t)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	line, d = ts.webRaw(t, healthRequest)
 	if !strings.Contains(line, " 200 ") || d > modules.ConnHeaderTimeout+time.Second {
 		t.Fatalf("request behind a stalled handshake: %q after %v", line, d)
+	}
+}
+
+// clientHello returns the first TLS record a client sends.
+func clientHello(t *testing.T) []byte {
+	t.Helper()
+	a, b := net.Pipe()
+	go func() {
+		_ = tls.Client(a, &tls.Config{ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}).Handshake()
+	}()
+	defer a.Close()
+	defer b.Close()
+	head := make([]byte, 5)
+	if _, err := io.ReadFull(b, head); err != nil {
+		t.Fatal(err)
+	}
+	rest := make([]byte, int(head[3])<<8|int(head[4]))
+	if _, err := io.ReadFull(b, rest); err != nil {
+		t.Fatal(err)
+	}
+	return append(head, rest...)
+}
+
+func TestTLSRecordComplete(t *testing.T) {
+	for _, tc := range []struct {
+		in   []byte
+		want bool
+	}{
+		{[]byte{0x16}, false},
+		{[]byte{0x16, 3, 1, 0, 3}, false},
+		{[]byte{0x16, 3, 1, 0, 3, 1, 2}, false},
+		{[]byte{0x16, 3, 1, 0, 3, 1, 2, 3}, true},
+		{[]byte{0x16, 3, 1, 1, 0, 1}, false},
+		{[]byte("GET / HTTP/1.1"), true},
+	} {
+		if got := tlsRecordComplete(tc.in); got != tc.want {
+			t.Errorf("%v: %v", tc.in, got)
+		}
+	}
+}
+
+// A large body on a route that reads it after authentication (such as an
+// agent report) is still read completely by the single worker.
+func TestConnServerLargeBody(t *testing.T) {
+	e := newTestEnv(t)
+	ln, err := listenTCP("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got atomic.Int64
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		got.Store(n)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := newConnServer([]*listenerSpec{{name: "agent", ln: ln, tls: e.c.tlsConfig(), handler: h}}, 1, 10*time.Second, log.New(io.Discard, "", 0))
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.run(stop.Load, func() func() { return nil })
+	}()
+	defer func() {
+		stop.Store(true)
+		<-done
+	}()
+	pool, _ := modules.CertPoolFromPEMs(e.c.currentCAPEMs(), time.Now())
+	hc, err := modules.NewHTTPSClient("127.0.0.1", ln.Addr().(*net.TCPAddr).Port, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := modules.MaxRequestBody - 1024
+	status, _, err := hc.Do("POST", "/agent/v1/report", bytes.Repeat([]byte("a"), size))
+	if err != nil || status != http.StatusNoContent || got.Load() != int64(size) {
+		t.Fatalf("large body: status %d, %v, read %d of %d", status, err, got.Load(), size)
 	}
 }

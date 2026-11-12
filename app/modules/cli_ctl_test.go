@@ -198,14 +198,14 @@ func TestTruncateKeepsUTF8(t *testing.T) {
 	}
 }
 
-// ctl connects to the address of agent_listen: the IPv4 loopback address
-// for a wildcard, the listen IP itself otherwise, with the port of
+// ctl connects to the address of agent_listen: the loopback address for a
+// wildcard, the listen IP itself otherwise, with the port of
 // agent_listen.
 func TestCtlTarget(t *testing.T) {
 	cases := []struct{ in, host string }{
 		{":9081", "127.0.0.1"},
 		{"0.0.0.0:9081", "127.0.0.1"},
-		{"[::]:9081", "127.0.0.1"},
+		{"[::]:9081", "::1"},
 		{"[::ffff:0.0.0.0]:9081", "127.0.0.1"},
 		{"127.0.0.1:9081", "127.0.0.1"},
 		{"127.0.0.2:9081", "127.0.0.2"},
