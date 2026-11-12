@@ -46,6 +46,12 @@ type HostInfo struct {
 	Rule                 *RuleRef        `json:"rule"`
 	LastApply            *ApplyResult    `json:"last_apply"`
 	TrustedCAs           []TrustedCA     `json:"trusted_cas"`
+	// OSUser is the OS user the agent runs as (the default OS user of new
+	// command sets). TimeZone and UTCOffsetSec describe the host's local
+	// time, in which recurring command set schedules are interpreted.
+	OSUser       string `json:"os_user"`
+	TimeZone     string `json:"time_zone"`
+	UTCOffsetSec int    `json:"utc_offset_sec"`
 }
 
 // ReadOSRelease returns NAME and VERSION_ID from /etc/os-release.
@@ -105,6 +111,8 @@ func CollectHostInfo(in HostInfoInput) *HostInfo {
 	hi.Kernel = kernelRelease()
 	_, users := ReadPasswd()
 	groups := ReadGroups()
+	hi.OSUser = NameOrID(users, os.Geteuid())
+	hi.TimeZone, hi.UTCOffsetSec = HostTimeZone(time.Now())
 
 	if st, err := ReadAuditdStatus(); err == nil {
 		hi.Auditd = *st
@@ -172,4 +180,10 @@ func directoryStructure(base string, users, groups map[int]string) ([]DirectoryI
 		return nil
 	})
 	return out, truncated
+}
+
+// HostTimeZone returns the name (abbreviation, such as "JST") and the UTC
+// offset of the host's local time at t.
+func HostTimeZone(t time.Time) (string, int) {
+	return t.In(time.Local).Zone()
 }

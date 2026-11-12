@@ -159,6 +159,10 @@ CREATE TABLE agents (
     last_sync_at          INTEGER NOT NULL DEFAULT 0,
     last_report_at        INTEGER NOT NULL DEFAULT 0,
     dropped_total         INTEGER NOT NULL DEFAULT 0,
+    host_os_user          TEXT    NOT NULL DEFAULT '',
+    time_zone             TEXT    NOT NULL DEFAULT '',
+    utc_offset_sec        INTEGER NOT NULL DEFAULT 0,
+    command_sig           TEXT    NOT NULL DEFAULT '',
     created_at            INTEGER NOT NULL
 );
 -- +goose StatementEnd

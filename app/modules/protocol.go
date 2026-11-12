@@ -1,9 +1,11 @@
 package modules
 
 // Messages exchanged between an agent and the central (/agent/v1). The
-// central can hand an agent only rule values, its own token renewal and CA
-// certificates; nothing here can make the agent run a command or load an
-// arbitrary auditd rule.
+// central hands an agent rule values, its own token renewal, CA
+// certificates, and the command sets an administrator defined for that
+// monitored target with the pending manual run requests of those sets. The
+// agent runs only the command lines of these definitions (as the OS user
+// each set names); nothing here can load an arbitrary auditd rule.
 
 // HeaderInstanceID carries the agent's instance ID (created at agent init and
 // kept in its data directory) on authenticated requests; the token is bound
@@ -27,6 +29,9 @@ type SyncRequest struct {
 	RuleVersion    int          `json:"rule_version"`
 	CAFingerprints []string     `json:"ca_fingerprints"`
 	LastApply      *ApplyResult `json:"last_apply"`
+	// CommandSig is the signature of the command set definitions the agent
+	// holds ("" when it holds none).
+	CommandSig string `json:"command_sig"`
 }
 
 // RuleAssignment is the rule version assigned to an agent.
@@ -51,6 +56,11 @@ type SyncResponse struct {
 	DefaultIntervalSec int             `json:"default_interval_sec"`
 	TokenRenewal       *TokenRenewal   `json:"token_renewal,omitempty"`
 	CAPEMs             []string        `json:"ca_pems,omitempty"`
+	// CommandSets carries every command set definition of the target when
+	// the agent's signature differs from the central's.
+	CommandSets *CommandDefinitions `json:"command_sets,omitempty"`
+	// CommandRequests are the manual run requests waiting for the agent.
+	CommandRequests []CommandRunRequest `json:"command_requests,omitempty"`
 }
 
 // DetectionReport is one aggregated detection sent by an agent.
@@ -75,6 +85,112 @@ type ReportRequest struct {
 	HostInfo   *HostInfo         `json:"host_info,omitempty"`
 	Apply      *ApplyResult      `json:"apply,omitempty"`
 	Dropped    int               `json:"dropped"`
+	// CommandRuns carries started and finished runs of command sets with
+	// the results of their finished commands. The central stores them
+	// idempotently (run UID, command position).
+	CommandRuns []CommandRunReport `json:"command_runs,omitempty"`
+	// CommandRequestAcks answers delivered manual run requests.
+	CommandRequestAcks []CommandRequestAck `json:"command_request_acks,omitempty"`
+	// CommandApply reports the outcome of storing delivered definitions.
+	CommandApply *CommandApplyResult `json:"command_apply,omitempty"`
+}
+
+// CommandDefinitions are the command set definitions of a target with their
+// signature (see CommandSignature).
+type CommandDefinitions struct {
+	Signature string          `json:"signature"`
+	Sets      []CommandSetDef `json:"sets"`
+}
+
+// CommandRunRequest is a manual run request of a set.
+type CommandRunRequest struct {
+	ID          int64 `json:"id"`
+	SetID       int64 `json:"set_id"`
+	RequestedAt int64 `json:"requested_at"`
+	ExpiresAt   int64 `json:"expires_at"`
+}
+
+// Triggers of a run.
+const (
+	TriggerManual   = "manual"
+	TriggerSchedule = "schedule"
+)
+
+// Statuses of a CommandRequestAck.
+const (
+	RequestAckStarted    = "started"     // a run was started for it (RunUID)
+	RequestAckExpired    = "expired"     // it arrived after its expiry and was not run
+	RequestAckUnknownSet = "unknown_set" // the agent holds no valid set with its SetID
+)
+
+// CommandRequestAck answers a delivered manual run request.
+type CommandRequestAck struct {
+	RequestID int64  `json:"request_id"`
+	Status    string `json:"status"`
+	RunUID    string `json:"run_uid,omitempty"`
+	At        int64  `json:"at"`
+}
+
+// CommandRunReport is a run of a command set: sent when it starts, after
+// each command and when it finishes. The set's values at the start are
+// copied so that the result does not depend on later changes.
+type CommandRunReport struct {
+	RunUID        string `json:"run_uid"`
+	SetID         int64  `json:"set_id"`
+	SetRevision   int64  `json:"set_revision"`
+	SetName       string `json:"set_name"`
+	Purpose       string `json:"purpose"`
+	Joiner        string `json:"joiner"`
+	OSUser        string `json:"os_user"`
+	WorkDir       string `json:"work_dir"`
+	Trigger       string `json:"trigger"`
+	RequestID     int64  `json:"request_id"`
+	ScheduledFor  int64  `json:"scheduled_for"`
+	CommandsTotal int    `json:"commands_total"`
+	StartedAt     int64  `json:"started_at"`
+	// Finished is set on the last report of the run, with FinishedAt, State
+	// (the worst result kind of the executed commands), Reason (for a run
+	// that ended without running its commands, such as one found
+	// interrupted) and Display (collect_output only).
+	Finished   bool                  `json:"finished"`
+	FinishedAt int64                 `json:"finished_at"`
+	State      string                `json:"state"`
+	Reason     string                `json:"reason"`
+	Display    *DisplayValue         `json:"display,omitempty"`
+	Results    []CommandResultReport `json:"results"`
+}
+
+// CommandResultReport is the result of one executed command. Output is the
+// stored console output (up to MaxCommandOutputBytes, base64 in JSON);
+// OutputBytes is the total size the command wrote.
+type CommandResultReport struct {
+	Position    int            `json:"position"`
+	CommandLine string         `json:"command_line"`
+	Note        string         `json:"note"`
+	Kind        string         `json:"kind"`
+	Reason      string         `json:"reason"`
+	ExitCode    *int           `json:"exit_code"`
+	StartedAt   int64          `json:"started_at"`
+	FinishedAt  int64          `json:"finished_at"`
+	Output      []byte         `json:"output"`
+	OutputBytes int64          `json:"output_bytes"`
+	Truncated   bool           `json:"truncated"`
+	Values      *CommandValues `json:"values,omitempty"`
+}
+
+// CommandApplyProblem names a delivered set the agent did not accept.
+type CommandApplyProblem struct {
+	SetID    int64    `json:"set_id"`
+	SetName  string   `json:"set_name"`
+	Problems []string `json:"problems"`
+}
+
+// CommandApplyResult reports the definitions the agent stored (Signature)
+// and the sets it refused (they are not run).
+type CommandApplyResult struct {
+	Signature string                `json:"signature"`
+	At        int64                 `json:"at"`
+	Problems  []CommandApplyProblem `json:"problems"`
 }
 
 // CAResponse answers GET /agent/v1/ca.

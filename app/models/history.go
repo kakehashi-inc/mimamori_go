@@ -11,6 +11,7 @@ const (
 	HistSuppression = "suppression"
 	HistDetection   = "detection"
 	HistConfig      = "config"
+	HistCommand     = "command"
 )
 
 // HistoryItem is a row of the history table: an operation with the account

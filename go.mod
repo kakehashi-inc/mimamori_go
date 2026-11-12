@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/alecthomas/kong v1.16.1
+	github.com/dlclark/regexp2 v1.12.0
 	github.com/pressly/goose/v3 v3.29.0
 	modernc.org/sqlite v1.61.0
 )

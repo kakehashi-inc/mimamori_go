@@ -153,3 +153,46 @@ const (
 	// DirectoryDepth is the depth of the reported directory structure.
 	DirectoryDepth = 3
 )
+
+// --- Command sets ---
+
+const (
+	// MaxCommandSetNameLength is the largest set name, in characters.
+	MaxCommandSetNameLength = 100
+	// MaxCommandTextLength bounds a set description and a command note, in
+	// characters.
+	MaxCommandTextLength = 1000
+	// MaxCommandOSUserLength is the largest OS user name, in characters.
+	MaxCommandOSUserLength = 256
+	// MaxCommandWorkDirBytes is the largest working directory, in bytes.
+	MaxCommandWorkDirBytes = 4096
+	// MaxCommandLineBytes is the largest command line, in bytes.
+	MaxCommandLineBytes = 102400
+	// DefaultCommandSetTimeoutSec is the default time limit of one command;
+	// MaxCommandSetTimeoutSec the largest. (DefaultCommandTimeoutSec above
+	// is the limit of the agent's own external commands such as auditctl.)
+	DefaultCommandSetTimeoutSec = 300
+	MaxCommandSetTimeoutSec     = 86400
+	// DefaultCommandLineLimit is the default number of lines of a command's
+	// part of the display value; MaxCommandLineLimit the largest.
+	DefaultCommandLineLimit = 20
+	MaxCommandLineLimit     = 10000
+	// DefaultCommandKeepRuns is the default number of finished runs kept per
+	// set; MaxCommandKeepRuns the largest.
+	DefaultCommandKeepRuns = 100
+	MaxCommandKeepRuns     = 10000
+	// MaxCommandExitCode is the largest exit code a code spec can name.
+	MaxCommandExitCode = 255
+	// MaxCommandOutputBytes is the console output stored per command; what
+	// exceeds is read and dropped.
+	MaxCommandOutputBytes = 1 << 20
+	// CommandPatternTimeout bounds the matching of one pattern against the
+	// output of one command.
+	CommandPatternTimeout = 2 * time.Second
+	// CommandKillGrace is the time between SIGTERM and SIGKILL when a
+	// command passes its time limit or the agent stops.
+	CommandKillGrace = 10 * time.Second
+	// CommandRequestExpiry is how long a manual run request waits for
+	// delivery before it expires.
+	CommandRequestExpiry = 24 * time.Hour
+)
