@@ -88,6 +88,7 @@
         "jsonError": "JSON の形式が正しくありません: {{message}}",
         "jsonProblems": "次の部分は監視ルールの内容として正しくありません。失われるため、この JSON は反映しません:",
         "jsonUnknownKey": "{{path}}: 不明なキーです",
+        "jsonDuplicateKey": "{{path}}: キーが重複しています（最後の値だけが残ります）",
         "jsonWrongValue": "{{path}}: {{expected}}を指定してください",
         "jsonRoot": "（内容の全体）",
         "jsonExpected": {

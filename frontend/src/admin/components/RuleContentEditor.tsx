@@ -381,7 +381,9 @@ function NumberInput({
 /** Text of one problem found by ruleContentProblems. */
 function problemText(t: TFunction, p: ContentProblem): string {
     const path = p.path || t('ruleEditor.jsonRoot');
-    if (p.problem === 'unknown') return t('ruleEditor.jsonUnknownKey', { path });
+    if (p.problem !== 'type') {
+        return t(p.problem === 'unknown' ? 'ruleEditor.jsonUnknownKey' : 'ruleEditor.jsonDuplicateKey', { path });
+    }
     return t('ruleEditor.jsonWrongValue', { path, expected: t(`ruleEditor.jsonExpected.${p.expected}`) });
 }
 
@@ -391,11 +393,14 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
     const [parseError, setParseError] = useState<string | null>(null);
     const [problems, setProblems] = useState<ContentProblem[]>([]);
 
-    // Re-render the text when the content changes from outside while it parses cleanly.
+    // Re-render the text when the content changes from outside while it is
+    // valid; invalid text is kept until it is corrected.
     useEffect(() => {
         setText(prev => {
             try {
-                if (JSON.stringify(normalizeRuleContent(JSON.parse(prev))) === JSON.stringify(value)) return prev;
+                const parsed: unknown = JSON.parse(prev);
+                if (ruleContentProblems(prev, parsed).length > 0) return prev;
+                if (JSON.stringify(normalizeRuleContent(parsed)) === JSON.stringify(value)) return prev;
             } catch {
                 return prev;
             }
@@ -416,7 +421,7 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
         }
         setParseError(null);
         // The text is taken only as written: anything the conversion would drop blocks it.
-        const found = ruleContentProblems(parsed);
+        const found = ruleContentProblems(next, parsed);
         setProblems(found);
         if (found.length > 0) {
             onJsonInvalidChange?.(true);

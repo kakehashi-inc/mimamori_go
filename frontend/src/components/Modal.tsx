@@ -21,6 +21,9 @@ const widths = {
     xl: 'max-w-4xl',
 };
 
+const FOCUSABLE =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /** A centered dialog over a dimmed backdrop. */
 export function Modal({ open, title, onClose, children, footer, size = 'md', locked }: ModalProps) {
     const { t } = useTranslation();
@@ -31,6 +34,32 @@ export function Modal({ open, title, onClose, children, footer, size = 'md', loc
         if (!open) return;
         function handleKey(e: KeyboardEvent) {
             if (e.key === 'Escape' && !locked) onClose();
+            if (e.key === 'Tab') keepFocusInside(e);
+        }
+        // Tab and Shift+Tab cycle through the controls of the topmost dialog
+        // instead of leaving it for the page behind.
+        function keepFocusInside(e: KeyboardEvent) {
+            const panel = panelRef.current;
+            const dialogs = document.querySelectorAll('[role=dialog][aria-modal=true]');
+            if (!panel || dialogs[dialogs.length - 1] !== panel) return;
+            const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+                el => el.getClientRects().length > 0
+            );
+            if (items.length === 0) {
+                e.preventDefault();
+                panel.focus();
+                return;
+            }
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement;
+            if (e.shiftKey && (active === first || active === panel || !panel.contains(active))) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && (active === last || !panel.contains(active))) {
+                e.preventDefault();
+                first.focus();
+            }
         }
         document.addEventListener('keydown', handleKey);
         return () => document.removeEventListener('keydown', handleKey);
@@ -38,6 +67,8 @@ export function Modal({ open, title, onClose, children, footer, size = 'md', loc
 
     useEffect(() => {
         if (!open) return;
+        // Focus goes back to where it was (usually the button that opened the dialog) on close.
+        const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         // Move focus into the dialog: the first form control, or the panel itself.
         const panel = panelRef.current;
         const first = panel?.querySelector<HTMLElement>('input, select, textarea, [data-autofocus]');
@@ -46,6 +77,7 @@ export function Modal({ open, title, onClose, children, footer, size = 'md', loc
         document.body.style.overflow = 'hidden';
         return () => {
             document.body.style.overflow = previous;
+            if (opener?.isConnected) opener.focus();
         };
     }, [open]);
 

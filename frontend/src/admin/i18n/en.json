@@ -88,6 +88,7 @@
         "jsonError": "Invalid JSON: {{message}}",
         "jsonProblems": "These parts are not valid rule content. They would be lost, so the JSON is not taken over:",
         "jsonUnknownKey": "{{path}}: unknown key",
+        "jsonDuplicateKey": "{{path}}: the key is written more than once (only the last value would be kept)",
         "jsonWrongValue": "{{path}}: must be {{expected}}",
         "jsonRoot": "(the whole content)",
         "jsonExpected": {
