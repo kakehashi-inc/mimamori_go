@@ -140,51 +140,66 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		return reject("invalid token", "")
 	}
 	h := modules.HashSecret(v)
-	t, err := models.FindTokenByHash(c.db, h)
-	if errors.Is(err, sql.ErrNoRows) {
-		return reject("invalid token", "")
-	}
-	if err != nil {
-		return nil, nil, err
-	}
 	now := time.Now().Unix()
-	if t.RevokedAt > 0 {
-		return reject("revoked token", t.Name)
-	}
 	instance := strings.TrimSpace(r.Header.Get(modules.HeaderInstanceID))
-	if instance == "" || len(instance) > 128 {
-		return reject("missing instance id", t.Name)
-	}
-	if t.InstanceID != "" && t.InstanceID != instance {
-		return reject("instance id mismatch", t.Name)
-	}
-	prev := *t
-	usedPending := t.PendingHash != "" && h == t.PendingHash
-	if usedPending {
-		if t.PendingExpiresAt <= now {
+	var t *models.Token
+	var usedPending, bound bool
+	// The token row can change between reading and writing it (another
+	// request of the same agent, or an administrator). The checks are then
+	// made again on the new row, so every request gets the answer that fits
+	// the row as it is.
+	for attempt := 1; ; attempt++ {
+		var err error
+		t, err = models.FindTokenByHash(c.db, h)
+		if errors.Is(err, sql.ErrNoRows) {
+			return reject("invalid token", "")
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if t.RevokedAt > 0 {
+			return reject("revoked token", t.Name)
+		}
+		if instance == "" || len(instance) > 128 {
+			return reject("missing instance id", t.Name)
+		}
+		if t.InstanceID != "" && t.InstanceID != instance {
+			return reject("instance id mismatch", t.Name)
+		}
+		prev := *t
+		usedPending = t.PendingHash != "" && h == t.PendingHash
+		if usedPending {
+			if t.PendingExpiresAt <= now {
+				return reject("expired token", t.Name)
+			}
+			// First connection with the renewed value: the old value stops working.
+			t.Hash, t.Value, t.ExpiresAt = t.PendingHash, v, t.PendingExpiresAt
+			t.PendingHash, t.PendingExpiresAt = "", 0
+			t.RenewedAt = now
+		} else if t.ExpiresAt <= now {
 			return reject("expired token", t.Name)
 		}
-		// First connection with the renewed value: the old value stops working.
-		t.Hash, t.Value, t.ExpiresAt = t.PendingHash, v, t.PendingExpiresAt
-		t.PendingHash, t.PendingExpiresAt = "", 0
-		t.RenewedAt = now
-	} else if t.ExpiresAt <= now {
-		return reject("expired token", t.Name)
-	}
-	bound := t.InstanceID == ""
-	if bound {
-		t.InstanceID, t.BoundAt = instance, now
-	}
-	if t.UsedAt == 0 {
-		t.UsedAt = now
-	}
-	t.LastSeenAt = now
-	// Only the columns changed here are written, and only while the token is
-	// unchanged since it was read: a concurrent revoke, reissue or unbind wins.
-	if err := models.RecordTokenUse(c.db, t, &prev); errors.Is(err, sql.ErrNoRows) {
-		return reject("invalid token", t.Name)
-	} else if err != nil {
-		return nil, nil, err
+		bound = t.InstanceID == ""
+		if bound {
+			t.InstanceID, t.BoundAt = instance, now
+		}
+		if t.UsedAt == 0 {
+			t.UsedAt = now
+		}
+		t.LastSeenAt = now
+		// Only the columns changed here are written, and only while the token
+		// is unchanged since it was read: a concurrent revoke, reissue or
+		// unbind wins.
+		err = models.RecordTokenUse(c.db, t, &prev)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, err
+		}
+		if attempt >= 3 {
+			return reject("invalid token", t.Name)
+		}
 	}
 	if usedPending {
 		c.history(nil, models.HistToken, "renewed", t.Name, "agent switched to the renewed token; the previous value is no longer accepted")

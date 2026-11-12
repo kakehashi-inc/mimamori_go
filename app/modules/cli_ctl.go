@@ -796,8 +796,8 @@ type CtlDetectionsListCmd struct {
 	Agent        int64  `help:"Agent id"`
 	Category     string `help:"alert or normal" enum:",alert,normal" default:""`
 	Type         string `help:"exec, denied, read, network, writable or exec_file"`
-	From         string `help:"From, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM, YYYY-MM-DD or RFC3339"`
-	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM, YYYY-MM-DD or RFC3339"`
+	From         string `help:"From, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
+	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
 	Acknowledged string `help:"true or false" enum:",true,false" default:""`
 	Suppressed   string `help:"true or false" enum:",true,false" default:""`
 	Limit        int    `help:"Maximum rows" default:"100"`

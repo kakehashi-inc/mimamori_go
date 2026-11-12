@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,4 +245,37 @@ func TestSuppressionFieldLimits(t *testing.T) {
 		}
 	}
 	e.admin("POST", "/suppressions", map[string]any{"exe": "/" + strings.Repeat("x", 4095), "os_user": strings.Repeat("u", 256), "comment": strings.Repeat("\u3042", 1000)})
+}
+
+// Requests of one agent that use a new token at the same time are all
+// accepted: the request that loses the first binding checks the token again.
+func TestConcurrentFirstUseOfToken(t *testing.T) {
+	e := newTestEnv(t)
+	for round := 0; round < 5; round++ {
+		issued := e.admin("POST", "/tokens", map[string]any{"name": fmt.Sprintf("race%d", round)})
+		value, _ := issued["value"].(string)
+		if value == "" {
+			t.Fatalf("no token value: %v", issued)
+		}
+		var wg sync.WaitGroup
+		codes := make(chan int, 8)
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				codes <- e.agentCall("sync", value, "instance-1", map[string]any{}).Code
+			}()
+		}
+		wg.Wait()
+		close(codes)
+		for code := range codes {
+			if code != http.StatusOK {
+				t.Fatalf("round %d: status %d, want 200", round, code)
+			}
+		}
+		// Another instance is still refused.
+		if code := e.agentCall("sync", value, "instance-2", map[string]any{}).Code; code != http.StatusUnauthorized {
+			t.Fatalf("round %d: other instance got %d", round, code)
+		}
+	}
 }
