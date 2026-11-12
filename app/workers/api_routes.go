@@ -73,6 +73,7 @@ func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool
 	a("POST /rules", c.handleCreateRule)
 	a("POST /rules/merge-preview", c.handleMergePreview)
 	a("POST /rules/validate", c.handleValidateRule)
+	a("POST /rules/unassign", c.handleUnassignRule)
 	h("GET /rules/{id}", requireAny(c.handleGetRule))
 	a("PUT /rules/{id}", c.handleSaveRule)
 	a("DELETE /rules/{id}", c.handleDeleteRule)

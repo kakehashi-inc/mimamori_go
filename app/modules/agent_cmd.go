@@ -158,8 +158,13 @@ func AgentInit(o AgentInitOptions) error {
 		}
 		return NewExitError(ExitExec, err.Error())
 	}
-	// 5. save the configuration
+	// 5. save the configuration; a rule stored by the previous
+	// initialization is cleared (the next sync applies the assigned rule or
+	// removes the audit rules)
 	err = cfg.Save(db)
+	if err == nil {
+		err = resetStoredRule(db)
+	}
 	db.Close()
 	if err != nil {
 		removeCreated(created)

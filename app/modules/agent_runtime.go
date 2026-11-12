@@ -29,6 +29,17 @@ const (
 	stateScanPrevRoots  = "scan_prev_roots"
 	stateDroppedPending = "dropped_pending"
 	stateLastAuditEvent = "last_audit_event"
+	// A writable scan split over several checks: where the next check
+	// continues and the pass in progress (start time, roots found so far).
+	stateWritableResume = "writable_resume"
+	stateWritablePass   = "writable_pass"
+	// The executed-file scan: where the next check continues, the start of
+	// the split pass, the since times of the parts of the walk order and
+	// those of roots not walked to the end yet (see scanFiles).
+	stateExecResume    = "exec_resume"
+	stateExecPassStart = "exec_pass_start"
+	stateExecSince     = "exec_since"
+	stateRootSince     = "exec_root_since"
 )
 
 // AgentRuntime performs the periodic processing of an agent. Everything runs
@@ -71,6 +82,10 @@ type AgentRuntime struct {
 	loc            *time.Location
 	cmdKillGrace   time.Duration
 	cmdOutboxLimit int64
+	// scanLimit replaces MaxScanEntries and removeAudit replaces
+	// RemoveAuditRules in tests.
+	scanLimit   int
+	removeAudit func() error
 }
 
 // NewAgentRuntime loads the stored state.
@@ -244,6 +259,7 @@ func (rt *AgentRuntime) sync() {
 	rt.receiveCommandRequests(resp.CommandRequests)
 	switch {
 	case resp.Rule == nil:
+		rt.removeRule()
 	case rt.rule != nil && resp.Rule.ID == rt.rule.ID && resp.Rule.Version == rt.rule.Version:
 		// The running version is assigned again (for example after a newer
 		// version failed): report its successful result again.
@@ -364,6 +380,102 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	}
 }
 
+// ApplyStatusNone is the application result of an agent without a rule.
+const ApplyStatusNone = "none"
+
+// holdsRule reports whether a stored rule or application result says that
+// audit rules may be loaded (a failed first application or "agent init
+// --overwrite" leave only a result).
+func holdsRule(rule *RuleAssignment, apply *ApplyResult) bool {
+	return rule != nil || (apply != nil && apply.Status != ApplyStatusNone)
+}
+
+// removeRule takes away what the agent applied when the central assigns no
+// rule: the loaded audit rules with this system's key and the rules file.
+// The stored rule and application result are cleared, and the result
+// "none" is reported so that the central shows that nothing is applied. On
+// failure the rule stays in effect, the error is reported and the next
+// check tries again.
+func (rt *AgentRuntime) removeRule() {
+	if !holdsRule(rt.rule, rt.lastApply) {
+		return
+	}
+	remove := rt.removeAudit
+	if remove == nil {
+		remove = RemoveAuditRules
+	}
+	now := time.Now().Unix()
+	if err := remove(); err != nil {
+		msg := "no rule is assigned, but removing the audit rules failed: " + err.Error()
+		if rt.lastApply == nil || rt.lastApply.Status != "error" || rt.lastApply.Message != msg {
+			rt.setApply(&ApplyResult{Status: "error", Message: msg, At: now})
+			rt.logf("%s", msg)
+		}
+		return
+	}
+	if err := models.DeleteLocalState(rt.DB, stateRule, stateApply); err != nil {
+		rt.logf("failed to clear the stored rule: %v", err)
+	}
+	rt.rule, rt.lastOK, rt.failedRule = nil, nil, ""
+	rt.lastApply = &ApplyResult{Status: ApplyStatusNone, Message: "no rule is assigned; the audit rules were removed", At: now}
+	rt.logf("no rule is assigned: the audit rules with key %s and %s were removed", AuditKey, AuditRulesFile)
+}
+
+// ClearStoredRule removes the audit rules and the rules file when the agent
+// database db records a rule or an application result, and then clears that
+// record. It reports whether anything was removed; without a record nothing
+// is touched. The central uses it for the built-in agent while it is
+// disabled.
+func ClearStoredRule(db *sql.DB) (bool, error) {
+	var rule *RuleAssignment
+	if v := models.GetLocalState(db, stateRule); v != "" {
+		rule = &RuleAssignment{}
+	}
+	var apply *ApplyResult
+	if v := models.GetLocalState(db, stateApply); v != "" {
+		var a ApplyResult
+		if json.Unmarshal([]byte(v), &a) == nil {
+			apply = &a
+		} else {
+			apply = &ApplyResult{}
+		}
+	}
+	if !holdsRule(rule, apply) {
+		return false, nil
+	}
+	if err := RemoveAuditRules(); err != nil {
+		return false, err
+	}
+	return true, models.DeleteLocalState(db, stateRule, stateApply)
+}
+
+// resetStoredRule is used by "agent init --overwrite": the stored rule is
+// cleared, and when audit rules may be loaded the application result is
+// replaced by a pending one, so that the next sync decides (it applies the
+// assigned rule, or removes the audit rules when none is assigned).
+func resetStoredRule(db *sql.DB) error {
+	var apply *ApplyResult
+	if v := models.GetLocalState(db, stateApply); v != "" {
+		apply = &ApplyResult{}
+		_ = json.Unmarshal([]byte(v), apply)
+	}
+	var rule *RuleAssignment
+	if models.GetLocalState(db, stateRule) != "" {
+		rule = &RuleAssignment{}
+	}
+	if !holdsRule(rule, apply) {
+		return nil
+	}
+	b, err := json.Marshal(&ApplyResult{Status: "pending", Message: "the stored rule was cleared by agent init; the next sync decides", At: time.Now().Unix()})
+	if err != nil {
+		return err
+	}
+	if err := models.DeleteLocalState(db, stateRule); err != nil {
+		return err
+	}
+	return models.SetLocalState(db, stateApply, string(b))
+}
+
 func joinMax(s []string, n int) string {
 	if len(s) > n {
 		s = append(s[:n:n], fmt.Sprintf("and %d more", len(s)-n))
@@ -402,7 +514,10 @@ func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []Det
 // noteScanConfig records the scan configuration (base directory and allowed
 // paths) of the applied rule. When it changed, a fresh full scan is needed:
 // the roots known so far are remembered, so that the next full scan treats
-// every other root as new (see scanFiles).
+// every other root as new (see scanFiles), and a split writable scan of the
+// previous configuration is abandoned. The known roots stay in scan_roots
+// until the first full scan of the new configuration completes, so that the
+// executed-file scan keeps walking them meanwhile.
 func (rt *AgentRuntime) noteScanConfig(sig string) {
 	if models.GetLocalState(rt.DB, stateScanSignature) == sig {
 		return
@@ -416,12 +531,112 @@ func (rt *AgentRuntime) noteScanConfig(sig string) {
 	}
 	_ = models.SetLocalState(rt.DB, stateScanSignature, sig)
 	_ = models.SetLocalState(rt.DB, stateLastFullScan, "0")
-	_ = models.ReplaceScanRoots(rt.DB, nil)
+	_ = models.DeleteLocalState(rt.DB, stateWritableResume, stateWritablePass)
 }
 
+// scanEntryLimit is the number of entries one walk visits in one check.
+func (rt *AgentRuntime) scanEntryLimit() int {
+	if rt.scanLimit > 0 {
+		return rt.scanLimit
+	}
+	return MaxScanEntries
+}
+
+// writablePass is the state of a writable scan split over several checks.
+type writablePass struct {
+	StartedAt int64    `json:"started_at"`
+	Roots     []string `json:"roots"`
+}
+
+// sinceSegment is a part of the walk order of the executed-file scan, from
+// the path From (empty: the beginning) to the next segment, last scanned at
+// Since (status changes after it are new).
+type sinceSegment struct {
+	From  string `json:"from"`
+	Since int64  `json:"since"`
+}
+
+// sinceAt returns the since time of the segment containing p.
+func sinceAt(segs []sinceSegment, p string) int64 {
+	var v int64
+	for _, g := range segs {
+		if g.From != "" && walkLess(p, g.From) {
+			break
+		}
+		v = g.Since
+	}
+	return v
+}
+
+// markScanned sets the since time of the range [from, to) to t (from empty:
+// the beginning, to empty: the end). Segments after to keep their times;
+// adjacent segments with the same time are merged.
+func markScanned(segs []sinceSegment, from, to string, t int64) []sinceSegment {
+	var out []sinceSegment
+	if from != "" {
+		for _, g := range segs {
+			if g.From == "" || walkLess(g.From, from) {
+				out = append(out, g)
+			}
+		}
+		if len(out) == 0 {
+			out = append(out, sinceSegment{From: "", Since: 0})
+		}
+	}
+	out = append(out, sinceSegment{From: from, Since: t})
+	if to != "" {
+		out = append(out, sinceSegment{From: to, Since: sinceAt(segs, to)})
+		for _, g := range segs {
+			if g.From != "" && walkLess(to, g.From) {
+				out = append(out, g)
+			}
+		}
+	}
+	merged := out[:1]
+	for _, g := range out[1:] {
+		if g.Since != merged[len(merged)-1].Since {
+			merged = append(merged, g)
+		}
+	}
+	return merged
+}
+
+func (rt *AgentRuntime) loadJSONState(key string, v any) {
+	if s := models.GetLocalState(rt.DB, key); s != "" {
+		_ = json.Unmarshal([]byte(s), v)
+	}
+}
+
+func (rt *AgentRuntime) saveJSONState(key string, v any) {
+	if b, err := json.Marshal(v); err == nil {
+		_ = models.SetLocalState(rt.DB, key, string(b))
+	}
+}
+
+// incompleteScans returns the walks whose pass is split over several checks
+// because they reached the entry limit.
+func (rt *AgentRuntime) incompleteScans() []IncompleteScan {
+	var out []IncompleteScan
+	if at := models.GetLocalState(rt.DB, stateWritableResume); at != "" {
+		var pass writablePass
+		rt.loadJSONState(stateWritablePass, &pass)
+		out = append(out, IncompleteScan{Kind: ScanKindWritable, ResumeAt: at, Limit: rt.scanEntryLimit(), StartedAt: pass.StartedAt})
+	}
+	if at := models.GetLocalState(rt.DB, stateExecResume); at != "" {
+		started, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecPassStart), 10, 64)
+		out = append(out, IncompleteScan{Kind: ScanKindExecFiles, ResumeAt: at, Limit: rt.scanEntryLimit(), StartedAt: started})
+	}
+	return out
+}
+
+// scanFiles runs the file scans of one check. Each walk visits at most the
+// entry limit; a walk that reaches it continues at the same place in the
+// next check, and starts at the beginning again once it reached the end
+// (see chapter 10 of the system specification in Documents).
 func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart time.Time) []DetectionReport {
 	var out []DetectionReport
 	now := cycleStart.Unix()
+	limit := rt.scanEntryLimit()
 	_, users := ReadPasswd()
 	groups := ReadGroups()
 	uids := map[int]bool{}
@@ -429,22 +644,33 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		uids[u] = true
 	}
 	lastFull, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateLastFullScan), 10, 64)
-	// Allowed roots that a full scan of this cycle found for the first time.
-	// Files created in them before they became roots are older than the
-	// watermark, so they are scanned from the previous full scan.
-	var newRoots map[string]bool
-	// Allowed roots that appear after the scan configuration changed (another
-	// base directory, other allowed paths). They are scanned like the roots
-	// of a first scan: the files already in them are reported.
-	var freshRoots map[string]bool
-	if now-lastFull >= int64(c.ScanInterval()) {
-		wr, err := ScanWritable(c.Writable.Base, c.Writable.AllowedPaths, uids, c.Writable.Category)
+	// Since times of allowed roots that the executed-file scan has not
+	// walked to the end yet: roots found for the first time by a full scan
+	// (files created in them before they became roots are older than the
+	// since time of their part, so they are scanned from the previous full
+	// scan) and roots that appear after the scan configuration changed
+	// (scanned like the roots of a first scan: the files already in them are
+	// reported).
+	rootSince := map[string]int64{}
+	rt.loadJSONState(stateRootSince, &rootSince)
+	setRootSince := func(r string, v int64) {
+		if old, ok := rootSince[r]; !ok || v < old {
+			rootSince[r] = v
+		}
+	}
+	wResume := models.GetLocalState(rt.DB, stateWritableResume)
+	if wResume != "" || now-lastFull >= int64(c.ScanInterval()) {
+		var pass writablePass
+		if wResume != "" {
+			rt.loadJSONState(stateWritablePass, &pass)
+			rt.logf("writable scan of %s continues at %s", c.Writable.Base, wResume)
+		} else {
+			pass = writablePass{StartedAt: now}
+		}
+		wr, err := ScanWritableFrom(c.Writable.Base, c.Writable.AllowedPaths, uids, c.Writable.Category, wResume, limit)
 		if err != nil {
 			rt.logf("writable scan of %s failed: %v", c.Writable.Base, err)
 		} else {
-			if wr.Truncated {
-				rt.logf("writable scan of %s stopped after %d entries", c.Writable.Base, MaxScanEntries)
-			}
 			if c.WritableEnabled() {
 				for _, f := range wr.Findings {
 					fp := f.Fingerprint()
@@ -453,55 +679,90 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 					_ = models.TouchFinding(rt.DB, fp, now)
 				}
-				_ = models.PruneFindings(rt.DB, TypeWritable+"|", now)
 			}
-			if lastFull > 0 {
-				if old, err := models.ListScanRoots(rt.DB); err == nil {
-					known := map[string]bool{}
-					for _, r := range old {
-						known[r] = true
-					}
-					newRoots = map[string]bool{}
-					for _, r := range wr.AllowedRoots {
-						if !known[r] {
-							newRoots[r] = true
-						}
-					}
+			known := map[string]bool{}
+			if old, err := models.ListScanRoots(rt.DB); err == nil {
+				for _, r := range old {
+					known[r] = true
 				}
 			}
 			if prev := models.GetLocalState(rt.DB, stateScanPrevRoots); prev != "" {
 				var old []string
 				_ = json.Unmarshal([]byte(prev), &old)
-				known := map[string]bool{}
+				before := map[string]bool{}
 				for _, r := range old {
-					known[r] = true
+					before[r] = true
 				}
-				freshRoots = map[string]bool{}
 				for _, r := range wr.AllowedRoots {
-					if !known[r] {
-						freshRoots[r] = true
+					if !before[r] {
+						setRootSince(r, 0)
 					}
 				}
-				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, "")
+			} else {
+				for _, r := range wr.AllowedRoots {
+					if !known[r] {
+						setRootSince(r, lastFull)
+					}
+				}
 			}
-			_ = models.ReplaceScanRoots(rt.DB, wr.AllowedRoots)
-			_ = models.SetLocalState(rt.DB, stateLastFullScan, strconv.FormatInt(now, 10))
+			seen := map[string]bool{}
+			var passRoots []string
+			for _, r := range append(pass.Roots, wr.AllowedRoots...) {
+				if !seen[r] {
+					seen[r] = true
+					passRoots = append(passRoots, r)
+				}
+			}
+			pass.Roots = passRoots
+			if wr.Truncated {
+				// The roots of the previous pass stay until this one is complete.
+				all := passRoots
+				for r := range known {
+					if !seen[r] {
+						all = append(all, r)
+					}
+				}
+				_ = models.ReplaceScanRoots(rt.DB, all)
+				rt.saveJSONState(stateWritablePass, &pass)
+				_ = models.SetLocalState(rt.DB, stateWritableResume, wr.ResumeAt)
+				rt.logf("writable scan of %s stopped after %d entries; the next check continues at %s", c.Writable.Base, limit, wr.ResumeAt)
+			} else {
+				_ = models.ReplaceScanRoots(rt.DB, passRoots)
+				if c.WritableEnabled() {
+					_ = models.PruneFindings(rt.DB, TypeWritable+"|", pass.StartedAt)
+				}
+				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, "")
+				_ = models.SetLocalState(rt.DB, stateLastFullScan, strconv.FormatInt(pass.StartedAt, 10))
+				_ = models.DeleteLocalState(rt.DB, stateWritableResume, stateWritablePass)
+				if wResume != "" {
+					rt.logf("writable scan of %s completed the pass started at %s", c.Writable.Base,
+						time.Unix(pass.StartedAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
+				}
+			}
 		}
 	}
 	if c.ExecFilesEnabled() {
 		roots, err := models.ListScanRoots(rt.DB)
 		if err == nil {
-			wm, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecWatermark), 10, 64)
-			since := func(root string) int64 {
-				if freshRoots[root] {
-					return 0
-				}
-				if newRoots[root] && lastFull < wm {
-					return lastFull
-				}
-				return wm
+			var segs []sinceSegment
+			rt.loadJSONState(stateExecSince, &segs)
+			if len(segs) == 0 {
+				// The watermark of earlier versions covers everything.
+				wm, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecWatermark), 10, 64)
+				segs = []sinceSegment{{From: "", Since: wm}}
 			}
-			found, skipped, err := ScanExecFiles(c.Writable.Base, roots, c, since)
+			eResume := models.GetLocalState(rt.DB, stateExecResume)
+			since := func(root, p string) int64 {
+				v := sinceAt(segs, p)
+				if o, ok := rootSince[root]; ok && o < v {
+					v = o
+				}
+				return v
+			}
+			if eResume != "" {
+				rt.logf("executed-file scan continues at %s", eResume)
+			}
+			found, skipped, stop, err := ScanExecFilesFrom(c.Writable.Base, roots, c, since, eResume, limit)
 			if err != nil {
 				rt.logf("executed-file scan failed: %v", err)
 			} else {
@@ -518,13 +779,33 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 				for _, f := range skipped {
 					_ = models.TouchFinding(rt.DB, f.Fingerprint(), now)
 				}
-				// Files whose status changed at or after the cycle start are
-				// picked up again next time (duplicates are filtered above).
-				_ = models.SetLocalState(rt.DB, stateExecWatermark, strconv.FormatInt(now-1, 10))
+				// The walked part is scanned up to the second before the cycle
+				// start: files whose status changed at or after it are picked
+				// up again next time (duplicates are filtered above).
+				segs = markScanned(segs, eResume, stop, now-1)
+				rt.saveJSONState(stateExecSince, segs)
+				// A root walked to its end in this check needs no own since
+				// time any more.
+				for r := range rootSince {
+					if (eResume == "" || !entirelyBefore(r, eResume)) && (stop == "" || entirelyBefore(r, stop)) {
+						delete(rootSince, r)
+					}
+				}
+				if stop != "" {
+					if eResume == "" {
+						_ = models.SetLocalState(rt.DB, stateExecPassStart, strconv.FormatInt(now, 10))
+					}
+					_ = models.SetLocalState(rt.DB, stateExecResume, stop)
+					rt.logf("executed-file scan stopped after %d entries; the next check continues at %s", limit, stop)
+				} else if eResume != "" {
+					_ = models.DeleteLocalState(rt.DB, stateExecResume, stateExecPassStart)
+					rt.logf("executed-file scan completed its pass")
+				}
 				_ = models.PruneFindings(rt.DB, TypeExecFile+"|", now-7*24*3600)
 			}
 		}
 	}
+	rt.saveJSONState(stateRootSince, rootSince)
 	return out
 }
 
@@ -535,6 +816,7 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	if rt.rule != nil {
 		in.Rule = &RuleRef{ID: rt.rule.ID, Version: rt.rule.Version}
 		in.ScanBase = rt.rule.Content.Writable.Base
+		in.IncompleteScans = rt.incompleteScans()
 	}
 	if rt.Config != nil {
 		in.TrustedCAPEMs = rt.Config.CAPEMs

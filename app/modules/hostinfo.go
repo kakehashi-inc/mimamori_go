@@ -31,6 +31,22 @@ type RuleRef struct {
 	Version int   `json:"version"`
 }
 
+// Kinds of IncompleteScan.
+const (
+	ScanKindWritable  = "writable"
+	ScanKindExecFiles = "exec_files"
+)
+
+// IncompleteScan is a file scan whose pass is split over several checks
+// because one check visits at most Limit entries: the next check continues
+// at ResumeAt. StartedAt is the start of the pass (Unix seconds).
+type IncompleteScan struct {
+	Kind      string `json:"kind"`
+	ResumeAt  string `json:"resume_at"`
+	Limit     int    `json:"limit"`
+	StartedAt int64  `json:"started_at"`
+}
+
 // HostInfo is the host information reported every cycle.
 type HostInfo struct {
 	CollectedAt          int64           `json:"collected_at"`
@@ -46,6 +62,8 @@ type HostInfo struct {
 	Rule                 *RuleRef        `json:"rule"`
 	LastApply            *ApplyResult    `json:"last_apply"`
 	TrustedCAs           []TrustedCA     `json:"trusted_cas"`
+	// IncompleteScans lists the file scans whose pass is not complete yet.
+	IncompleteScans []IncompleteScan `json:"incomplete_scans"`
 	// OSUser is the OS user the agent runs as (the default OS user of new
 	// command sets). TimeZone and UTCOffsetSec describe the host's local
 	// time, in which recurring command set schedules are interpreted.
@@ -101,11 +119,14 @@ type HostInfoInput struct {
 	Rule          *RuleRef
 	LastApply     *ApplyResult
 	TrustedCAPEMs []string
+	// IncompleteScans is reported as it is.
+	IncompleteScans []IncompleteScan
 }
 
 // CollectHostInfo gathers the host information reported to the central.
 func CollectHostInfo(in HostInfoInput) *HostInfo {
-	hi := &HostInfo{CollectedAt: time.Now().Unix(), AgentVersion: AppVersion, ScanBase: in.ScanBase, Rule: in.Rule, LastApply: in.LastApply}
+	hi := &HostInfo{CollectedAt: time.Now().Unix(), AgentVersion: AppVersion, ScanBase: in.ScanBase, Rule: in.Rule, LastApply: in.LastApply,
+		IncompleteScans: in.IncompleteScans}
 	hi.Hostname, _ = os.Hostname()
 	hi.OSName, hi.OSVersion = ReadOSRelease()
 	hi.Kernel = kernelRelease()

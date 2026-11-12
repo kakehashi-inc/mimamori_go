@@ -113,6 +113,22 @@ func AssignRule(db Execer, id, ruleID int64, version int) error {
 		ruleID, version, Now(), ruleID, version, id)
 }
 
+// UnassignRule takes the assigned rule away from an agent. The application
+// status becomes pending until the agent reports that nothing is applied,
+// or none when the agent reported no applied rule and no failure.
+func UnassignRule(db Execer, id int64) error {
+	return execOne(db, `UPDATE agents SET assigned_rule_id = NULL, assigned_rule_version = 0, assigned_at = ?,
+		apply_status = CASE WHEN reported_rule_id = 0 AND apply_status IN ('none', 'pending') THEN 'none' ELSE 'pending' END WHERE id = ?`,
+		Now(), id)
+}
+
+// SetAgentApplyNone records that nothing is applied on the agent (the
+// central removed the audit rules of the disabled built-in agent).
+func SetAgentApplyNone(db Execer, id int64, message string, at int64) error {
+	return execOne(db, `UPDATE agents SET apply_status = 'none', apply_message = ?, apply_warnings = '[]', apply_version = 0, apply_at = ?,
+		reported_rule_id = 0, reported_rule_version = 0 WHERE id = ?`, message, at, id)
+}
+
 // CountAgentsUsingRule counts agents a rule is assigned to.
 func CountAgentsUsingRule(db Execer, ruleID int64) (int, error) {
 	var n int

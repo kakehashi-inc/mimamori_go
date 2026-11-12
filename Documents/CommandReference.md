@@ -58,7 +58,7 @@ Commands for the agent. Run them on each monitored host.
 
 | Command | Description |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped) |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped); the stored rule is cleared, and the first sync after the next start applies the rule assigned to the token or, when none is assigned, removes the audit rules the agent loaded |
 | `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token. Without `--port` the current port is kept |
 | `agent start` | Start the agent. Stops with SIGTERM or SIGINT |
 | `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has finished its cycle (default 300s) |
@@ -99,6 +99,7 @@ Management commands. Run them on the central host while the central is running. 
 | `ctl rules history ID` | List the versions of a rule |
 | `ctl rules diff ID FROM TO` | Show the difference between two versions |
 | `ctl rules apply ID --agent ID... [--version V]` | Apply a version (default: latest) to agents (an agent given more than once counts once; an agent that does not exist is an argument error) |
+| `ctl rules unassign --agent ID...` | Take the rule away from agents: at its next sync each agent removes the audit rules it loaded and its rules file, and reports that nothing is applied (an agent without a rule is left as it is and not counted; an agent given more than once counts once; an agent that does not exist is an argument error) |
 | `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version (default: latest) |
 | `ctl rules delete ID` | Delete a rule (not possible while applied) |
 

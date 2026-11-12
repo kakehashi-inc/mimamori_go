@@ -186,7 +186,10 @@ func ParseAuditRaw(data string) []*AuditEvent {
 	return out
 }
 
-// Syscall numbers needed for classification.
+// Syscall numbers needed for classification, by the arch value of the
+// record (AUDIT_ARCH_*). The aarch64 numbers are those of the aarch64 table
+// of the audit package (ausyscall aarch64 execve) and of
+// asm-generic/unistd.h.
 const (
 	archX8664   = "c000003e"
 	archI386    = "40000003"
@@ -195,12 +198,18 @@ const (
 	sysConnect  = 42
 	sysExecve32 = 11
 	sysExecat32 = 358
+
+	archAArch64      = "c00000b7"
+	sysExecveAArch64 = 221
+	sysExecatAArch64 = 281
+	sysConnAArch64   = 203
 )
 
 // classifyEvent returns the detection type of an event and its target.
 func classifyEvent(ev *AuditEvent) (string, string, bool) {
 	isExec := (ev.Arch == archX8664 && (ev.Syscall == sysExecve64 || ev.Syscall == sysExecat64)) ||
-		(ev.Arch == archI386 && (ev.Syscall == sysExecve32 || ev.Syscall == sysExecat32))
+		(ev.Arch == archI386 && (ev.Syscall == sysExecve32 || ev.Syscall == sysExecat32)) ||
+		(ev.Arch == archAArch64 && (ev.Syscall == sysExecveAArch64 || ev.Syscall == sysExecatAArch64))
 	denied := !ev.Success && (ev.Exit == -13 || ev.Exit == -1)
 	switch {
 	case isExec && denied:
@@ -216,7 +225,7 @@ func classifyEvent(ev *AuditEvent) (string, string, bool) {
 			target = ev.Exe
 		}
 		return TypeExec, truncate(target, MaxTargetLength), true
-	case ev.Arch == archX8664 && ev.Syscall == sysConnect:
+	case (ev.Arch == archX8664 && ev.Syscall == sysConnect) || (ev.Arch == archAArch64 && ev.Syscall == sysConnAArch64):
 		addr, ok := decodeSockAddr(ev.SockAddr)
 		if !ok {
 			return "", "", false

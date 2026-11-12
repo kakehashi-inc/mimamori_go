@@ -58,7 +58,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ） |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ）。保存していた監視ルールは消え、次に起動した後の最初の同期で、トークンに割り当てられた監視ルールを適用するか、割り当てが無ければエージェントが読み込んだ auditd のルールを削除する |
 | `agent set-central --host HOST [--port PORT]` | 初期化済みのエージェントの接続先（セントラルのホスト名とポート）を変える。エージェントの停止中だけ使え、新しい接続先に今のトークンで接続できた場合だけ保存する。`--port` を省略すると今のポートのままにする |
 | `agent start` | エージェントを起動する。SIGTERM または SIGINT で終了する |
 | `agent stop [--timeout DURATION]` | 起動中のエージェントを停止し、その回の処理を終えるまで待つ（既定 300s） |
@@ -99,6 +99,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `ctl rules history ID` | 監視ルールの版の一覧 |
 | `ctl rules diff ID FROM TO` | 2 つの版の差分を表示する |
 | `ctl rules apply ID --agent ID... [--version V]` | 版（既定は最新）をエージェントに適用する（同じエージェントを複数回指定しても 1 件として扱う。存在しないエージェントは引数エラー） |
+| `ctl rules unassign --agent ID...` | エージェントから監視ルールの割り当てを外す。各エージェントは次の同期で、読み込んだ auditd のルールとルールファイルを削除し、何も適用していないことを報告する（割り当ての無いエージェントはそのままで数えない。同じエージェントを複数回指定しても 1 件として扱う。存在しないエージェントは引数エラー） |
 | `ctl rules to-template ID NAME [--version V] [--description D]` | 版（既定は最新）からテンプレートを作る（管理者が作成したテンプレートになる） |
 | `ctl rules delete ID` | 監視ルールを削除する（適用中は不可） |
 

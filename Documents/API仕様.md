@@ -189,8 +189,16 @@ interface HostInfo {
   rule: { id: number; version: number } | null;
   last_apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[] };
   trusted_cas: { fingerprint: string; not_after: string }[];
+  incomplete_scans: {                // 項目数の上限に達し、続きを次の確認に回しているファイルの走査（無ければ空）
+    kind: 'writable' | 'exec_files'; // 書き込み可能な状態の走査 / 実行されるファイルの走査
+    resume_at: string;               // 次の確認で続きを始めるパス
+    limit: number;                   // 1 回の確認でたどる項目数の上限
+    started_at: string | null;       // 途中の 1 巡を始めた日時
+  }[];
 }
 ```
+
+- `apply.status` の `none` は、監視ルールが適用されていない状態です。監視ルールの割り当てを外すと（6 章の `POST /rules/unassign`）、エージェントがルールを削除したと報告するまで `pending`、報告の後は `none` になります（`rule` は null、`apply.version` は null。適用も失敗も報告していなかったエージェントはすぐに `none`）。無効にした内蔵エージェントのルールをセントラルが削除した場合も `none` です。
 
 ## 4.1 コマンドセット
 
@@ -374,6 +382,7 @@ interface Token {
 | POST | `/rules` | A | `RuleCreate` | `RuleDetail`（衝突のあるテンプレートで `choices` が足りないと 400） |
 | PUT | `/rules/{id}` | A | `{"description"?,"content","comment"?}` | `RuleDetail`（版が 1 上がる。`description` を省略すると現在の説明を保つ） |
 | POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400） |
+| POST | `/rules/unassign` | A | `{"agent_ids":[1,2]}` | `{"unassigned":1}`（監視ルールの割り当てを外す。エージェントは次の同期で auditd のルールとルールファイルを削除し、`none` を報告する。割り当ての無いエージェントはそのまま（件数に数えない）。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID があると 400） |
 | POST | `/rules/{id}/to-template` | A | `{"version"?,"name","description"?}` | `TemplateDetail`（`version` を省略または 0 にすると最新の版。名前の形式の誤りは 400、組み込みと同名または既存と重複は 409） |
 | DELETE | `/rules/{id}` | A | - | `{}`（適用中なら 409） |
 | POST | `/rules/validate` | A | `{"content":RuleContent}` | `{"errors":string[]}` |
@@ -616,7 +625,7 @@ interface Guide {
 
 ```ts
 interface ApplyResult {
-  status: 'none' | 'ok' | 'warning' | 'error';
+  status: 'none' | 'pending' | 'ok' | 'warning' | 'error';   // none: 監視ルールが無く、auditd のルールを削除した（rule_id と version は 0）。pending: agent init --overwrite で保存していた監視ルールを消した（次の同期で決まる）
   message: string;
   rule_id: number; version: number;   // 適用した監視ルールとその版
   at: number;                         // 適用した日時（Unix 秒）
@@ -662,7 +671,7 @@ interface DetectionReport {
 interface ReportRequest {
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
-  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after）は Unix 秒
+  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
   apply?: ApplyResult;                 // 最後の適用の結果（まだ適用していなければ省略）
   dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
   command_runs?: CommandRunReport[];   // コマンドセットの実行（開始、コマンドごと、終了のたびに送る）
@@ -690,6 +699,7 @@ interface CommandRunReport {
 ```
 
 - `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
+- `apply.status` が `none` の報告は、適用中の監視ルールを無し（`reported_version` も無し）として記録します。`error` の報告は、それまでに報告された適用中の監視ルールを変えません。
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
 - コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。`request_id` のある実行を作ると、その指示を `done` にします。
 - `command_request_acks` の `started` は指示を `done` に、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `expired` にします（後の 2 つは履歴に残す）。

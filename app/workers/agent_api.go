@@ -319,18 +319,25 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
 		w, _ := json.Marshal(nonNil(ap.Warnings))
 		f.ApplyWarnings = string(w)
-		if ap.Status == "ok" || ap.Status == "warning" {
+		switch ap.Status {
+		case "ok", "warning":
 			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
-		} else {
+		case modules.ApplyStatusNone:
+			// The agent removed its audit rules: nothing is applied.
+			f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
+		default:
 			f.ReportedRuleID, f.ReportedRuleVersion = agent.ReportedRuleID, agent.ReportedRuleVersion
 		}
 		if ap.At != agent.ApplyAt || ap.Status != agent.ApplyStatus {
-			ruleName := fmt.Sprintf("rule %d", ap.RuleID)
-			if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
-				ruleName = r.Name
+			detail := strings.Join(append([]string{ap.Message}, ap.Warnings...), "; ")
+			if ap.RuleID > 0 {
+				ruleName := fmt.Sprintf("rule %d", ap.RuleID)
+				if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
+					ruleName = r.Name
+				}
+				detail = fmt.Sprintf("%s version %d: %s", ruleName, ap.Version, detail)
 			}
-			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent),
-				fmt.Sprintf("%s version %d: %s", ruleName, ap.Version, strings.Join(append([]string{ap.Message}, ap.Warnings...), "; ")))
+			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent), detail)
 		}
 	}
 	if req.Dropped > 0 {

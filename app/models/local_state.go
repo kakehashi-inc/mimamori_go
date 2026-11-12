@@ -23,3 +23,13 @@ func SetLocalState(db Execer, key, value string) error {
 	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
 }
+
+// DeleteLocalState removes the keys.
+func DeleteLocalState(db Execer, keys ...string) error {
+	for _, k := range keys {
+		if _, err := db.Exec(`DELETE FROM state WHERE key = ?`, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}

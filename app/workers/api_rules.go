@@ -467,6 +467,55 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"applied": len(in.AgentIDs)})
 }
 
+// handleUnassignRule takes the rule away from agents: they remove their
+// audit rules at the next sync and report that nothing is applied. An
+// agent without a rule is left as it is.
+func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AgentIDs []int64 `json:"agent_ids"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(in.AgentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "select at least one agent")
+		return
+	}
+	seen := map[int64]bool{}
+	var agents []*models.Agent
+	for _, id := range in.AgentIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		a, err := models.GetAgent(c.db, id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "agent "+itoa64(id)+" not found")
+			return
+		}
+		agents = append(agents, a)
+	}
+	p := principalFrom(r)
+	n := 0
+	for _, a := range agents {
+		if !a.AssignedRuleID.Valid {
+			continue
+		}
+		if err := models.UnassignRule(c.db, a.ID); err != nil {
+			c.internalError(w, r, err)
+			return
+		}
+		ruleName := "rule " + itoa64(a.AssignedRuleID.Int64)
+		if rule, err := models.GetRule(c.db, a.AssignedRuleID.Int64); err == nil {
+			ruleName = rule.Name
+		}
+		c.history(p, models.HistRule, "unassigned", ruleName, fmt.Sprintf("version %d from %s", a.AssignedRuleVersion, c.agentDisplayName(a)))
+		n++
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"unassigned": n})
+}
+
 func (c *core) handleRuleToTemplate(w http.ResponseWriter, r *http.Request) {
 	rule := c.loadRule(w, r)
 	if rule == nil {

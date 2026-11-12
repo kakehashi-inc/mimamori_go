@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -59,12 +60,59 @@ func relComponents(base, p string) []string {
 	return SplitComponents(filepath.ToSlash(rel))
 }
 
-// WritableScanResult is the outcome of a writable-state scan.
+// walkLess reports whether path a comes before path b in the order of
+// filepath.WalkDir: paths are compared directory name by directory name, and
+// a directory comes before its contents. (A plain string comparison is not
+// that order: "a/b" is walked before "a.c".)
+func walkLess(a, b string) bool {
+	ca, cb := strings.Split(filepath.Clean(a), "/"), strings.Split(filepath.Clean(b), "/")
+	for i := 0; i < len(ca) && i < len(cb); i++ {
+		if ca[i] != cb[i] {
+			return ca[i] < cb[i]
+		}
+	}
+	return len(ca) < len(cb)
+}
+
+// isAncestor reports whether dir is a directory above p.
+func isAncestor(dir, p string) bool {
+	dir, p = filepath.Clean(dir), filepath.Clean(p)
+	if dir == p {
+		return false
+	}
+	if dir == "/" {
+		return strings.HasPrefix(p, "/")
+	}
+	return strings.HasPrefix(p, dir+"/")
+}
+
+// entirelyBefore reports whether p and everything below it come before pos
+// in the walk order.
+func entirelyBefore(p, pos string) bool {
+	return walkLess(p, pos) && !isAncestor(p, pos)
+}
+
+// resumeCheck tells a walk that continues at resume what to do with p: skip
+// it (and its contents when it is a directory before resume), enter it
+// without processing it (a directory above resume), or process it.
+func resumeCheck(p, resume string, isDir bool) (skip, enterOnly bool) {
+	if resume == "" || !walkLess(p, resume) {
+		return false, false
+	}
+	if isDir && isAncestor(p, resume) {
+		return false, true
+	}
+	return true, false
+}
+
+// WritableScanResult is the outcome of a writable-state scan. ResumeAt is
+// the first entry not visited when the entry limit was reached.
 type WritableScanResult struct {
 	Findings     []FileFinding
 	AllowedRoots []string
 	Visited      int
 	Truncated    bool
+	ResumeAt     string
 }
 
 // ScanWritable walks base without following symbolic links and without
@@ -73,6 +121,15 @@ type WritableScanResult struct {
 // file or directory owned by one of uids, or writable by its group or by
 // others, is a finding.
 func ScanWritable(base string, allowed []string, uids map[int]bool, category string) (*WritableScanResult, error) {
+	return ScanWritableFrom(base, allowed, uids, category, "", MaxScanEntries)
+}
+
+// ScanWritableFrom is ScanWritable continuing at resume (empty: from the
+// beginning) and visiting at most limit entries. Entries before resume are
+// not visited; directories above it are entered without being reported.
+// When the limit is reached, Truncated is set and ResumeAt is the first
+// entry not visited.
+func ScanWritableFrom(base string, allowed []string, uids map[int]bool, category, resume string, limit int) (*WritableScanResult, error) {
 	res := &WritableScanResult{}
 	rootInfo, err := os.Lstat(base)
 	if err != nil {
@@ -96,10 +153,20 @@ func ScanWritable(base string, allowed []string, uids map[int]bool, category str
 			}
 			return nil
 		}
-		res.Visited++
-		if res.Visited > MaxScanEntries {
-			res.Truncated = true
-			return errScanLimit
+		skip, enterOnly := resumeCheck(p, resume, d.IsDir())
+		if skip {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !enterOnly {
+			res.Visited++
+			if res.Visited > limit {
+				res.Truncated = true
+				res.ResumeAt = p
+				return errScanLimit
+			}
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -120,6 +187,10 @@ func ScanWritable(base string, allowed []string, uids map[int]bool, category str
 					return fs.SkipDir
 				}
 			}
+		}
+		if enterOnly {
+			// Visited by an earlier check of this pass.
+			return nil
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
 			return nil
@@ -146,13 +217,25 @@ func ScanWritable(base string, allowed []string, uids map[int]bool, category str
 // for the first time: its files in legitimate locations are not reported;
 // they are returned as skipped instead.
 func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root string) int64) (found, skipped []FileFinding, err error) {
+	found, skipped, _, err = ScanExecFilesFrom(base, roots, c, func(root, _ string) int64 { return since(root) }, "", MaxScanEntries)
+	return found, skipped, err
+}
+
+// ScanExecFilesFrom is ScanExecFiles with a since time for each file
+// (since(root, path)), continuing at resume (empty: from the beginning) and
+// visiting at most limit entries. The roots are walked in the walk order of
+// their paths; roots outside base are not walked. A file whose since is 0 is
+// scanned for the first time (see ScanExecFiles). When the limit is reached,
+// resumeAt is the first entry not visited; it is empty when the walk reached
+// the end.
+func ScanExecFilesFrom(base string, roots []string, c *RuleContent, since func(root, path string) int64, resume string, limit int) (found, skipped []FileFinding, resumeAt string, err error) {
 	exts := map[string]bool{}
 	for _, e := range c.ExecFiles.Extensions {
 		exts[e] = true
 	}
 	baseInfo, err := os.Lstat(base)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	baseDev := statT(baseInfo).Dev
 	type legit struct {
@@ -168,10 +251,18 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 		}
 		legits = append(legits, legit{seq: SplitComponents(l.Path), exts: m, cat: l.Category})
 	}
+	ordered := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if r == base || isAncestor(base, r) {
+			ordered = append(ordered, r)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return walkLess(ordered[i], ordered[j]) })
 	visited := 0
-	for _, root := range roots {
-		rootSince := since(root)
-		skipLegit := rootSince == 0
+	for _, root := range ordered {
+		if resume != "" && entirelyBefore(root, resume) {
+			continue
+		}
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
 			if werr != nil {
 				if d != nil && d.IsDir() && p != root {
@@ -179,9 +270,19 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 				}
 				return nil
 			}
-			visited++
-			if visited > MaxScanEntries {
-				return errScanLimit
+			skip, enterOnly := resumeCheck(p, resume, d.IsDir())
+			if skip {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !enterOnly {
+				visited++
+				if visited > limit {
+					resumeAt = p
+					return errScanLimit
+				}
 			}
 			info, err := d.Info()
 			if err != nil {
@@ -201,7 +302,11 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(p))
-			if !exts[ext] || st.Ctim.Sec <= rootSince {
+			if !exts[ext] {
+				return nil
+			}
+			fileSince := since(root, p)
+			if st.Ctim.Sec <= fileSince {
 				return nil
 			}
 			comps := relComponents(base, filepath.Dir(p))
@@ -217,7 +322,7 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 				Path: p, Ctime: st.Ctim.Sec, UID: int(st.Uid), GID: int(st.Gid),
 				Mode: info.Mode(), Category: cat, Type: TypeExecFile,
 			}
-			if isLegit && skipLegit {
+			if isLegit && fileSince == 0 {
 				skipped = append(skipped, f)
 				return nil
 			}
@@ -228,5 +333,5 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 			break
 		}
 	}
-	return found, skipped, nil
+	return found, skipped, resumeAt, nil
 }

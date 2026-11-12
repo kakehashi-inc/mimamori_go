@@ -75,6 +75,16 @@ type hostInfoJSON struct {
 	Rule                 *modules.RuleRef        `json:"rule"`
 	LastApply            applyJSON               `json:"last_apply"`
 	TrustedCAs           []trustedCAJSON         `json:"trusted_cas"`
+	IncompleteScans      []incompleteScanJSON    `json:"incomplete_scans"`
+}
+
+// incompleteScanJSON is a file scan split over several checks (see
+// modules.IncompleteScan).
+type incompleteScanJSON struct {
+	Kind      string  `json:"kind"`
+	ResumeAt  string  `json:"resume_at"`
+	Limit     int     `json:"limit"`
+	StartedAt *string `json:"started_at"`
 }
 
 type trustedCAJSON struct {
@@ -91,8 +101,13 @@ func applyOut(ap *modules.ApplyResult) applyJSON {
 	if ap == nil {
 		return applyJSON{Status: "none", Warnings: []string{}}
 	}
-	v := ap.Version
-	return applyJSON{Status: ap.Status, Message: ap.Message, Version: &v, At: ts(ap.At), Warnings: nonNil(ap.Warnings)}
+	out := applyJSON{Status: ap.Status, Message: ap.Message, At: ts(ap.At), Warnings: nonNil(ap.Warnings)}
+	// A result without a rule (nothing applied) has no version.
+	if ap.Version > 0 {
+		v := ap.Version
+		out.Version = &v
+	}
+	return out
 }
 
 // agentSummary builds the list entry of an agent.
@@ -239,9 +254,12 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		hj := &hostInfoJSON{CollectedAt: ts(hi.CollectedAt), Hostname: hi.Hostname, OSName: hi.OSName, OSVersion: hi.OSVersion,
 			Kernel: hi.Kernel, AgentVersion: hi.AgentVersion, Auditd: auditdOut(hi.Auditd),
 			ScanBase: hi.ScanBase, Directories: nonNil(hi.Directories), DirectoriesTruncated: hi.DirectoriesTruncated,
-			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}}
+			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}, IncompleteScans: []incompleteScanJSON{}}
 		for _, t := range hi.TrustedCAs {
 			hj.TrustedCAs = append(hj.TrustedCAs, trustedCAJSON{Fingerprint: t.Fingerprint, NotAfter: ts(t.NotAfter)})
+		}
+		for _, sc := range hi.IncompleteScans {
+			hj.IncompleteScans = append(hj.IncompleteScans, incompleteScanJSON{Kind: sc.Kind, ResumeAt: sc.ResumeAt, Limit: sc.Limit, StartedAt: ts(sc.StartedAt)})
 		}
 		out.HostInfo = hj
 	}

@@ -548,6 +548,7 @@ type CtlRulesCmd struct {
 	History    CtlRulesHistoryCmd    `cmd:"" help:"List the versions of a rule"`
 	Diff       CtlRulesDiffCmd       `cmd:"" help:"Show the difference between two versions"`
 	Apply      CtlRulesApplyCmd      `cmd:"" help:"Apply a version to agents"`
+	Unassign   CtlRulesUnassignCmd   `cmd:"" help:"Take the rule away from agents (they remove their audit rules)"`
 	ToTemplate CtlRulesToTemplateCmd `cmd:"" name:"to-template" help:"Define an administrator template from a version"`
 	Delete     CtlRulesDeleteCmd     `cmd:"" help:"Delete a rule (not possible while applied)"`
 }
@@ -590,6 +591,9 @@ type CtlRulesApplyCmd struct {
 	ID      int64   `arg:""`
 	Agent   []int64 `help:"Agent id (repeatable)" required:""`
 	Version int     `help:"Version (default: latest)"`
+}
+type CtlRulesUnassignCmd struct {
+	Agent []int64 `help:"Agent id (repeatable)" required:""`
 }
 type CtlRulesToTemplateCmd struct {
 	ID          int64  `arg:""`
@@ -758,6 +762,10 @@ func (c *CtlRulesDiffCmd) Run(p *CtlCmd) error {
 
 func (c *CtlRulesApplyCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "POST", fmt.Sprintf("/rules/%d/apply", c.ID), map[string]any{"version": c.Version, "agent_ids": c.Agent})
+}
+
+func (c *CtlRulesUnassignCmd) Run(p *CtlCmd) error {
+	return runCtl(p, "POST", "/rules/unassign", map[string]any{"agent_ids": c.Agent})
 }
 
 func (c *CtlRulesToTemplateCmd) Run(p *CtlCmd) error {
