@@ -473,8 +473,11 @@ func (s *connServer) accept(sp *listenerSpec, now time.Time) {
 
 // evictWaiting makes room in a full table by rejecting the oldest
 // connection that has not delivered a complete request head, so that
-// connections which send nothing cannot keep new clients out. It reports
-// whether one was rejected.
+// connections which send nothing cannot keep new clients out. When there is
+// none, the oldest connection that waits for its peer otherwise (a large
+// body that has not arrived, or a response the client does not read) is
+// dropped, so that such connections cannot keep new clients out either. It
+// reports whether one was dropped.
 func (s *connServer) evictWaiting() bool {
 	for _, c := range s.conns {
 		if c.state == stateHello || (c.state == stateRequest && c.headLen == 0) {
@@ -482,6 +485,18 @@ func (s *connServer) evictWaiting() bool {
 			s.compact()
 			return true
 		}
+	}
+	for _, c := range s.conns {
+		switch c.state {
+		case stateRequest:
+			s.reject(c)
+		case stateWriting:
+			s.closeConn(c) // part of the response may be written already
+		default:
+			continue
+		}
+		s.compact()
+		return true
 	}
 	return false
 }
@@ -605,6 +620,13 @@ func (s *connServer) readRequest(c *conn) {
 			n, eof, err = s.receiveTLS(c)
 		}
 		if err != nil {
+			if c.tlsIO != nil {
+				// crypto/tls queued an alert (for example unexpected
+				// message on a renegotiation attempt): send it if the
+				// socket takes it now.
+				c.out, c.tlsIO.out = c.tlsIO.out, nil
+				_, _ = c.writeOut()
+			}
 			s.closeConn(c)
 			return
 		}

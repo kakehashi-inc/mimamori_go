@@ -166,7 +166,7 @@ interface AgentSummary {
   unacked_alerts: number;
   auditd: AuditdStatus | null;
   ca_up_to_date: boolean;            // 最新の独自CAを受け取っているか（一度も同期していないエージェントは true）
-  builtin_running: boolean | null;   // 内蔵エージェントのみ
+  builtin_running: boolean | null;   // 内蔵エージェントのみ（設定 builtin_agent で無効にしている場合は null）
 }
 interface TokenRef { id: number; name: string; status: TokenStatus; expires_at: string }
 interface AuditdStatus {

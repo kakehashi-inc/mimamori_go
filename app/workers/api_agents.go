@@ -120,8 +120,12 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		s.SecondsSinceReport = &d
 	}
 	if a.Kind == models.AgentBuiltin {
-		running, _ := c.builtinStatus()
-		s.BuiltinRunning = &running
+		// A built-in agent disabled in the configuration is the
+		// administrator's choice and is not reported as stopped.
+		if *c.conf().BuiltinAgent {
+			running, _ := c.builtinStatus()
+			s.BuiltinRunning = &running
+		}
 		if s.Hostname == "" {
 			s.Hostname = c.hostname
 		}

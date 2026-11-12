@@ -345,6 +345,54 @@ func TestConnServerFullQueue(t *testing.T) {
 	}
 }
 
+// A table full of connections that sent a complete head and wait for their
+// peer otherwise (a large body that does not come, or a response that is not
+// read) also makes room: the oldest of them is dropped, so a normal client
+// is still served.
+func TestConnServerFullQueueOfBodiesAndReaders(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 30*time.Second)
+		const readers = 20
+		var held []net.Conn
+		for i := 0; i < readers; i++ {
+			c := dial(t, ts.web, "")
+			_ = c.(*net.TCPConn).SetReadBuffer(4096)
+			if _, err := io.WriteString(c, "GET /test/big?mib=4 HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			held = append(held, c)
+		}
+		// Let the handlers finish (slower under -race); the responses stay
+		// unread (4 MiB is more than the kernel's buffers take).
+		time.Sleep(3 * time.Second)
+		for i := 0; i < modules.MaxPendingConns-readers+10; i++ {
+			c := dial(t, ts.web, "")
+			if _, err := io.WriteString(c, "POST /test/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 30000000\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			held = append(held, c)
+		}
+		time.Sleep(500 * time.Millisecond)
+		for i := 0; i < 3; i++ {
+			ts.checkFast(t, time.Second, "with a table full of waiting bodies and readers")
+		}
+		// Each further connection evicts the oldest: the remaining readers
+		// of a large response (closed; the kernel still sends what it
+		// holds), then the oldest large-body connection, which gets 503.
+		for i := 0; i < readers; i++ {
+			c := dial(t, ts.web, "")
+			if _, err := io.WriteString(c, "POST /test/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 30000000\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		ts.checkFast(t, time.Second, "after the readers were dropped")
+		if line := statusLine(held[readers], 5*time.Second); !strings.Contains(line, " 503 ") {
+			t.Fatalf("oldest large-body connection: %q, want 503", line)
+		}
+	})
+}
+
 const loginHead = "POST /api/v1/auth/login HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n"
 
 // Login requests that send the head and no body (or the body slowly) hold

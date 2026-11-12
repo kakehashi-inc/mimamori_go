@@ -19,13 +19,13 @@ import { applyRule, deleteRule, getConfig, ruleToTemplate, unassignRule } from '
 /**
  * Whether the built-in agent is disabled in the configuration the central
  * runs with: a restart item that is pending runs with the other value.
- * Without the configuration, a built-in agent that does not run is taken as
- * disabled.
+ * Without the configuration, a built-in agent that does not run (or is not
+ * reported because it is disabled) is taken as disabled.
  */
 function builtinDisabled(config: CentralConfig | null, agent: AgentSummary): boolean {
     if (agent.kind !== 'builtin') return false;
     const item = config?.items.find(i => i.name === 'builtin_agent');
-    if (!item) return agent.builtin_running === false;
+    if (!item) return agent.builtin_running !== true;
     const enabled = item.value === 'true';
     return item.pending ? enabled : !enabled;
 }

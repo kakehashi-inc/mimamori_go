@@ -310,6 +310,10 @@ func TestOverviewBuiltinDisabled(t *testing.T) {
 	if o := get(); o.BuiltinAgent.Enabled || o.BuiltinAgent.Running || o.BuiltinAgent.Message != "" {
 		t.Fatalf("disabled built-in agent: %+v", o.BuiltinAgent)
 	}
+	// The agent list shows no "stopped" badge for it either.
+	if s := e.c.agentSummary(b, nil, nil); s.BuiltinRunning != nil {
+		t.Fatalf("disabled built-in agent in the list: builtin_running %v", *s.BuiltinRunning)
+	}
 
 	enabled := true
 	cfg.BuiltinAgent = &enabled
@@ -317,5 +321,17 @@ func TestOverviewBuiltinDisabled(t *testing.T) {
 	e.c.startBuiltinAgent(b, stop)()
 	if o := get(); !o.BuiltinAgent.Enabled || o.BuiltinAgent.Running || !strings.HasPrefix(o.BuiltinAgent.Message, "auditd is not usable") {
 		t.Fatalf("built-in agent without auditd: %+v", o.BuiltinAgent)
+	}
+	if s := e.c.agentSummary(b, nil, nil); s.BuiltinRunning == nil || *s.BuiltinRunning {
+		t.Fatalf("built-in agent without auditd in the list: builtin_running %v", s.BuiltinRunning)
+	}
+
+	// Enabled and running (auditd usable): no banner.
+	e.c.setBuiltinStatus(true, "")
+	if o := get(); !o.BuiltinAgent.Enabled || !o.BuiltinAgent.Running || o.BuiltinAgent.Message != "" {
+		t.Fatalf("running built-in agent: %+v", o.BuiltinAgent)
+	}
+	if s := e.c.agentSummary(b, nil, nil); s.BuiltinRunning == nil || !*s.BuiltinRunning {
+		t.Fatalf("running built-in agent in the list: builtin_running %v", s.BuiltinRunning)
 	}
 }
