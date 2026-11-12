@@ -465,9 +465,10 @@ function CommandEditor({
                     />
                 </Field>
                 <Field label={t('commandSets.fields.note')} htmlFor={`${id}-note`}>
-                    <input
+                    <textarea
                         id={`${id}-note`}
                         className={inputClass}
+                        rows={Math.min(6, Math.max(1, command.note.split('\n').length))}
                         maxLength={1000}
                         value={command.note}
                         onChange={e => set('note', e.target.value)}
@@ -636,7 +637,7 @@ function CodeSpecInput({
             type='number'
             min={0}
             max={255}
-            aria-label={aria}
+            aria-label={`${label}: ${aria}`}
             className={inputSmClass.replace('w-full', 'w-20')}
             value={value[field]}
             onChange={e => onChange({ ...value, [field]: e.target.value })}

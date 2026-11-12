@@ -56,6 +56,12 @@ export interface SetDraft {
     kind: ScheduleKind;
     /** Value of a datetime-local input (browser local time). */
     onceAt: string;
+    /**
+     * The saved once time (RFC3339) and its datetime-local value: sent as it
+     * was while the field is unchanged, so that seconds are kept and an
+     * unchanged past time is not refused.
+     */
+    onceSaved: { at: string; input: string } | null;
     weekdays: Weekday[];
     time: string;
     everyHours: number;
@@ -127,6 +133,7 @@ export function newSetDraft(osUser: string): SetDraft {
         runMode: 'manual',
         kind: 'daily',
         onceAt: '',
+        onceSaved: null,
         weekdays: ['mon'],
         time: '03:00',
         everyHours: 1,
@@ -150,6 +157,7 @@ export function setDraftFrom(set: CommandSet): SetDraft {
         runMode: set.run_mode,
         kind: sc?.kind ?? d.kind,
         onceAt: sc?.kind === 'once' ? toLocalInput(sc.at) : '',
+        onceSaved: sc?.kind === 'once' && sc.at ? { at: sc.at, input: toLocalInput(sc.at) } : null,
         weekdays: sc?.weekdays?.length ? sc.weekdays : d.weekdays,
         time: sc?.time || d.time,
         everyHours: sc?.kind === 'every_hours' && sc.every ? sc.every : d.everyHours,
@@ -171,9 +179,14 @@ export function setDraftFrom(set: CommandSet): SetDraft {
     };
 }
 
-/** A typed number; an empty or invalid field becomes NaN, which the server reports as invalid. */
+/** A typed number; an empty or invalid field becomes NaN (sent as null; see draftProblems). */
 function num(s: string): number {
     return s.trim() === '' ? NaN : Number(s);
+}
+
+/** Whether a typed number is a whole number (the server takes whole numbers only). */
+function isWhole(s: string): boolean {
+    return /^\s*\d+\s*$/.test(s);
 }
 
 function codeSpec(c: CodeDraft): CodeSpec {
@@ -185,7 +198,10 @@ export function draftSchedule(d: SetDraft): CommandSchedule | null {
     if (d.runMode === 'manual') return null;
     switch (d.kind) {
         case 'once':
-            return { kind: 'once', at: localInputToOffsetTime(d.onceAt) };
+            return {
+                kind: 'once',
+                at: d.onceSaved && d.onceSaved.input === d.onceAt ? d.onceSaved.at : localInputToOffsetTime(d.onceAt),
+            };
         case 'weekly':
             return { kind: 'weekly', weekdays: WEEKDAYS.filter(w => d.weekdays.includes(w)), time: d.time };
         case 'daily':
@@ -202,7 +218,8 @@ export function draftSchedule(d: SetDraft): CommandSchedule | null {
 /**
  * The definition sent to the server. Patterns and line limits are used only
  * when output is collected: for "run only" no patterns are sent (the form
- * keeps them in case the purpose is switched back).
+ * keeps them in case the purpose is switched back) and the hidden line limit
+ * is sent as it was, or as the default when it is not a whole number.
  */
 export function draftToSpec(d: SetDraft): CommandSetSpec {
     const collect = d.purpose === 'collect_output';
@@ -223,10 +240,44 @@ export function draftToSpec(d: SetDraft): CommandSetSpec {
             failure: codeSpec(c.failure),
             on_problems: c.onProblems,
             timeout_sec: num(c.timeoutSec),
-            line_limit: collect ? num(c.lineLimit) : DEFAULT_LINE_LIMIT,
+            line_limit: collect || isWhole(c.lineLimit) ? num(c.lineLimit) : DEFAULT_LINE_LIMIT,
             patterns: collect ? c.patterns.map(p => p.value) : [],
         })),
     };
+}
+
+/**
+ * Problems the form finds before the server is asked: number fields that are
+ * empty or not whole numbers (JSON would send them as null, which the server
+ * takes as "use the default") and a missing once time. Ranges and everything
+ * else are checked by the server.
+ */
+export function draftProblems(t: TFunction, d: SetDraft): string[] {
+    const out: string[] = [];
+    const whole = (value: string, field: string) => {
+        if (!isWhole(value)) out.push(t('commandSets.local.wholeNumber', { field }));
+    };
+    whole(d.keepRuns, t('commandSets.fields.keepRuns'));
+    if (d.runMode === 'schedule') {
+        if (d.kind === 'once' && localInputToOffsetTime(d.onceAt) === '')
+            out.push(t('commandSets.local.onceAt', { field: t('commandSets.editor.onceAt') }));
+        if (d.kind === 'hourly_at') whole(d.minute, t('commandSets.editor.minuteOfHour'));
+    }
+    d.commands.forEach((c, i) => {
+        const prefix = (p: string) => t('commandSets.local.inCommand', { n: i + 1, problem: p });
+        const before = out.length;
+        whole(c.timeoutSec, t('commandSets.fields.timeoutSec'));
+        if (d.purpose === 'collect_output') whole(c.lineLimit, t('commandSets.fields.lineLimit'));
+        for (const [spec, label] of [
+            [c.success, t('commandSets.fields.success')],
+            [c.failure, t('commandSets.fields.failure')],
+        ] as const) {
+            whole(spec.a, label);
+            if (spec.kind === 'range') whole(spec.b, label);
+        }
+        for (let k = before; k < out.length; k++) out[k] = prefix(out[k]);
+    });
+    return out;
 }
 
 /** Whether a code spec includes the exit code (an incomplete spec includes nothing). */

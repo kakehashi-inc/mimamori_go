@@ -11,7 +11,14 @@ import type { CommandSetList } from '../../types';
 import { errorMessage } from '../../utils/format';
 import { createCommandSet, listCommandSets, updateCommandSet, validateCommandSet } from '../api';
 import { CommandSetEditor } from '../components/CommandSetEditor';
-import { draftToSpec, hostZoneText, newSetDraft, setDraftFrom, type SetDraft } from '../components/commandSetDraft';
+import {
+    draftProblems,
+    draftToSpec,
+    hostZoneText,
+    newSetDraft,
+    setDraftFrom,
+    type SetDraft,
+} from '../components/commandSetDraft';
 import { StepUpCancelled, useStepUp } from '../components/StepUp';
 
 const linkClass =
@@ -72,10 +79,13 @@ function EditForm({ list, setId, back }: { list: CommandSetList; setId?: number;
     // A change makes an earlier check result stale.
     useEffect(() => setProblems(null), [draft]);
 
+    // The problems the form finds come first, then those of the server.
     async function check(): Promise<boolean> {
+        const local = draftProblems(t, draft);
         const errors = await validateCommandSet(list.agent_id, draftToSpec(draft), setId);
-        setProblems(errors);
-        return errors.length === 0;
+        const all = [...local, ...errors];
+        setProblems(all);
+        return all.length === 0;
     }
 
     async function runCheck() {

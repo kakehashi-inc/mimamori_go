@@ -286,7 +286,7 @@
             },
             "smtp_host": {
                 "label": "SMTP server",
-                "hint": "While empty, no notifications are sent and no verification codes are used (login and e-mail address changes). Notifications are sent only when the server, sender and recipients are set."
+                "hint": "While empty, no notifications are sent and no verification codes are used (login, e-mail address changes and changes of command sets). Notifications are sent only when the server and sender are set and there is at least one recipient (accounts chosen as notification recipients or additional recipients)."
             },
             "smtp_port": {
                 "label": "Port",
@@ -313,7 +313,7 @@
                 "hint": "Sender address. Required for notifications and verification codes."
             },
             "smtp_to": {
-                "label": "Recipients",
+                "label": "Additional recipients",
                 "hint": "Additional recipient addresses of the notification mails, such as a shared mailbox, besides the accounts chosen as notification recipients."
             },
             "smtp_timeout_sec": {
@@ -327,9 +327,9 @@
         },
         "recipients": {
             "title": "Notification recipients",
-            "hint": "Choose the accounts that receive the notification mails. The addresses of the setting \"Recipients\" below also receive them.",
+            "hint": "Choose the accounts that receive the notification mails. The addresses of the setting \"Additional recipients\" below also receive them.",
             "count": "Accounts that receive the notification mails: {{count}}",
-            "none": "No account receives the notification mails. Mails are sent only to the addresses of \"Recipients\", if any.",
+            "none": "No account receives the notification mails. Mails are sent only to the addresses of \"Additional recipients\", if any.",
             "disabledTitle": "Disabled accounts keep the choice but receive nothing while they are disabled.",
             "unsaved": "Not saved"
         }
@@ -482,6 +482,11 @@
             "hostZone": "(host time, {{zone}})",
             "hostZoneUnknown": "(host time; the time zone is not reported yet)",
             "listSeparator": ", "
+        },
+        "local": {
+            "wholeNumber": "{{field}}: enter a whole number.",
+            "onceAt": "{{field}}: enter a date and time.",
+            "inCommand": "Command {{n}}: {{problem}}"
         },
         "editor": {
             "basics": "Command set",

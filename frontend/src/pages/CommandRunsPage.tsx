@@ -19,9 +19,14 @@ import { formatDateTime } from '../utils/format';
 
 /** Run history of one command set, newest first, a page at a time. */
 export function CommandRunsPage() {
+    const { id = '', set = '' } = useParams();
+    // A new set starts again at its newest page.
+    return <CommandRuns key={`${id}/${set}`} id={id} set={set} />;
+}
+
+function CommandRuns({ id, set }: { id: string; set: string }) {
     const { t } = useTranslation();
     const reasonText = useReasonText();
-    const { id = '', set = '' } = useParams();
     // The "before" values of the pages shown so far; the last one is the current page.
     const [pages, setPages] = useState<(number | undefined)[]>([undefined]);
     const before = pages[pages.length - 1];
