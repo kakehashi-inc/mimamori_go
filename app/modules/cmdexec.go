@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -42,6 +43,14 @@ const pipeSizeCommand = 1 << 20
 // fSetPipeSz is the fcntl command F_SETPIPE_SZ of Linux.
 const fSetPipeSz = 1031
 
+// signalHelperWait bounds the wait for the helper that signals a process
+// group as the set's OS user.
+const signalHelperWait = 5 * time.Second
+
+// signalHelperScript is the script the helper's bash runs with the process
+// group ID as $1 and the signal name as $2.
+const signalHelperScript = `kill -s "$2" -- -"$1"`
+
 // CommandExecHooks connect the wait loop of a running command to the agent.
 // Every field may be nil.
 type CommandExecHooks struct {
@@ -53,6 +62,8 @@ type CommandExecHooks struct {
 	// ended (SIGTERM, grace, SIGKILL) and its result is an error with the
 	// reason interrupted.
 	Stopping func() bool
+	// Logf writes to the agent's log.
+	Logf func(format string, a ...any)
 }
 
 // CommandExecInput is one command to run.
@@ -128,23 +139,33 @@ type wrappedOutput struct {
 }
 
 // commandArgv returns the program and its arguments for a command: bash
-// directly, or bash through sudo.
-func commandArgv(osUser, marker, workDir, commandLine string) (string, []string, error) {
+// directly, or bash through sudo (viaSudo).
+func commandArgv(osUser, marker, workDir, commandLine string) (path string, argv []string, viaSudo bool, err error) {
 	bash, err := LookupCommand("bash")
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
+	}
+	if IsAgentUser(osUser) {
+		if workDir == "" {
+			// The direct start keeps the agent's environment, which may lack
+			// HOME (a service started by a supervisor): the home directory
+			// comes from /etc/passwd. Without an entry the plain cd is kept.
+			workDir = agentHomeDir()
+		}
+		wrapped := []string{"-c", commandWrapper, AppName, marker, workDir, commandLine}
+		return bash, append([]string{bash}, wrapped...), false, nil
 	}
 	wrapped := []string{"-c", commandWrapper, AppName, marker, workDir, commandLine}
-	if IsAgentUser(osUser) {
-		return bash, append([]string{bash}, wrapped...), nil
-	}
 	sudo, err := LookupCommand("sudo")
 	if err != nil {
-		// The project's messages do not name the switching program.
-		return "", nil, fmt.Errorf("the program that switches to another OS user was not found in PATH")
+		return "", nil, false, errNoSwitchProgram
 	}
-	return sudo, append([]string{sudo, "-n", "-H", "-u", osUser, "--", bash}, wrapped...), nil
+	return sudo, append([]string{sudo, "-n", "-H", "-u", osUser, "--", bash}, wrapped...), true, nil
 }
+
+// errNoSwitchProgram: the project's messages do not name the switching
+// program.
+var errNoSwitchProgram = errors.New("the program that switches to another OS user was not found in PATH")
 
 // IsAgentUser reports whether an OS user is the user the agent runs as:
 // compared by numeric ID when the name resolves, by name otherwise.
@@ -162,13 +183,28 @@ func IsAgentUser(osUser string) bool {
 	return osUser == NameOrID(byUID, uid)
 }
 
+// agentHomeDir returns the home directory of the user the agent runs as from
+// /etc/passwd, or "" when the user has no entry or the entry no home.
+func agentHomeDir() string {
+	byName, byUID := ReadPasswd()
+	uid := os.Geteuid()
+	name, ok := byUID[uid]
+	if !ok {
+		return ""
+	}
+	if e, ok := byName[name]; ok && e.UID == uid {
+		return e.Home
+	}
+	return ""
+}
+
 // runWrapped starts the wrapper and waits for it.
 func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, rawExit) {
 	marker, err := RandomHex(16)
 	if err != nil {
 		return failedStart(err)
 	}
-	path, argv, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
+	path, argv, viaSudo, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
 	if err != nil {
 		return failedStart(err)
 	}
@@ -211,15 +247,24 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 	if grace <= 0 {
 		grace = CommandKillGrace
 	}
-	raw := waitProcess(proc, r, buf, timeout, grace, hooks)
+	sig := &groupSignaler{pgid: proc.Pid, logf: hooks.Logf}
+	if viaSudo {
+		sig.osUser = in.OSUser
+	}
+	raw := waitProcess(proc, r, buf, timeout, grace, hooks, sig)
 	drainAll(r, buf)
 	return splitMarkers(buf.Bytes(), buf.total, marker), raw
 }
 
 // waitProcess polls the process until it ends, draining the pipe, running the
 // monitoring when due, and ending the process group on the time limit or a
-// stop (SIGTERM, then SIGKILL after the grace).
-func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grace time.Duration, hooks CommandExecHooks) rawExit {
+// stop (SIGTERM, then SIGKILL after the grace). When the group could not be
+// signalled (a command of another OS user that the helper could not end
+// either) and the agent is stopping, it stops waiting one grace after the
+// SIGKILL, so that the agent's stop never hangs on such a command.
+func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grace time.Duration, hooks CommandExecHooks,
+	sig *groupSignaler) rawExit {
+	drainPipe := func() { drain(r, buf) }
 	pid := proc.Pid
 	defer func() { _ = proc.Release() }()
 	var raw rawExit
@@ -236,7 +281,7 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 		}
 		if err != nil {
 			// The process cannot be waited for (should not happen): end it.
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			sig.send(syscall.SIGKILL, drainPipe)
 			raw.signaled = true
 			return raw
 		}
@@ -257,12 +302,16 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 			if raw.interrupted || raw.timedOut {
 				terminating = true
 				killAt = now.Add(grace)
-				_ = syscall.Kill(-pid, syscall.SIGTERM)
+				sig.send(syscall.SIGTERM, drainPipe)
 			}
 		}
 		if terminating && !killed && now.After(killAt) {
 			killed = true
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			sig.send(syscall.SIGKILL, drainPipe)
+		}
+		if killed && stopping && sig.refused && now.After(killAt.Add(grace)) {
+			sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", sig.osUser)
+			return raw
 		}
 		if !stopping && hooks.MonitorDue != nil && hooks.Monitor != nil && hooks.MonitorDue() {
 			drain(r, buf)
@@ -284,9 +333,107 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 	if terminating && !killed {
 		// The command ended within the grace: make sure nothing of its group
 		// is left behind.
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		sig.send(syscall.SIGKILL, drainPipe)
 	}
 	return raw
+}
+
+// groupSignaler sends signals to the process group of a command. A command
+// started through sudo belongs to another OS user; an agent that does not run
+// as root may not signal it (sudo itself runs as root and the command's
+// processes belong to that user: EPERM). The signal is then sent through the
+// switch program as that user, with the same sudoers rule that started the
+// command.
+type groupSignaler struct {
+	pgid int
+	// osUser is set when the command was started through sudo.
+	osUser string
+	logf   func(format string, a ...any)
+	// refused records that a signal to the group was refused and could not
+	// be sent through the helper either.
+	refused bool
+}
+
+func (g *groupSignaler) logfSafe(format string, a ...any) {
+	if g.logf != nil {
+		g.logf(format, a...)
+	}
+}
+
+// send sends sig to the process group. drainPipe is called while the helper
+// is waited for.
+func (g *groupSignaler) send(sig syscall.Signal, drainPipe func()) {
+	err := killProcessGroup(-g.pgid, sig)
+	if err == nil || !errors.Is(err, syscall.EPERM) || g.osUser == "" {
+		return
+	}
+	if err := signalGroupAsUser(g.osUser, g.pgid, sig, drainPipe); err != nil {
+		g.refused = true
+		g.logfSafe("ending a command run as OS user %q failed: %v", g.osUser, err)
+	}
+}
+
+// killProcessGroup and signalGroupAsUser can be replaced by tests (an agent
+// that runs as root is never refused).
+var (
+	killProcessGroup  = syscall.Kill
+	signalGroupAsUser = signalGroupAs
+)
+
+// signalGroupAs runs "sudo -n -u USER -- BASH -c 'kill -s SIG -- -PGID'" and
+// waits for it at most signalHelperWait, in the calling flow.
+func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()) error {
+	name := "KILL"
+	if sig == syscall.SIGTERM {
+		name = "TERM"
+	}
+	bash, err := LookupCommand("bash")
+	if err != nil {
+		return err
+	}
+	sudo, err := LookupCommand("sudo")
+	if err != nil {
+		return errNoSwitchProgram
+	}
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return err
+	}
+	defer devnull.Close()
+	argv := []string{sudo, "-n", "-u", osUser, "--", bash, "-c", signalHelperScript, AppName, strconv.Itoa(pgid), name}
+	proc, err := os.StartProcess(sudo, argv, &os.ProcAttr{
+		Dir:   "/",
+		Files: []*os.File{devnull, devnull, devnull},
+		Env:   os.Environ(),
+		Sys:   &syscall.SysProcAttr{Setsid: true},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = proc.Release() }()
+	deadline := time.Now().Add(signalHelperWait)
+	var ws syscall.WaitStatus
+	for {
+		wpid, err := syscall.Wait4(proc.Pid, &ws, syscall.WNOHANG, nil)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if wpid == proc.Pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no answer within %s", signalHelperWait)
+		}
+		drainPipe()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ws.Exited() || ws.ExitStatus() != 0 {
+		return fmt.Errorf("the signal could not be sent (status %d)", ws.ExitStatus())
+	}
+	return nil
 }
 
 // failedStart is the result of a command whose process could not be started:

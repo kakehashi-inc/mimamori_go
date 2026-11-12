@@ -274,7 +274,7 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	rt.queueCommandReport(start)
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
-	hooks := CommandExecHooks{MonitorDue: rt.monitorDue, Monitor: rt.monitorStep, Stopping: rt.isStopping}
+	hooks := CommandExecHooks{MonitorDue: rt.monitorDue, Monitor: rt.monitorStep, Stopping: rt.isStopping, Logf: rt.logf}
 	collect := def.Purpose == PurposeCollectOutput
 	var kinds []string
 	var values []CommandValues
@@ -297,6 +297,11 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			break
 		}
 		c := &def.Commands[i]
+		// Recorded while the command runs, so that a run cut short by the end
+		// of the agent reports this command as interrupted at the next start.
+		if err := models.SetCommandExecutionRunning(rt.DB, uid, i, time.Now().Unix()); err != nil {
+			rt.logf("command set %q: recording the running command of run %s failed: %v", def.Name, uid, err)
+		}
 		res := ExecuteCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
 			CollectOutput: collect, KillGrace: rt.cmdKillGrace}, hooks)
 		kinds = append(kinds, res.Kind)
@@ -311,6 +316,9 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			closed = true
 		}
 		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
+		if err := models.ClearCommandExecutionRunning(rt.DB, uid); err != nil {
+			rt.logf("command set %q: recording the end of a command of run %s failed: %v", def.Name, uid, err)
+		}
 		if last {
 			break
 		}
@@ -333,7 +341,9 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 }
 
 // recoverInterruptedRuns reports the runs found unfinished at start (the
-// agent ended while they ran) as interrupted.
+// agent ended while they ran) as interrupted. The command that was running
+// gets an interrupted result (the central keeps a result already reported
+// for its position).
 func (rt *AgentRuntime) recoverInterruptedRuns() {
 	runs, err := models.ListUnfinishedCommandExecutions(rt.DB)
 	if err != nil {
@@ -347,9 +357,20 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 			ScheduledFor: e.ScheduledFor, StartedAt: e.StartedAt, Finished: true, FinishedAt: now,
 			State: ResultError, Reason: ReasonInterrupted, Results: []CommandResultReport{},
 		}
-		if d := rt.findCommandSet(e.SetID); d != nil {
+		d := rt.findCommandSet(e.SetID)
+		if d != nil {
 			rep.SetName, rep.Purpose, rep.Joiner, rep.OSUser, rep.WorkDir = d.Name, d.Purpose, d.Joiner, d.OSUser, d.WorkDir
 			rep.CommandsTotal = len(d.Commands)
+		}
+		if e.RunningPosition >= 0 {
+			res := CommandResultReport{Position: e.RunningPosition, Kind: ResultError, Reason: ReasonInterrupted,
+				StartedAt: e.RunningStartedAt, FinishedAt: now, Output: []byte{}}
+			// The command line and note only when the stored definition is
+			// the one the run executed.
+			if d != nil && d.Revision == e.SetRevision && e.RunningPosition < len(d.Commands) {
+				res.CommandLine, res.Note = d.Commands[e.RunningPosition].CommandLine, d.Commands[e.RunningPosition].Note
+			}
+			rep.Results = append(rep.Results, res)
 		}
 		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
 		if err := models.FinishCommandExecution(rt.DB, e.RunUID, now); err != nil {

@@ -19,6 +19,10 @@ type cmdTransport struct {
 	syncs   int
 	reports []*ReportRequest
 	onSync  func(n int)
+	// failReports makes every report fail; attempts records when reports
+	// were attempted.
+	failReports bool
+	attempts    []time.Time
 }
 
 func (f *cmdTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
@@ -34,6 +38,10 @@ func (f *cmdTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 }
 
 func (f *cmdTransport) Report(r *ReportRequest) error {
+	f.attempts = append(f.attempts, time.Now())
+	if f.failReports {
+		return os.ErrDeadlineExceeded
+	}
 	f.reports = append(f.reports, r)
 	return nil
 }
@@ -283,6 +291,92 @@ func TestCommandRunInterrupted(t *testing.T) {
 	}
 }
 
+// TestCommandRunInterruptedCommand: the command that ran when the agent
+// ended gets an interrupted result at the next start, with its command line
+// only when the stored definition is the one the run executed.
+func TestCommandRunInterruptedCommand(t *testing.T) {
+	rt := newCommandRuntime(t, &cmdTransport{})
+	def := testSet(1, PurposeCollectOutput, "echo begin", "echo begin; sleep 120", "true")
+	def.Commands[1].Note = "the long one"
+	rt.storeCommandDefinitions(defsOf(def))
+	for _, e := range []*models.CommandExecution{
+		{RunUID: "same", SetID: 1, SetRevision: 1, Trigger: TriggerManual, StartedAt: 100},
+		{RunUID: "older", SetID: 1, SetRevision: 0, Trigger: TriggerSchedule, ScheduledFor: 60, StartedAt: 90},
+		{RunUID: "between", SetID: 1, SetRevision: 1, Trigger: TriggerManual, StartedAt: 110},
+	} {
+		if err := models.InsertCommandExecution(rt.DB, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := models.SetCommandExecutionRunning(rt.DB, "same", 1, 105); err != nil {
+		t.Fatal(err)
+	}
+	if err := models.SetCommandExecutionRunning(rt.DB, "older", 1, 95); err != nil {
+		t.Fatal(err)
+	}
+	// "between" ended between two commands: its last command was reported.
+	if err := models.SetCommandExecutionRunning(rt.DB, "between", 0, 111); err != nil {
+		t.Fatal(err)
+	}
+	if err := models.ClearCommandExecutionRunning(rt.DB, "between"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(queuedReports(t, rt))
+	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
+	rt2.recoverInterruptedRuns()
+	byUID := map[string]CommandRunReport{}
+	for _, r := range runReports(queuedReports(t, rt2)[before:]) {
+		byUID[r.RunUID] = r
+	}
+	now := time.Now().Unix()
+	r := byUID["same"]
+	if !r.Finished || r.State != ResultError || r.Reason != ReasonInterrupted || len(r.Results) != 1 {
+		t.Fatalf("interrupted run: %+v", r)
+	}
+	res := r.Results[0]
+	if res.Position != 1 || res.Kind != ResultError || res.Reason != ReasonInterrupted || res.ExitCode != nil ||
+		res.StartedAt != 105 || res.FinishedAt < now-5 || len(res.Output) != 0 || res.Values != nil ||
+		res.CommandLine != "echo begin; sleep 120" || res.Note != "the long one" {
+		t.Fatalf("result of the running command: %+v", res)
+	}
+	r = byUID["older"]
+	if len(r.Results) != 1 || r.Results[0].Position != 1 || r.Results[0].StartedAt != 95 ||
+		r.Results[0].CommandLine != "" || r.Results[0].Note != "" {
+		t.Fatalf("another revision gives no command line: %+v", r.Results)
+	}
+	if r = byUID["between"]; !r.Finished || len(r.Results) != 0 {
+		t.Fatalf("no running command, no result: %+v", r)
+	}
+}
+
+// TestCommandRunRecordsRunningCommand: while a command runs, the agent's
+// database names it; after its report is queued, nothing is running.
+func TestCommandRunRecordsRunningCommand(t *testing.T) {
+	requireBash(t)
+	tr := &cmdTransport{}
+	rt := newCommandRuntime(t, tr)
+	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true", "sleep 1")))
+	var seen []*models.CommandExecution
+	tr.onSync = func(int) {
+		runs, err := models.ListUnfinishedCommandExecutions(rt.DB)
+		if err != nil {
+			t.Error(err)
+		}
+		seen = append(seen, runs...)
+	}
+	// The monitoring step becomes due while the second command runs.
+	rt.lastMonitor = time.Now().Add(300*time.Millisecond - rt.Interval())
+	start := time.Now().Unix()
+	rt.runCommandJob(&commandJob{def: rt.cmdValid[1], trigger: TriggerManual, requestID: 5})
+	if len(seen) != 1 || seen[0].RunningPosition != 1 || seen[0].RunningStartedAt < start {
+		t.Fatalf("running command seen during the run: %+v", seen)
+	}
+	e, err := models.CommandExecutionByRequest(rt.DB, 5)
+	if err != nil || e == nil || e.FinishedAt == 0 || e.RunningPosition != -1 || e.RunningStartedAt != 0 {
+		t.Fatalf("after the run: %+v %v", e, err)
+	}
+}
+
 func TestCommandSchedules(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Tokyo")
 	if err != nil {
@@ -409,12 +503,51 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	if time.Since(start) > 10*time.Second {
 		t.Fatalf("the stop took %s", time.Since(start))
 	}
-	last, n := lastRun(t, runReports(queuedReports(t, rt)))
+	// The reports of the stopped run are sent before Run returns.
+	if q := queuedReports(t, rt); len(q) != 0 {
+		t.Fatalf("the reports of the stopped run must be sent: %d queued", len(q))
+	}
+	var sent []ReportRequest
+	for _, r := range tr.reports {
+		sent = append(sent, *r)
+	}
+	last, n := lastRun(t, runReports(sent))
 	if last.State != ResultError || n != 1 || last.Results[0].Reason != ReasonInterrupted || string(last.Results[0].Output) != "started\n" {
 		t.Fatalf("stopped run: %+v", last)
 	}
 	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB); len(open) != 0 {
 		t.Fatal("a stopped run is reported, not left unfinished")
+	}
+}
+
+// TestCommandRunStoppedSendsOnce: after a run closed by the stop, the agent
+// makes one attempt to send; what was not sent stays queued.
+func TestCommandRunStoppedSendsOnce(t *testing.T) {
+	requireBash(t)
+	tr := &cmdTransport{}
+	rt := newCommandRuntime(t, tr)
+	now := time.Now().Unix()
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 30"))
+	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
+	var stopAt time.Time
+	tr.onSync = func(int) {
+		tr.failReports = true
+		stopAt = time.Now().Add(300 * time.Millisecond)
+	}
+	rt.lastMonitor = time.Time{}
+	rt.Run(func(time.Duration) bool { return false }, func() bool { return !stopAt.IsZero() && time.Now().After(stopAt) })
+	after := 0
+	for _, a := range tr.attempts {
+		if a.After(stopAt) {
+			after++
+		}
+	}
+	if after != 1 {
+		t.Fatalf("one attempt after the stop: %d of %d", after, len(tr.attempts))
+	}
+	last, _ := lastRun(t, runReports(queuedReports(t, rt)))
+	if last.Results[0].Reason != ReasonInterrupted {
+		t.Fatalf("the closing report stays queued: %+v", last)
 	}
 }
 

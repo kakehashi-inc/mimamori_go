@@ -128,7 +128,8 @@ func (rt *AgentRuntime) ReapplyStored() {
 // then schedules by due time), and waits until the next monitoring step or
 // the next scheduled time, whichever comes first. While a command runs, its
 // wait loop runs the monitoring step when it is due; a stop ends the running
-// command (SIGTERM, grace, SIGKILL) and its run is still reported.
+// command (SIGTERM, grace, SIGKILL) and its run is still reported: one
+// attempt to send the queued reports is made before returning.
 func (rt *AgentRuntime) Run(wait func(time.Duration) bool, stopping func() bool) {
 	rt.stopping = stopping
 	rt.ReapplyStored()
@@ -144,6 +145,13 @@ func (rt *AgentRuntime) Run(wait func(time.Duration) bool, stopping func() bool)
 			job := rt.nextCommandJob()
 			if job == nil || !rt.runCommandJob(job) {
 				break
+			}
+			if stopping() {
+				// The run was closed because of the stop: one attempt to send
+				// its reports, so that the central does not show it running
+				// until the next start (what fails stays queued).
+				rt.flushOutbox()
+				return
 			}
 			if rt.monitorDue() && !stopping() {
 				rt.monitorStep()

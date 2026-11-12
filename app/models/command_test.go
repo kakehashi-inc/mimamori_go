@@ -135,6 +135,19 @@ func TestCommandRunModels(t *testing.T) {
 	if err != nil || created || again.ID != stored.ID || again.ReceivedAt != 201 {
 		t.Fatalf("ensure again: %v %v %+v", err, created, again)
 	}
+	// Reports of a stored run use no ID: the next run gets the next number.
+	for i := 0; i < 3; i++ {
+		if _, _, err := models.EnsureCommandRun(db, r, int64(301+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, created, err := models.EnsureCommandRun(db, &models.CommandRun{RunUID: "u0", SetID: s.ID, Trigger: "manual", StartedAt: 199}, 310)
+	if err != nil || !created || next.ID != stored.ID+1 {
+		t.Fatalf("run IDs must not skip numbers: %v %v %d after %d", err, created, next.ID, stored.ID)
+	}
+	if _, err := db.Exec(`DELETE FROM command_runs WHERE run_uid = 'u0'`); err != nil {
+		t.Fatal(err)
+	}
 
 	code := sql.NullInt64{Int64: 0, Valid: true}
 	res := &models.CommandResult{RunID: stored.ID, Position: 0, CommandLine: "df", Kind: "success", ExitCode: code, Output: []byte("a\xffb"), OutputBytes: 3}

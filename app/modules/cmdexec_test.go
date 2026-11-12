@@ -1,9 +1,12 @@
 package modules
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -118,14 +121,6 @@ func TestExecuteCommandDirectories(t *testing.T) {
 		t.Fatalf("several lines: %+v %q", r, r.Output)
 	}
 
-	// Empty working directory: the home directory of the user.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	r = runTestCommand(t, testCommand("pwd"), user, "", CommandExecHooks{})
-	if r.Kind != ResultSuccess || strings.TrimSpace(string(r.Output)) != home {
-		t.Fatalf("home directory: %+v %q", r, r.Output)
-	}
-
 	// A working directory that cannot be entered.
 	r = runTestCommand(t, testCommand("echo never"), user, filepath.Join(dir, "missing"), CommandExecHooks{})
 	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed || r.ExitCode != nil || strings.Contains(string(r.Output), "never") {
@@ -133,6 +128,98 @@ func TestExecuteCommandDirectories(t *testing.T) {
 	}
 	if !strings.Contains(string(r.Output), "missing") {
 		t.Fatalf("the message of cd must be kept: %q", r.Output)
+	}
+}
+
+// withPasswd replaces /etc/passwd for the test with one line for the user
+// the test runs as, with the given home directory (no line when home is
+// "-").
+func withPasswd(t *testing.T, user, home string) {
+	t.Helper()
+	content := ""
+	if home != "-" {
+		content = fmt.Sprintf("%s:x:%d:%d::%s:/bin/sh\n", user, os.Geteuid(), os.Getegid(), home)
+	}
+	p := filepath.Join(t.TempDir(), "passwd")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := passwdFile
+	passwdFile = p
+	t.Cleanup(func() { passwdFile = old })
+}
+
+// unsetEnv removes an environment variable for the test (t.Setenv cannot
+// unset one).
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, had := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(key, old)
+		}
+	})
+}
+
+// TestExecuteCommandHomeDirectory runs commands of the agent's own user with
+// an empty working directory: they start in the home directory of
+// /etc/passwd, also when the agent's environment has no HOME.
+func TestExecuteCommandHomeDirectory(t *testing.T) {
+	requireBash(t)
+	user := agentUserName()
+	home := t.TempDir()
+	withPasswd(t, user, home)
+	if !IsAgentUser(user) {
+		t.Fatalf("the agent's own user %q must be recognized", user)
+	}
+	other := t.TempDir()
+	t.Setenv("HOME", other)
+	r := runTestCommand(t, testCommand("pwd; echo \"$HOME\""), user, "", CommandExecHooks{})
+	if r.Kind != ResultSuccess || string(r.Output) != home+"\n"+other+"\n" {
+		t.Fatalf("home directory of /etc/passwd, environment unchanged: %+v %q", r, r.Output)
+	}
+	unsetEnv(t, "HOME")
+	r = runTestCommand(t, testCommand("pwd; echo \"[$HOME]\""), user, "", CommandExecHooks{})
+	if r.Kind != ResultSuccess || string(r.Output) != home+"\n[]\n" {
+		t.Fatalf("without HOME: %+v %q", r, r.Output)
+	}
+	// A home directory that cannot be entered.
+	withPasswd(t, user, filepath.Join(home, "missing"))
+	r = runTestCommand(t, testCommand("echo never"), user, "", CommandExecHooks{})
+	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed {
+		t.Fatalf("missing home: %+v %q", r, r.Output)
+	}
+}
+
+// TestExecuteCommandHomeFallback: without a home directory in /etc/passwd,
+// the plain cd uses HOME of the environment.
+func TestExecuteCommandHomeFallback(t *testing.T) {
+	requireBash(t)
+	user := agentUserName()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, passwdHome := range []string{"", "-"} {
+		withPasswd(t, user, passwdHome)
+		osUser := user
+		if passwdHome == "-" {
+			// Without an entry the agent's user is known by its number.
+			osUser = strconv.Itoa(os.Geteuid())
+		}
+		if !IsAgentUser(osUser) {
+			t.Fatalf("passwd home %q: %q must be the agent's user", passwdHome, osUser)
+		}
+		r := runTestCommand(t, testCommand("pwd"), osUser, "", CommandExecHooks{})
+		if r.Kind != ResultSuccess || strings.TrimSpace(string(r.Output)) != home {
+			t.Fatalf("passwd home %q: %+v %q", passwdHome, r, r.Output)
+		}
+	}
+	unsetEnv(t, "HOME")
+	r := runTestCommand(t, testCommand("echo never"), strconv.Itoa(os.Geteuid()), "", CommandExecHooks{})
+	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed {
+		t.Fatalf("no home at all: %+v %q", r, r.Output)
 	}
 }
 
@@ -291,4 +378,102 @@ func TestExecuteCommandSudo(t *testing.T) {
 	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 5*time.Second {
 		t.Fatalf("time limit through sudo: %+v after %s", r, time.Since(start))
 	}
+}
+
+// TestExecuteCommandSignalAsUser: when the agent may not signal the process
+// group of a command of another OS user (EPERM, an agent that does not run
+// as root), the signal is sent as that user through the switch program. The
+// refusal is simulated; it needs root (sudo without a password) and nobody.
+func TestExecuteCommandSignalAsUser(t *testing.T) {
+	requireBash(t)
+	if os.Geteuid() != 0 {
+		t.Skip("not running as root")
+	}
+	if _, err := LookupCommand("sudo"); err != nil {
+		t.Skip("sudo is not available")
+	}
+	if byName, _ := ReadPasswd(); byName["nobody"].Name == "" {
+		t.Skip("user nobody does not exist")
+	}
+	refused := 0
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		refused++
+		return syscall.EPERM
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+
+	// A command that ignores SIGTERM and has a child: ended by the time limit
+	// through the helper (SIGTERM, then SIGKILL after the grace).
+	marker := "mimamori-test-" + strconv.Itoa(os.Getpid())
+	cmd := testCommand("trap '' TERM; sleep 31 & exec -a " + marker + " sleep 32")
+	cmd.TimeoutSec = 1
+	start := time.Now()
+	r := runTestCommand(t, cmd, "nobody", "/", CommandExecHooks{})
+	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 10*time.Second || refused < 2 {
+		t.Fatalf("time limit through the helper: %+v after %s (%d refused)", r, time.Since(start), refused)
+	}
+	if left := processesOf(t, "sleep 31", marker); left != "" {
+		t.Fatalf("nothing of the command may be left: %s", left)
+	}
+
+	// The helper fails too: a stop ends the wait one grace after SIGKILL,
+	// with the result interrupted, and says so in the log.
+	signalGroupAsUser = func(string, int, syscall.Signal, func()) error { return syscall.EPERM }
+	t.Cleanup(func() { signalGroupAsUser = signalGroupAs })
+	var logged []string
+	stopAt := time.Now().Add(200 * time.Millisecond)
+	hooks := CommandExecHooks{
+		Stopping: func() bool { return time.Now().After(stopAt) },
+		Logf:     func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
+	}
+	cmd = testCommand("trap '' TERM; echo started; exec -a " + marker + " sleep 33")
+	start = time.Now()
+	r = runTestCommand(t, cmd, "nobody", "/", hooks)
+	took := time.Since(start)
+	killProcessGroup = syscall.Kill
+	// Clean up what the simulated refusal left running.
+	if pgid := pgidOf(t, marker); pgid > 0 {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || took > 5*time.Second {
+		t.Fatalf("stop with a command that cannot be ended: %+v %q after %s", r, r.Output, took)
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "could not be ended") {
+		t.Fatalf("the log must say that the command could not be ended: %q", logged)
+	}
+}
+
+// processesOf lists the processes whose arguments contain one of the words
+// (ps, empty when none).
+func processesOf(t *testing.T, words ...string) string {
+	t.Helper()
+	res, err := RunCommand(10*time.Second, 1<<20, "ps", "-eo", "pid=,pgid=,user=,args=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, l := range strings.Split(string(res.Stdout), "\n") {
+		for _, w := range words {
+			if strings.Contains(l, w) && !strings.Contains(l, "ps -eo") {
+				out = append(out, strings.TrimSpace(l))
+				break
+			}
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// pgidOf returns the process group of the process whose arguments contain
+// word (0 when there is none).
+func pgidOf(t *testing.T, word string) int {
+	t.Helper()
+	for _, l := range strings.Split(processesOf(t, word), "; ") {
+		f := strings.Fields(l)
+		if len(f) > 1 {
+			if n, err := strconv.Atoi(f[1]); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }

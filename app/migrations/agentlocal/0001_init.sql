@@ -44,7 +44,9 @@ CREATE TABLE command_executions (
     run_trigger   TEXT    NOT NULL,
     scheduled_for INTEGER NOT NULL DEFAULT 0,
     started_at    INTEGER NOT NULL,
-    finished_at   INTEGER NOT NULL DEFAULT 0
+    finished_at   INTEGER NOT NULL DEFAULT 0,
+    running_position   INTEGER NOT NULL DEFAULT -1,
+    running_started_at INTEGER NOT NULL DEFAULT 0
 );
 -- +goose StatementEnd
 

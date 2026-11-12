@@ -57,6 +57,14 @@ func scanCommandRun(s rowScanner) (*CommandRun, error) {
 // row; a run already stored (same RunUID) is returned unchanged with created
 // false. New rows start in the running state.
 func EnsureCommandRun(db Execer, r *CommandRun, now int64) (*CommandRun, bool, error) {
+	// Looked up first: every attempted insert takes an AUTOINCREMENT number,
+	// even when the conflict clause skips it (the clause stays as the safety
+	// net).
+	if stored, err := GetCommandRunByUID(db, r.RunUID); err == nil {
+		return stored, false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
+	}
 	res, err := db.Exec(`INSERT INTO command_runs (run_uid, set_id, set_revision, set_name, purpose, joiner, os_user, work_dir,
 		run_trigger, request_id, scheduled_for, commands_total, started_at, state, received_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_uid) DO NOTHING`,

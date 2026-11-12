@@ -12,6 +12,8 @@ type PasswdEntry struct {
 	Name string
 	UID  int
 	GID  int
+	// Home is the home directory (empty when the line has none).
+	Home string
 }
 
 // passwdFile and groupFile can be replaced by tests.
@@ -46,6 +48,9 @@ func ReadPasswd() (byName map[string]PasswdEntry, byUID map[int]string) {
 			continue
 		}
 		e := PasswdEntry{Name: parts[0], UID: uid, GID: gid}
+		if len(parts) > 5 {
+			e.Home = parts[5]
+		}
 		byName[e.Name] = e
 		if _, ok := byUID[uid]; !ok {
 			byUID[uid] = e.Name
