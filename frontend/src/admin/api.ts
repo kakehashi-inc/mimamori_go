@@ -1,9 +1,13 @@
 // API functions used only by the administrator extension.
 import type { LangSetting } from '../constants';
-import { request, send } from '../api/client';
+import { query, request, send } from '../api/client';
 import type {
     Account,
     CentralConfig,
+    CommandRequest,
+    CommandSet,
+    CommandSetList,
+    CommandSetSpec,
     ConfigUpdate,
     MergePreview,
     Role,
@@ -140,4 +144,66 @@ export function getConfig(): Promise<CentralConfig> {
 
 export function updateConfig(body: ConfigUpdate): Promise<CentralConfig> {
     return send<CentralConfig>('PUT', '/config', body);
+}
+
+export function setAccountNotify(id: number, notify: boolean): Promise<Account> {
+    return send<Account>('PUT', `/accounts/${id}/notify`, { notify });
+}
+
+// --- Command sets ---
+
+function setsPath(agentId: number | string): string {
+    return `/agents/${encodeURIComponent(agentId)}/command-sets`;
+}
+
+export function listCommandSets(agentId: number | string): Promise<CommandSetList> {
+    return request<CommandSetList>(setsPath(agentId));
+}
+
+export function createCommandSet(agentId: number | string, spec: CommandSetSpec): Promise<CommandSet> {
+    return send<CommandSet>('POST', setsPath(agentId), spec);
+}
+
+export function updateCommandSet(agentId: number | string, setId: number, spec: CommandSetSpec): Promise<CommandSet> {
+    return send<CommandSet>('PUT', `${setsPath(agentId)}/${setId}`, spec);
+}
+
+export function deleteCommandSet(agentId: number | string, setId: number): Promise<unknown> {
+    return send('DELETE', `${setsPath(agentId)}/${setId}`);
+}
+
+/** Checks a definition without saving it; setId excludes that set from the name check. */
+export function validateCommandSet(agentId: number | string, spec: CommandSetSpec, setId?: number): Promise<string[]> {
+    return send<{ errors: string[] | null }>(
+        'POST',
+        `${setsPath(agentId)}/validate${query({ set_id: setId })}`,
+        spec
+    ).then(r => r.errors ?? []);
+}
+
+export function importCommandSets(
+    agentId: number | string,
+    sourceAgentId: number,
+    items: { set_id: number; name: string }[]
+): Promise<{ sets: CommandSet[] }> {
+    return send('POST', `${setsPath(agentId)}/import`, { source_agent_id: sourceAgentId, items });
+}
+
+export function requestCommandRun(agentId: number | string, setId: number): Promise<CommandRequest> {
+    return send<CommandRequest>('POST', `${setsPath(agentId)}/${setId}/run`);
+}
+
+export function discardCommandRequest(agentId: number | string, requestId: number): Promise<CommandRequest> {
+    return send<CommandRequest>('DELETE', `/agents/${encodeURIComponent(agentId)}/command-requests/${requestId}`);
+}
+
+// --- Re-authentication for changes ---
+
+/** Mails a code to the own address; required is false when no code is needed (development mode). */
+export function requestStepUp(): Promise<{ required: boolean }> {
+    return send<{ required: boolean }>('POST', '/auth/step-up');
+}
+
+export function verifyStepUp(code: string): Promise<{ required: boolean }> {
+    return send<{ required: boolean }>('POST', '/auth/step-up/verify', { code });
 }

@@ -5,6 +5,9 @@ import { useExtensions } from './extensions/registry';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { CertificatesPage } from './pages/CertificatesPage';
+import { CommandResultsPage } from './pages/CommandResultsPage';
+import { CommandRunPage } from './pages/CommandRunPage';
+import { CommandRunsPage } from './pages/CommandRunsPage';
 import { DetectionsPage } from './pages/DetectionsPage';
 import { GuidePage } from './pages/GuidePage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -30,6 +33,9 @@ export default function App() {
                 <Route path='/' element={<AgentsPage />} />
                 <Route path='/agents' element={<AgentsPage />} />
                 <Route path='/agents/:id' element={<AgentDetailPage />} />
+                <Route path='/agents/:id/command-sets/:set/runs' element={<CommandRunsPage />} />
+                <Route path='/agents/:id/command-runs/:run' element={<CommandRunPage />} />
+                <Route path='/command-results' element={<CommandResultsPage />} />
                 <Route path='/tokens' element={<TokensPage />} />
                 <Route path='/detections' element={<DetectionsPage />} />
                 <Route path='/rules' element={<RulesPage />} />

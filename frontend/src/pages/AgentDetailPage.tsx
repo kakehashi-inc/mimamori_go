@@ -1,15 +1,18 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { getAgent } from '../api/client';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
+import { Slot } from '../components/Slot';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo } from '../types';
 import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
+import { AgentCommandResults } from './AgentCommandResults';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
 
 // Token history actions recorded by the central (app/workers); others are shown as they are.
@@ -61,6 +64,8 @@ export function AgentDetailPage() {
 
 function AgentDetailBody({ agent }: { agent: AgentDetail }) {
     const { t } = useTranslation();
+    // Changed by the parts of the slot below to show their changes in the sections above.
+    const [refresh, setRefresh] = useState(0);
     const host = agent.host_info;
     const auditd = agent.auditd ?? host?.auditd ?? null;
 
@@ -145,6 +150,9 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                     </div>
                 </Card>
             </div>
+
+            <AgentCommandResults agentId={agent.id} refresh={refresh} />
+            <Slot name='agentDetail.sections' agent={agent} reload={() => setRefresh(n => n + 1)} />
 
             {host ? (
                 <HostInfoView host={host} auditd={auditd} />

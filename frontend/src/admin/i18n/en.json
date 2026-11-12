@@ -15,7 +15,8 @@
     },
     "historyCategory": {
         "account": "Account",
-        "config": "Configuration"
+        "config": "Configuration",
+        "command": "Command set"
     },
     "tokens": {
         "issue": "Issue token",
@@ -313,7 +314,7 @@
             },
             "smtp_to": {
                 "label": "Recipients",
-                "hint": "Recipient addresses."
+                "hint": "Additional recipient addresses of the notification mails, such as a shared mailbox, besides the accounts chosen as notification recipients."
             },
             "smtp_timeout_sec": {
                 "label": "Timeout (seconds)",
@@ -323,6 +324,210 @@
                 "label": "HELO name",
                 "hint": "Name sent in HELO/EHLO. localhost when empty."
             }
+        },
+        "recipients": {
+            "title": "Notification recipients",
+            "hint": "Choose the accounts that receive the notification mails. The addresses of the setting \"Recipients\" below also receive them.",
+            "count": "Accounts that receive the notification mails: {{count}}",
+            "none": "No account receives the notification mails. Mails are sent only to the addresses of \"Recipients\", if any.",
+            "disabledTitle": "Disabled accounts keep the choice but receive nothing while they are disabled.",
+            "unsaved": "Not saved"
+        }
+    },
+    "stepUp": {
+        "title": "Confirm with a verification code",
+        "why": "Changing command sets needs a verification code mailed to your e-mail address. After the code is accepted, the change is made, and further changes need no code for a while.",
+        "sending": "Sending a verification code...",
+        "sent": "A verification code was sent to your e-mail address.",
+        "code": "Verification code",
+        "codeHint": "Enter the 6-digit code from the mail. It is valid for 10 minutes.",
+        "confirm": "Confirm and save",
+        "resend": "Send a new code",
+        "invalidCode": "The code is not correct. Check the mail and enter it again.",
+        "expired": "The code has expired or was entered wrongly too often. Send a new code.",
+        "cancelled": "Nothing was changed because no verification code was entered."
+    },
+    "commandSets": {
+        "title": "Command sets",
+        "empty": "This agent has no command sets yet.",
+        "create": "Create",
+        "createTitle": "New command set",
+        "editTitle": "Edit command set",
+        "edit": "Edit",
+        "delete": "Delete",
+        "deleteTitle": "Delete the command set",
+        "deleteConfirm": "Delete {{name}}? Its run history is kept until the retention period ends. A run request not yet delivered is discarded.",
+        "deleted": "Deleted {{name}}",
+        "saved": "Saved {{name}}",
+        "check": "Check",
+        "save": "Save",
+        "valid": "The command set has no problems.",
+        "invalid": "Fix these problems",
+        "nameTaken": "Another command set of this agent has this name.",
+        "notFound": "The command set was not found. It may have been deleted.",
+        "importedFrom": "Imported from {{source}}.",
+        "runNow": "Run now",
+        "requested": "Requested a run of {{name}}. The agent runs it after its next connection.",
+        "requestConflict": "A run of this command set is already requested.",
+        "discard": "Discard request",
+        "discarded": "Discarded the run request of {{name}}",
+        "request": "Run request",
+        "requestState": {
+            "pending": "Waiting for the agent",
+            "delivered": "Delivered to the agent"
+        },
+        "whenRun": "When it runs",
+        "lastRun": "Last run",
+        "commandCount": "Commands: {{count}}",
+        "hostZone": "Schedules use the local time of the host ({{zone}}).",
+        "hostZoneUnknown": "Schedules use the local time of the host. The agent has not reported its time zone yet.",
+        "notDelivered": "The agent has not received the current command sets yet. It receives them at its next connection.",
+        "agentProblems": "The agent did not accept this command set",
+        "patternProblems": "Some patterns gave no values",
+        "patternProblem": {
+            "timeout": "Pattern {{n}} took too long and was stopped.",
+            "invalid": "Pattern {{n}} could not be used on the agent."
+        },
+        "import": "Import",
+        "importTitle": "Import command sets",
+        "importHint": "Copies command sets of an agent (also this one) to this agent, with all their settings including the OS user and the working directory. Each copy can be given a new name.",
+        "importSource": "Copy from",
+        "importNone": "This agent has no command sets.",
+        "importName": "Name of the copy of {{name}}",
+        "importSelected": "Import ({{count}})",
+        "imported": "Imported command sets: {{count}}",
+        "nameClash": "This name is already used. Enter another name.",
+        "thisAgent": "{{name}} (this agent)",
+        "fields": {
+            "name": "Name",
+            "description": "Description",
+            "purpose": "Purpose",
+            "osUser": "OS user",
+            "workDir": "Working directory",
+            "keepRuns": "Runs to keep",
+            "joiner": "Joining values",
+            "commandLine": "Command line",
+            "note": "Note",
+            "success": "Success codes",
+            "failure": "Failure codes",
+            "onProblems": "On problems",
+            "timeoutSec": "Time limit (seconds)",
+            "lineLimit": "Line limit",
+            "patterns": "Patterns"
+        },
+        "purpose": {
+            "collect_output": "Output collection",
+            "run_only": "Run only"
+        },
+        "purposeHint": {
+            "collect_output": "Values are taken from the console output and shown in the command results.",
+            "run_only": "The commands are run and their results recorded; no values are taken."
+        },
+        "runMode": {
+            "manual": "Manual",
+            "schedule": "Schedule"
+        },
+        "runModeHint": {
+            "manual": "Runs only when \"Run now\" is used.",
+            "schedule": "Runs at the times below. \"Run now\" can also be used."
+        },
+        "scheduleKind": {
+            "once": "Once at a date and time",
+            "weekly": "Every week",
+            "daily": "Every day",
+            "every_hours": "Every few hours",
+            "every_minutes": "Every few minutes",
+            "hourly_at": "Every hour at a minute"
+        },
+        "weekdays": {
+            "sun": "Sun",
+            "mon": "Mon",
+            "tue": "Tue",
+            "wed": "Wed",
+            "thu": "Thu",
+            "fri": "Fri",
+            "sat": "Sat"
+        },
+        "joiner": {
+            "comma": "Comma",
+            "newline": "Line break"
+        },
+        "codeKind": {
+            "single": "One code",
+            "range": "Range",
+            "min": "This code or more",
+            "max": "This code or less"
+        },
+        "onProblems": {
+            "stop": "Stop",
+            "continue_on_failure": "Continue after a failure",
+            "continue_always": "Always continue"
+        },
+        "onProblemsHint": {
+            "stop": "When this command ends in a failure or an error, the remaining commands are not run.",
+            "continue_on_failure": "After a failure the next command runs; after an error the remaining commands are not run.",
+            "continue_always": "The next command runs whatever the result of this one."
+        },
+        "summary": {
+            "manual": "Runs only when requested with \"Run now\".",
+            "once": "Runs once at {{at}} (time of this browser).",
+            "onceUnset": "Runs once at the date and time to be entered.",
+            "weekly": "Runs every week on {{days}} at {{time}} {{zone}}.",
+            "daily": "Runs every day at {{time}} {{zone}}.",
+            "everyHour": "Runs every hour on the hour {{zone}}.",
+            "everyHours": "Runs every {{n}} hours from 00:00 {{zone}}.",
+            "everyMinute": "Runs every minute {{zone}}.",
+            "everyMinutes": "Runs every {{n}} minutes from minute 0 {{zone}}.",
+            "hourlyAt": "Runs every hour at minute {{minute}} {{zone}}.",
+            "hostZone": "(host time, {{zone}})",
+            "hostZoneUnknown": "(host time; the time zone is not reported yet)",
+            "listSeparator": ", "
+        },
+        "editor": {
+            "basics": "Command set",
+            "osUserHint": "The commands run as this user. The agent runs as {{user}}.",
+            "osUserUnknown": "The commands run as this user. The agent has not reported the user it runs as yet.",
+            "workDirHint": "Absolute path where every command starts. When empty, the home directory of the OS user.",
+            "workDirPlaceholder": "Home directory of the OS user",
+            "schedule": "When it runs",
+            "repeat": "Repeat",
+            "onceAt": "Date and time",
+            "onceAtHint": "In the time of this browser.",
+            "weekdays": "Weekdays",
+            "time": "Time",
+            "hostTimeHint": "In the local time of the host.",
+            "everyHours": "Interval",
+            "hours": "Every {{n}} hours",
+            "everyMinutes": "Interval",
+            "minutes": "Every {{n}} minutes",
+            "minuteOfHour": "Minute of the hour (0-59)",
+            "results": "Results",
+            "keepRunsHint": "Older runs beyond this number are deleted (1 to 10000).",
+            "joinerHint": "How several values of one group name are joined.",
+            "commands": "Commands",
+            "commandsHint": "The commands run one after another in this order.",
+            "command": "Command {{n}}",
+            "moveUp": "Move command {{n}} up",
+            "moveDown": "Move command {{n}} down",
+            "removeCommand": "Remove",
+            "addCommand": "Add a command",
+            "commandLineHint": "Run by bash exactly as written. Pipes, redirections, cd and several lines can be used; a cd affects only this command.",
+            "code": "Code",
+            "codeFrom": "First code",
+            "codeTo": "to",
+            "codeUntil": "Last code",
+            "errorCodes": "Exit codes that are errors: {{codes}}",
+            "noErrorCodes": "Every exit code is a success or a failure.",
+            "codesOverlap": "These exit codes are both success and failure codes: {{codes}}",
+            "timeoutHint": "1 to 86400. The command is stopped when it runs longer.",
+            "lineLimitHint": "Lines of this command's part of the values (1 to 10000).",
+            "patternsHint": "Regular expressions applied to the whole console output in this order. Each needs a named group such as (?<name>...); what the groups capture are the values. Without patterns, the console output itself is the value.",
+            "noPatterns": "No patterns: the console output is used as the value.",
+            "pattern": "Pattern {{n}}",
+            "removePattern": "Remove pattern {{n}}",
+            "addPattern": "Add a pattern",
+            "patternUp": "Move pattern {{n}} up",
+            "patternDown": "Move pattern {{n}} down"
         }
     }
 }

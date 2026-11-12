@@ -388,7 +388,16 @@ export interface CertStatus {
 // --- History ---
 
 export type HistoryCategory =
-    'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
+    | 'account'
+    | 'rule'
+    | 'token'
+    | 'certificate'
+    | 'rejected'
+    | 'template'
+    | 'suppression'
+    | 'detection'
+    | 'config'
+    | 'command';
 
 export interface HistoryItem {
     id: number;
@@ -412,6 +421,8 @@ export interface Account {
     role: Role;
     language: LangSetting;
     disabled: boolean;
+    /** Receives the notification mails (kept while disabled, but nothing is sent then). */
+    notify: boolean;
     locked_until: string | null;
     created_at: string;
 }
@@ -456,4 +467,188 @@ export interface CentralConfig {
 export interface ConfigUpdate {
     set: Record<string, string>;
     unset: string[];
+}
+
+// --- Command sets ---
+// Result types are returned to every account; the definition types are used
+// only by the administrator extension (types are not part of the built files).
+
+export type CommandKind = 'success' | 'failure' | 'error';
+export type CommandRunState = 'running' | CommandKind;
+
+/** Display value of a run: one row per group name ('' is output used without patterns). */
+export interface DisplayValue {
+    rows: { name: string; values: string[]; value: string }[] | null;
+    truncated: boolean;
+}
+
+export interface CommandRun {
+    id: number;
+    set_id: number;
+    set_name: string;
+    trigger: 'manual' | 'schedule';
+    scheduled_for: string | null;
+    request_id: number;
+    commands_total: number;
+    started_at: string | null;
+    finished_at: string | null;
+    state: CommandRunState;
+    reason: string;
+    display: DisplayValue | null;
+    received_at: string | null;
+    // Present for administrators only.
+    set_revision?: number;
+    purpose?: string;
+    os_user?: string;
+    work_dir?: string;
+}
+
+export interface CommandLatest {
+    agent_id: number;
+    agent_name: string;
+    set_id: number;
+    set_name: string;
+    running: boolean;
+    last_run: CommandRun | null;
+    purpose?: string;
+}
+
+export interface AgentCommandResults {
+    agent_id: number;
+    agent_name: string;
+    results: CommandLatest[] | null;
+    sets: CommandLatest[] | null;
+}
+
+export interface CommandResultsByName {
+    names: string[] | null;
+    name: string;
+    results: CommandLatest[] | null;
+}
+
+export interface CommandRunList {
+    agent_id: number;
+    agent_name: string;
+    set_id: number;
+    set_name: string;
+    deleted: boolean;
+    runs: CommandRun[] | null;
+    next_before: number | null;
+    purpose?: string;
+}
+
+export interface CommandValues {
+    values: { name: string; value: string }[] | null;
+    truncated: boolean;
+    pattern_problems?: { pattern: number; problem: 'timeout' | 'invalid' }[] | null;
+}
+
+/** One executed command of a run. */
+export interface CommandRunItem {
+    position: number;
+    kind: CommandKind;
+    reason: string;
+    exit_code: number | null;
+    started_at: string | null;
+    finished_at: string | null;
+    output: string;
+    output_bytes: number;
+    output_truncated: boolean;
+    // Present for administrators only.
+    command_line?: string;
+    note?: string;
+    values?: CommandValues | null;
+}
+
+export interface CommandRunDetail extends CommandRun {
+    agent_id: number;
+    agent_name: string;
+    not_executed: number;
+    commands: CommandRunItem[] | null;
+}
+
+export type CodeSpecKind = 'single' | 'range' | 'min' | 'max';
+export interface CodeSpec {
+    kind: CodeSpecKind;
+    a: number;
+    b?: number;
+}
+
+export type Weekday = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
+export type ScheduleKind = 'once' | 'weekly' | 'daily' | 'every_hours' | 'every_minutes' | 'hourly_at';
+
+export interface CommandSchedule {
+    kind: ScheduleKind;
+    at?: string;
+    weekdays?: Weekday[];
+    time?: string;
+    every?: number;
+    minute?: number;
+}
+
+export type OnProblems = 'stop' | 'continue_on_failure' | 'continue_always';
+export type CommandPurpose = 'collect_output' | 'run_only';
+export type Joiner = 'comma' | 'newline';
+
+export interface CommandSpec {
+    command_line: string;
+    note: string;
+    success: CodeSpec;
+    failure: CodeSpec;
+    on_problems: OnProblems;
+    timeout_sec: number;
+    line_limit: number;
+    patterns: string[] | null;
+}
+
+export interface CommandSetSpec {
+    name: string;
+    description: string;
+    purpose: CommandPurpose;
+    os_user: string;
+    work_dir: string;
+    run_mode: 'manual' | 'schedule';
+    schedule: CommandSchedule | null;
+    keep_runs: number;
+    joiner: Joiner;
+    commands: CommandSpec[] | null;
+}
+
+export interface CommandRequest {
+    id: number;
+    set_id: number;
+    state: 'pending' | 'delivered' | 'done' | 'expired' | 'discarded';
+    requested_at: string | null;
+    requested_by: string;
+    expires_at: string | null;
+    delivered_at: string | null;
+    done_at: string | null;
+    run_uid: string;
+    discarded_at: string | null;
+    discarded_by: string;
+}
+
+export interface CommandSet extends CommandSetSpec {
+    id: number;
+    revision: number;
+    schedule_summary: string;
+    imported_from: string;
+    created_at: string | null;
+    created_by: string;
+    updated_at: string | null;
+    updated_by: string;
+    request: CommandRequest | null;
+    last_run: CommandRun | null;
+    running: boolean;
+    agent_problems: string[] | null;
+}
+
+export interface CommandSetList {
+    agent_id: number;
+    agent_name: string;
+    default_os_user: string;
+    time_zone: string;
+    utc_offset_sec: number;
+    definitions_delivered: boolean;
+    sets: CommandSet[] | null;
 }

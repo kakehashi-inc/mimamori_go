@@ -9,9 +9,11 @@ import i18n from '../i18n/i18n';
 import en from './i18n/en.json';
 import ja from './i18n/ja.json';
 import { AccountsPage } from './pages/AccountsPage';
+import { CommandSetEditPage } from './pages/CommandSetEditPage';
 import { ConfigPage } from './pages/ConfigPage';
 import { RuleEditPage } from './pages/RuleEditPage';
 import { RuleNewPage } from './pages/RuleNewPage';
+import { CommandHistoryOption, CommandItemDefinition, CommandSetsSection } from './parts/CommandSetParts';
 import { AckAction, EmptyHead, SelectAllHead, SelectRow, ToSuppressionAction } from './parts/DetectionParts';
 import { AccountHistoryOption, ConfigHistoryOption, NoCentralHostsNotice } from './parts/MiscParts';
 import { CreateRuleAction, RuleActions } from './parts/RuleParts';
@@ -26,6 +28,8 @@ registerExtension({
         { path: '/config', element: <ConfigPage /> },
         { path: '/rules/new', element: <RuleNewPage /> },
         { path: '/rules/:id/edit', element: <RuleEditPage /> },
+        { path: '/agents/:id/command-sets/new', element: <CommandSetEditPage /> },
+        { path: '/agents/:id/command-sets/:set/edit', element: <CommandSetEditPage /> },
     ],
     navItems: [
         { to: '/accounts', icon: 'manage_accounts', label: () => i18n.t('nav.accounts'), order: 90 },
@@ -50,7 +54,9 @@ registerExtension({
         'suppressions.headEnd': [SuppressionActionsHead],
         'suppressions.rowEnd': [DeleteSuppressionAction],
         'history.categoryOptionsStart': [AccountHistoryOption],
-        'history.categoryOptionsEnd': [ConfigHistoryOption],
+        'history.categoryOptionsEnd': [ConfigHistoryOption, CommandHistoryOption],
         'guide.notices': [NoCentralHostsNotice],
+        'agentDetail.sections': [CommandSetsSection],
+        'commandRun.itemStart': [CommandItemDefinition],
     },
 });

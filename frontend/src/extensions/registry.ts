@@ -1,6 +1,16 @@
 import { useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import i18n from '../i18n/i18n';
-import type { Detection, Guide, RuleDetail, Suppression, TemplateDetail, TemplateSummary, Token } from '../types';
+import type {
+    AgentDetail,
+    CommandRunItem,
+    Detection,
+    Guide,
+    RuleDetail,
+    Suppression,
+    TemplateDetail,
+    TemplateSummary,
+    Token,
+} from '../types';
 
 // Extension points of the application. An extension module (loaded after
 // login, see loader.ts) registers routes, navigation items, parts placed in
@@ -52,6 +62,8 @@ export interface SlotProps {
     'history.categoryOptionsStart': NoProps;
     'history.categoryOptionsEnd': NoProps;
     'guide.notices': { guide: Guide };
+    'agentDetail.sections': { agent: AgentDetail; reload: () => void };
+    'commandRun.itemStart': { item: CommandRunItem };
 }
 
 export type SlotName = keyof SlotProps;

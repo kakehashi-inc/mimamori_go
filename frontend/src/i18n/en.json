@@ -23,7 +23,8 @@
         "guide": "Setup guide",
         "profile": "Profile",
         "accountMenu": "Account menu",
-        "logout": "Log out"
+        "logout": "Log out",
+        "commandResults": "Command results"
     },
     "common": {
         "loading": "Loading...",
@@ -491,5 +492,85 @@
         "title": "Page not found",
         "description": "The page you are looking for does not exist or has moved.",
         "back": "Back to home"
+    },
+    "commandState": {
+        "running": "Running",
+        "success": "Success",
+        "failure": "Failure",
+        "error": "Error"
+    },
+    "commandReason": {
+        "unexpected_code": "The exit code is neither a success nor a failure code.",
+        "start_failed": "The command could not be started.",
+        "workdir_failed": "The working directory could not be entered.",
+        "timeout": "The time limit was exceeded.",
+        "signaled": "The command was ended by a signal.",
+        "interrupted": "The agent was stopped during the run."
+    },
+    "commandResults": {
+        "title": "Command results",
+        "description": "Latest values collected by the command sets of the agents.",
+        "section": "Command results",
+        "byAgent": "By agent",
+        "bySet": "By command set",
+        "agent": "Agent",
+        "selectAgent": "Select an agent",
+        "set": "Command set",
+        "selectSet": "Select a command set",
+        "value": "Value",
+        "result": "Result",
+        "finishedAt": "Finished",
+        "history": "Run history",
+        "running": "Running now",
+        "notRun": "Not run yet",
+        "output": "Output",
+        "noValue": "No values",
+        "truncated": "Lines beyond the line limit were left out.",
+        "latest": "Latest values",
+        "noLatest": "No command set of this agent collects values.",
+        "allSets": "Run history of each command set",
+        "noSets": "This agent has no command sets.",
+        "noNames": "No agent has a command set that collects values.",
+        "noRows": "No results to show."
+    },
+    "commandRuns": {
+        "title": "Run history",
+        "deleted": "Deleted",
+        "deletedNote": "This command set has been deleted. Its runs are kept until the retention period ends.",
+        "started": "Started",
+        "finished": "Finished",
+        "trigger": "Trigger",
+        "triggers": {
+            "manual": "Manual",
+            "schedule": "Schedule"
+        },
+        "scheduledFor": "Scheduled for {{at}}",
+        "result": "Result",
+        "value": "Value",
+        "detail": "Details",
+        "empty": "No runs yet.",
+        "newer": "Newer runs",
+        "older": "Older runs"
+    },
+    "commandRun": {
+        "title": "Run details",
+        "summary": "Summary",
+        "agent": "Agent",
+        "set": "Command set",
+        "commandsRun": "Commands run",
+        "commandsCount": "{{done}} of {{total}}",
+        "reason": "Reason",
+        "receivedAt": "Received",
+        "display": "Values",
+        "commands": "Commands",
+        "command": "Command {{n}}",
+        "exitCode": "Exit code",
+        "noExitCode": "None",
+        "output": "Console output",
+        "noOutput": "No output.",
+        "outputTruncated": "The output was {{size}}; only the first 1 MiB is kept.",
+        "notExecuted": "Commands not executed because the set stopped: {{count}}",
+        "stillRunning": "This run has not finished yet. Reload to see the commands that ended since.",
+        "noCommands": "No command has ended yet."
     }
 }

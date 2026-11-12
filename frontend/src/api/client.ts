@@ -1,8 +1,12 @@
 import type { LangSetting } from '../constants';
 import type {
+    AgentCommandResults,
     AgentDetail,
     AgentSummary,
     CertStatus,
+    CommandResultsByName,
+    CommandRunDetail,
+    CommandRunList,
     Detection,
     DetectionQuery,
     EmailChangeStart,
@@ -162,6 +166,35 @@ export function listAgents(): Promise<AgentSummary[]> {
 
 export function getAgent(id: number | string): Promise<AgentDetail> {
     return request<AgentDetail>(`/agents/${encodeURIComponent(id)}`);
+}
+
+// --- Command results ---
+
+/** Latest results of the command sets of one agent. */
+export function getAgentCommandResults(agentId: number | string): Promise<AgentCommandResults> {
+    return request<AgentCommandResults>(`/agents/${encodeURIComponent(agentId)}/command-results`);
+}
+
+/** Latest results of the sets with this name on every agent ('' lists only the names). */
+export function getCommandResultsByName(name: string): Promise<CommandResultsByName> {
+    return request<CommandResultsByName>(`/command-results${query({ name })}`);
+}
+
+/** Runs of one set, newest first; `before` continues after the run with that ID. */
+export function listCommandRuns(
+    agentId: number | string,
+    setId: number | string,
+    before?: number
+): Promise<CommandRunList> {
+    return request<CommandRunList>(
+        `/agents/${encodeURIComponent(agentId)}/command-sets/${encodeURIComponent(setId)}/runs${query({ before })}`
+    );
+}
+
+export function getCommandRun(agentId: number | string, runId: number | string): Promise<CommandRunDetail> {
+    return request<CommandRunDetail>(
+        `/agents/${encodeURIComponent(agentId)}/command-runs/${encodeURIComponent(runId)}`
+    );
 }
 
 // --- Tokens ---

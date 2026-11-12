@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getConfig, updateConfig } from '../api';
+import { getConfig, listAccounts, setAccountNotify, updateConfig } from '../api';
+import { NotifyRecipients } from '../components/NotifyRecipients';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { checkboxClass, Field, inputClass } from '../../components/FormControls';
@@ -9,7 +10,7 @@ import { Alert, ErrorAlert, Loading } from '../../components/StateViews';
 import { useToast } from '../../context/ToastContext';
 import type ja from '../i18n/ja.json';
 import { useApi } from '../../hooks/useApi';
-import type { CentralConfig, ConfigItem } from '../../types';
+import type { Account, CentralConfig, ConfigItem } from '../../types';
 import { errorMessage } from '../../utils/format';
 
 // Items grouped by subject, in display order. Items the server reports but
@@ -73,6 +74,9 @@ export function ConfigPage() {
     const [draft, setDraft] = useState<Draft | null>(null);
     const [busy, setBusy] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const accounts = useApi(listAccounts, []);
+    // Notification recipients changed in the form and not saved yet (account ID to checked).
+    const [notify, setNotify] = useState<Record<number, boolean>>({});
 
     useEffect(() => {
         if (data) setDraft(initialDraft(data));
@@ -108,7 +112,9 @@ export function ConfigPage() {
         }
         return { set, unset };
     })();
-    const changed = Object.keys(changes.set).length + changes.unset.length > 0;
+    const configChanged = Object.keys(changes.set).length + changes.unset.length > 0;
+    const notifyChanges = Object.entries(notify).map(([id, on]) => ({ id: Number(id), on }));
+    const changed = configChanged || notifyChanges.length > 0;
 
     const setValue = (name: string, value: string) =>
         setDraft(d => {
@@ -139,8 +145,21 @@ export function ConfigPage() {
         setBusy(true);
         setSaveError(null);
         try {
-            const next = await updateConfig(changes);
-            setData(next);
+            if (configChanged) {
+                const next = await updateConfig(changes);
+                setData(next);
+            }
+            // There is one request per account whose check box changed. The
+            // saved ones leave the form state even when a later one fails.
+            const saved = new Map<number, Account>();
+            try {
+                for (const { id, on } of notifyChanges) saved.set(id, await setAccountNotify(id, on));
+            } finally {
+                if (saved.size > 0) {
+                    accounts.setData((accounts.data ?? []).map(a => saved.get(a.id) ?? a));
+                    setNotify(n => Object.fromEntries(Object.entries(n).filter(([id]) => !saved.has(Number(id)))));
+                }
+            }
             const restart = [...Object.keys(changes.set), ...changes.unset].some(n => byName.get(n)?.restart);
             showToast(restart ? t('config.savedRestart') : t('config.saved'));
         } catch (err) {
@@ -296,6 +315,15 @@ export function ConfigPage() {
                 {groups.map(group => (
                     <Card key={group.key} title={t(`config.groups.${group.key}`)}>
                         <div className='flex flex-col gap-4'>
+                            {group.key === 'notify' && (
+                                <NotifyRecipients
+                                    accounts={accounts.data}
+                                    error={accounts.error}
+                                    onRetry={accounts.reload}
+                                    value={notify}
+                                    onChange={setNotify}
+                                />
+                            )}
                             {group.items
                                 .map(n => byName.get(n))
                                 .filter((i): i is ConfigItem => !!i)
@@ -311,6 +339,7 @@ export function ConfigPage() {
                         disabled={!changed || busy}
                         onClick={() => {
                             setDraft(initialDraft(data));
+                            setNotify({});
                             setSaveError(null);
                         }}
                     >

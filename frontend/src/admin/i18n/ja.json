@@ -15,7 +15,8 @@
     },
     "historyCategory": {
         "account": "アカウント",
-        "config": "システム設定"
+        "config": "システム設定",
+        "command": "コマンドセット"
     },
     "tokens": {
         "issue": "トークンを発行",
@@ -313,7 +314,7 @@
             },
             "smtp_to": {
                 "label": "宛先",
-                "hint": "宛先のアドレス。"
+                "hint": "通知先に選んだアカウントのほかに、通知メールを送る追加のアドレスです（共有のメールボックスなど）。"
             },
             "smtp_timeout_sec": {
                 "label": "タイムアウト（秒）",
@@ -323,6 +324,210 @@
                 "label": "HELO 名",
                 "hint": "HELO/EHLO で送る名前。空なら localhost。"
             }
+        },
+        "recipients": {
+            "title": "通知先",
+            "hint": "通知メールを受け取るアカウントを選んでください。下の設定「宛先」のアドレスにも送ります。",
+            "count": "通知メールを受け取るアカウント: {{count}} 件",
+            "none": "通知メールを受け取るアカウントはありません。「宛先」にアドレスがあれば、そのアドレスにだけ送ります。",
+            "disabledTitle": "無効にしたアカウントは選択を保ちますが、無効の間は送りません。",
+            "unsaved": "未保存"
+        }
+    },
+    "stepUp": {
+        "title": "確認コードによる確認",
+        "why": "コマンドセットを変更するには、メールアドレスに送る確認コードの入力が必要です。コードを確認した後に変更を保存します。しばらくの間は、続けて変更してもコードは不要です。",
+        "sending": "確認コードを送っています...",
+        "sent": "メールアドレスに確認コードを送りました。",
+        "code": "確認コード",
+        "codeHint": "メールに記載された 6 桁のコードを入力してください。有効期限は 10 分です。",
+        "confirm": "確認して保存",
+        "resend": "新しいコードを送る",
+        "invalidCode": "コードが正しくありません。メールを確認して、もう一度入力してください。",
+        "expired": "コードの有効期限が切れたか、誤りの回数が上限に達しました。新しいコードを送ってください。",
+        "cancelled": "確認コードを入力しなかったため、何も変更していません。"
+    },
+    "commandSets": {
+        "title": "コマンドセット",
+        "empty": "このエージェントにはまだコマンドセットがありません。",
+        "create": "作成",
+        "createTitle": "コマンドセットの作成",
+        "editTitle": "コマンドセットの編集",
+        "edit": "編集",
+        "delete": "削除",
+        "deleteTitle": "コマンドセットの削除",
+        "deleteConfirm": "{{name}} を削除しますか？実行履歴は保存期間が過ぎるまで残ります。まだ配信していない実行の指示は破棄します。",
+        "deleted": "{{name}} を削除しました",
+        "saved": "{{name}} を保存しました",
+        "check": "確認",
+        "save": "保存",
+        "valid": "コマンドセットに問題はありません。",
+        "invalid": "次の問題を直してください",
+        "nameTaken": "このエージェントの別のコマンドセットに同じ名前があります。",
+        "notFound": "コマンドセットが見つかりません。削除された可能性があります。",
+        "importedFrom": "{{source}} からインポートしました。",
+        "runNow": "今すぐ実行",
+        "requested": "{{name}} の実行を指示しました。エージェントは次の接続の後に実行します。",
+        "requestConflict": "このコマンドセットの実行は、すでに指示しています。",
+        "discard": "指示を破棄",
+        "discarded": "{{name}} の実行の指示を破棄しました",
+        "request": "実行の指示",
+        "requestState": {
+            "pending": "エージェントへの配信待ち",
+            "delivered": "エージェントに配信済み"
+        },
+        "whenRun": "実行のタイミング",
+        "lastRun": "最後の実行",
+        "commandCount": "コマンド: {{count}} 個",
+        "hostZone": "定期の時刻は、ホストのローカル時刻（{{zone}}）です。",
+        "hostZoneUnknown": "定期の時刻は、ホストのローカル時刻です。エージェントからタイムゾーンはまだ報告されていません。",
+        "notDelivered": "エージェントは、現在のコマンドセットをまだ受け取っていません。次の接続のときに受け取ります。",
+        "agentProblems": "エージェントがこのコマンドセットを受け付けませんでした",
+        "patternProblems": "値を取り出せなかった正規表現があります",
+        "patternProblem": {
+            "timeout": "正規表現 {{n}} は時間がかかりすぎたため中止しました。",
+            "invalid": "正規表現 {{n}} はエージェントで使えませんでした。"
+        },
+        "import": "インポート",
+        "importTitle": "コマンドセットのインポート",
+        "importHint": "エージェント（このエージェントも可）のコマンドセットを、OSユーザーと作業ディレクトリを含むすべての設定ごと、このエージェントに写します。写すときに名前を変えられます。",
+        "importSource": "写し元",
+        "importNone": "このエージェントにはコマンドセットがありません。",
+        "importName": "{{name}} の写しの名前",
+        "importSelected": "インポート（{{count}} 件）",
+        "imported": "コマンドセットをインポートしました: {{count}} 件",
+        "nameClash": "この名前はすでに使われています。別の名前を入力してください。",
+        "thisAgent": "{{name}}（このエージェント）",
+        "fields": {
+            "name": "名前",
+            "description": "説明",
+            "purpose": "用途",
+            "osUser": "OSユーザー",
+            "workDir": "作業ディレクトリ",
+            "keepRuns": "保存する実行の回数",
+            "joiner": "値のつなぎ方",
+            "commandLine": "コマンドライン",
+            "note": "備考",
+            "success": "成功とする終了コード",
+            "failure": "失敗とする終了コード",
+            "onProblems": "問題があったとき",
+            "timeoutSec": "制限時間（秒）",
+            "lineLimit": "行数の上限",
+            "patterns": "正規表現"
+        },
+        "purpose": {
+            "collect_output": "出力収集",
+            "run_only": "実行のみ"
+        },
+        "purposeHint": {
+            "collect_output": "コンソール出力から値を取り出し、コマンドの結果に表示します。",
+            "run_only": "コマンドを実行して結果を記録します。値は取り出しません。"
+        },
+        "runMode": {
+            "manual": "手動",
+            "schedule": "定期"
+        },
+        "runModeHint": {
+            "manual": "「今すぐ実行」で指示したときだけ実行します。",
+            "schedule": "下の時刻に実行します。「今すぐ実行」も使えます。"
+        },
+        "scheduleKind": {
+            "once": "日時を指定して 1 回",
+            "weekly": "毎週",
+            "daily": "毎日",
+            "every_hours": "数時間ごと",
+            "every_minutes": "数分ごと",
+            "hourly_at": "毎時、指定した分"
+        },
+        "weekdays": {
+            "sun": "日",
+            "mon": "月",
+            "tue": "火",
+            "wed": "水",
+            "thu": "木",
+            "fri": "金",
+            "sat": "土"
+        },
+        "joiner": {
+            "comma": "カンマ",
+            "newline": "改行"
+        },
+        "codeKind": {
+            "single": "1 つの値",
+            "range": "範囲",
+            "min": "この値以上",
+            "max": "この値以下"
+        },
+        "onProblems": {
+            "stop": "止める",
+            "continue_on_failure": "失敗なら続行する",
+            "continue_always": "いかなる場合も続行する"
+        },
+        "onProblemsHint": {
+            "stop": "このコマンドが失敗またはエラーになったら、残りのコマンドは実行しません。",
+            "continue_on_failure": "失敗なら次のコマンドを実行します。エラーなら残りのコマンドは実行しません。",
+            "continue_always": "このコマンドの結果に関係なく、次のコマンドを実行します。"
+        },
+        "summary": {
+            "manual": "「今すぐ実行」で指示したときだけ実行します。",
+            "once": "{{at}}（このブラウザの時刻）に 1 回実行します。",
+            "onceUnset": "入力する日時に 1 回実行します。",
+            "weekly": "毎週 {{days}} の {{time}} に実行します{{zone}}。",
+            "daily": "毎日 {{time}} に実行します{{zone}}。",
+            "everyHour": "毎時 0 分に実行します{{zone}}。",
+            "everyHours": "0 時から {{n}} 時間ごとに実行します{{zone}}。",
+            "everyMinute": "1 分ごとに実行します{{zone}}。",
+            "everyMinutes": "毎時 0 分から {{n}} 分ごとに実行します{{zone}}。",
+            "hourlyAt": "毎時 {{minute}} 分に実行します{{zone}}。",
+            "hostZone": "（ホストの時刻、{{zone}}）",
+            "hostZoneUnknown": "（ホストの時刻。タイムゾーンはまだ報告されていません）",
+            "listSeparator": "、"
+        },
+        "editor": {
+            "basics": "コマンドセット",
+            "osUserHint": "コマンドはこのユーザーで実行します。エージェントは {{user}} で動いています。",
+            "osUserUnknown": "コマンドはこのユーザーで実行します。エージェントの実行ユーザーはまだ報告されていません。",
+            "workDirHint": "各コマンドを始める場所の絶対パスです。空なら OSユーザーのホームディレクトリです。",
+            "workDirPlaceholder": "OSユーザーのホームディレクトリ",
+            "schedule": "実行のタイミング",
+            "repeat": "繰り返し",
+            "onceAt": "日時",
+            "onceAtHint": "このブラウザの時刻で入力します。",
+            "weekdays": "曜日",
+            "time": "時刻",
+            "hostTimeHint": "ホストのローカル時刻です。",
+            "everyHours": "間隔",
+            "hours": "{{n}} 時間ごと",
+            "everyMinutes": "間隔",
+            "minutes": "{{n}} 分ごと",
+            "minuteOfHour": "分（0〜59）",
+            "results": "結果",
+            "keepRunsHint": "この回数より古い実行は削除します（1〜10000）。",
+            "joinerHint": "同じグループ名の値が複数あるときのつなぎ方です。",
+            "commands": "コマンド",
+            "commandsHint": "コマンドはこの順に 1 つずつ実行します。",
+            "command": "コマンド {{n}}",
+            "moveUp": "コマンド {{n}} を上へ移動",
+            "moveDown": "コマンド {{n}} を下へ移動",
+            "removeCommand": "削除",
+            "addCommand": "コマンドを追加",
+            "commandLineHint": "書いたとおりに bash で実行します。パイプ、リダイレクト、cd、複数の行も使えます。cd はこのコマンドの中だけで有効です。",
+            "code": "値",
+            "codeFrom": "最初の値",
+            "codeTo": "〜",
+            "codeUntil": "最後の値",
+            "errorCodes": "エラーになる終了コード: {{codes}}",
+            "noErrorCodes": "どの終了コードも、成功か失敗のどちらかになります。",
+            "codesOverlap": "次の終了コードが、成功と失敗の両方に含まれています: {{codes}}",
+            "timeoutHint": "1〜86400。これより長く動くとコマンドを止めます。",
+            "lineLimitHint": "値のうち、このコマンドの分の行数です（1〜10000）。",
+            "patternsHint": "コンソール出力の全体に、この順に適用する正規表現です。(?<name>...) のような名前付きグループが必要で、グループが捉えた部分が値になります。正規表現が無ければ、コンソール出力そのものを値にします。",
+            "noPatterns": "正規表現はありません。コンソール出力を値にします。",
+            "pattern": "正規表現 {{n}}",
+            "removePattern": "正規表現 {{n}} を削除",
+            "addPattern": "正規表現を追加",
+            "patternUp": "正規表現 {{n}} を上へ移動",
+            "patternDown": "正規表現 {{n}} を下へ移動"
         }
     }
 }

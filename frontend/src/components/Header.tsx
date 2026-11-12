@@ -20,10 +20,20 @@ interface NavItem {
 }
 
 type OwnKey =
-    'agents' | 'detections' | 'tokens' | 'rules' | 'templates' | 'suppressions' | 'certificates' | 'history' | 'guide';
+    | 'agents'
+    | 'commandResults'
+    | 'detections'
+    | 'tokens'
+    | 'rules'
+    | 'templates'
+    | 'suppressions'
+    | 'certificates'
+    | 'history'
+    | 'guide';
 
 const NAV: { to: string; key: OwnKey; icon: string; order: number }[] = [
     { to: '/agents', key: 'agents', icon: 'dns', order: 10 },
+    { to: '/command-results', key: 'commandResults', icon: 'terminal', order: 15 },
     { to: '/detections', key: 'detections', icon: 'notifications', order: 20 },
     { to: '/tokens', key: 'tokens', icon: 'key', order: 30 },
     { to: '/rules', key: 'rules', icon: 'rule', order: 40 },

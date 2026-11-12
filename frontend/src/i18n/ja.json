@@ -23,7 +23,8 @@
         "guide": "導入の案内",
         "profile": "プロファイル",
         "accountMenu": "アカウントのメニュー",
-        "logout": "ログアウト"
+        "logout": "ログアウト",
+        "commandResults": "コマンドの結果"
     },
     "common": {
         "loading": "読み込み中...",
@@ -491,5 +492,85 @@
         "title": "ページが見つかりません",
         "description": "お探しのページは存在しないか、移動した可能性があります。",
         "back": "ホームへ戻る"
+    },
+    "commandState": {
+        "running": "実行中",
+        "success": "成功",
+        "failure": "失敗",
+        "error": "エラー"
+    },
+    "commandReason": {
+        "unexpected_code": "終了コードが、成功と失敗のどちらにも当たりません。",
+        "start_failed": "コマンドを起動できませんでした。",
+        "workdir_failed": "作業ディレクトリに移動できませんでした。",
+        "timeout": "制限時間を超えました。",
+        "signaled": "シグナルで終了しました。",
+        "interrupted": "実行中にエージェントが停止しました。"
+    },
+    "commandResults": {
+        "title": "コマンドの結果",
+        "description": "各エージェントのコマンドセットが取り出した最新の値です。",
+        "section": "コマンドの結果",
+        "byAgent": "エージェント別",
+        "bySet": "コマンドセット別",
+        "agent": "エージェント",
+        "selectAgent": "エージェントを選んでください",
+        "set": "コマンドセット",
+        "selectSet": "コマンドセットを選んでください",
+        "value": "値",
+        "result": "結果",
+        "finishedAt": "終了日時",
+        "history": "実行履歴",
+        "running": "実行中",
+        "notRun": "まだ実行していません",
+        "output": "出力",
+        "noValue": "値はありません",
+        "truncated": "行数の上限を超えた部分は省略しました。",
+        "latest": "最新の値",
+        "noLatest": "このエージェントには、値を取り出すコマンドセットがありません。",
+        "allSets": "各コマンドセットの実行履歴",
+        "noSets": "このエージェントにはコマンドセットがありません。",
+        "noNames": "値を取り出すコマンドセットを持つエージェントはありません。",
+        "noRows": "表示する結果はありません。"
+    },
+    "commandRuns": {
+        "title": "実行履歴",
+        "deleted": "削除済み",
+        "deletedNote": "このコマンドセットは削除されています。実行の記録は保存期間が過ぎるまで残ります。",
+        "started": "開始日時",
+        "finished": "終了日時",
+        "trigger": "きっかけ",
+        "triggers": {
+            "manual": "手動",
+            "schedule": "定期"
+        },
+        "scheduledFor": "予定 {{at}}",
+        "result": "結果",
+        "value": "値",
+        "detail": "詳細",
+        "empty": "実行の記録はまだありません。",
+        "newer": "新しい実行",
+        "older": "古い実行"
+    },
+    "commandRun": {
+        "title": "実行の詳細",
+        "summary": "概要",
+        "agent": "エージェント",
+        "set": "コマンドセット",
+        "commandsRun": "実行したコマンド",
+        "commandsCount": "{{total}} 個中 {{done}} 個",
+        "reason": "理由",
+        "receivedAt": "受信日時",
+        "display": "値",
+        "commands": "コマンド",
+        "command": "コマンド {{n}}",
+        "exitCode": "終了コード",
+        "noExitCode": "なし",
+        "output": "コンソール出力",
+        "noOutput": "出力はありません。",
+        "outputTruncated": "出力は全体で {{size}} でした。最初の 1 MiB だけを保存しています。",
+        "notExecuted": "セットが止まったため実行しなかったコマンド: {{count}} 個",
+        "stillRunning": "この実行はまだ終わっていません。再読み込みすると、その後に終わったコマンドが表示されます。",
+        "noCommands": "終わったコマンドはまだありません。"
     }
 }
