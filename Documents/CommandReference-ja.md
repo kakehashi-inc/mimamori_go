@@ -97,7 +97,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `ctl rules history ID` | 監視ルールの版の一覧 |
 | `ctl rules diff ID FROM TO` | 2 つの版の差分を表示する |
 | `ctl rules apply ID --agent ID... [--version V]` | 版（既定は最新）をエージェントに適用する（同じエージェントを複数回指定しても 1 件として扱う。存在しないエージェントは引数エラー） |
-| `ctl rules to-template ID NAME [--version V] [--description D]` | 版（既定は最新）から管理者のテンプレートを作る |
+| `ctl rules to-template ID NAME [--version V] [--description D]` | 版（既定は最新）からテンプレートを作る（管理者が作成したテンプレートになる） |
 | `ctl rules delete ID` | 監視ルールを削除する（適用中は不可） |
 
 ### templates
@@ -106,9 +106,9 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl templates list` | テンプレートの一覧 |
 | `ctl templates show NAME` | テンプレートを表示する |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | 管理者のテンプレートを作成する（`--from-rule` は `--version` が無ければ最新の版をコピーする。`--version` は `--from-rule` と一緒に指定した場合だけ使われる）。複数の元を指定した場合は、`--from-builtin`、`--from-rule`、`--file` の順で最初のものを使い、他は無視される |
-| `ctl templates update NAME --file F [--description D]` | 管理者のテンプレートを変更する（`--description` を省略すると説明はそのまま） |
-| `ctl templates delete NAME` | 管理者のテンプレートを削除する |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | テンプレートを作成する（管理者が作成したテンプレートになる。`--from-rule` は `--version` が無ければ最新の版をコピーする。`--version` は `--from-rule` と一緒に指定した場合だけ使われる）。複数の元を指定した場合は、`--from-builtin`、`--from-rule`、`--file` の順で最初のものを使い、他は無視される |
+| `ctl templates update NAME --file F [--description D]` | 管理者が作成したテンプレートを変更する（`--description` を省略すると説明はそのまま） |
+| `ctl templates delete NAME` | 管理者が作成したテンプレートを削除する |
 
 ### detections
 
@@ -132,7 +132,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl accounts list` | アカウントの一覧 |
 | `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する（`--language` の既定は `auto`。パスワードは標準入力から） |
-| `ctl accounts role ID admin\|viewer` | 権限区分を変える |
+| `ctl accounts role ID admin\|viewer` | 権限を変える |
 | `ctl accounts password ID` | パスワードを再設定する（標準入力から） |
 | `ctl accounts disable ID` | アカウントを無効にする |
 | `ctl accounts enable ID` | アカウントを有効にする |
@@ -143,7 +143,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl certs status` | 独自 CA とサーバー証明書の状態を表示する |
-| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。区分: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config` |
+| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config` |
 
 ## version
 
@@ -161,5 +161,5 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent init` と `agent set-central` を含む）。`status` では停止中 |
 | 4 | 認証または権限のエラー（`ctl` では、`cli.secret` が稼働中のセントラルと一致しない場合と、セントラルの証明書を `ca.crt` で検証できない場合） |
 | 5 | 実行エラー（外部コマンドまたはセントラル） |
-| 6 | ファイル I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合を含む） |
+| 6 | ファイルまたはディレクトリの I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合を含む） |
 | 7 | タイムアウト |

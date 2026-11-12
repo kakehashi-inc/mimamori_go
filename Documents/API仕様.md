@@ -310,7 +310,7 @@ type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected'
 interface HistoryItem {
   id: number; at: string; account_name: string;   // システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
   category: HistoryCategory; action: string; target: string; detail: string;
-  remote_addr: string; count: number;            // 拒否した接続は同じ接続元と理由をまとめて数える
+  remote_addr: string; count: number;            // 拒否した接続は同じ接続元、理由、トークン名（target）を 10 分以内ならまとめて数える
 }
 ```
 
