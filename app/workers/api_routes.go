@@ -35,6 +35,8 @@ func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool
 		h("PUT /auth/display-name", requireAny(c.handleOwnDisplayName))
 		h("POST /auth/email", requireAny(c.handleOwnEmail))
 		h("POST /auth/email/verify", requireAny(c.handleOwnEmailVerify))
+		a("POST /auth/step-up", c.handleStepUpRequest)
+		a("POST /auth/step-up/verify", c.handleStepUpVerify)
 		h("GET /ui/modules", requireAny(c.handleUIModules))
 	}
 	h("GET /auth/me", requireAny(c.handleMe))

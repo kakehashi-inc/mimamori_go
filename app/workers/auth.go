@@ -51,7 +51,7 @@ func (c *core) sessionPrincipal(r *http.Request) (*principal, *models.Session) {
 		_ = models.DeleteSession(c.db, id)
 		return nil, nil
 	}
-	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id}, s
+	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id, StepUpAt: s.StepUpAt}, s
 }
 
 // sessionAuth authenticates browser requests by the session cookie and

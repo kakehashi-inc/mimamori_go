@@ -14,7 +14,7 @@
 | エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がループバックで、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
 - `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
-- 例外として、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify`、`/ui/modules` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
+- 例外として、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify`、`/auth/step-up`、`/auth/step-up/verify`、`/ui/modules` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
 - ブラウザ用で認証の要らない（公開の）パスは `GET /health`、`POST /auth/login`、`POST /auth/login/verify` だけです。
 - ループバック以外からの `/admin/v1/*` は 404 を返します。接続元の判定には TCP の接続元アドレスだけを使います。
 - 1 接続で 1 リクエストを処理し、応答は `Connection: close` です。
@@ -25,7 +25,7 @@
 - 要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。
 - ブラウザ用と管理用の API は、要求の JSON に未知のフィールドがあると 400 を返します。エージェント用の API は未知のフィールドを無視します。
 - エラー時は 4xx/5xx と `{"error": "<message>"}` を返します。
-  - 400: 入力の誤り、401: 未認証、403: CSRF のヘッダーが無い、または組み込みのテンプレートの変更、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、410: 確認コードの期限切れなど（2 章）、423: ログインの一時停止、500: 内部エラー（`internal error`）、503: 混雑、または確認コードのメールを送れない（2 章）。
+  - 400: 入力の誤り、401: 未認証、403: CSRF のヘッダーが無い、または組み込みのテンプレートの変更、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、410: 確認コードの期限切れなど（2 章）、423: ログインの一時停止、428: 再認証が必要（コマンドセットの変更。2 章）、500: 内部エラー（`internal error`）、503: 混雑、または確認コードのメールを送れない（2 章）。
   - 503 を返すのはブラウザ用の待ち受けだけです。エージェントおよび管理用の待ち受け（HTTPS）では、混雑すると応答を返さずに接続を切ります。
 - 存在しないパスと、そのパスで対応していないメソッドへの要求は、`{"error": ...}` ではなく `text/plain` の `404 page not found` と `405 Method Not Allowed` を返します（ブラウザ用はログイン済みの場合）。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
@@ -59,6 +59,8 @@
 | PUT | `/auth/display-name` | V | `{"display_name"}` | `Me`（自分の表示名の変更。何も無効にならない） |
 | POST | `/auth/email` | V | `{"email"}` | 下の「自分のメールアドレスの変更」 |
 | POST | `/auth/email/verify` | V | `{"code"}` | 下の「自分のメールアドレスの変更」 |
+| POST | `/auth/step-up` | A | - | 下の「再認証」 |
+| POST | `/auth/step-up/verify` | A | `{"code"}` | 下の「再認証」 |
 | GET | `/ui/modules` | V | - | `string[]`。画面が読み込む追加のモジュールの URL（同じオリジンの絶対パス）。閲覧者には `[]`、管理者には管理者用のエントリのファイル（例: `["/assets/CxJdEnzI.js"]`）。ビルドのマニフェストが無い、または管理者用のエントリが無い場合は全員に `[]`（[システム仕様.md](システム仕様.md) の 13.1.1） |
 
 ```ts
@@ -98,6 +100,28 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 | `/auth/email/verify` | 410 | 依頼が無い、期限切れ、または誤りが 5 回になって依頼を破棄した |
 
 - 現在のパスワードは求めません。確定できるのは、依頼したのと同じセッションだけです。新しい依頼は、確定していない古い依頼を置き換えます。
+
+再認証（`POST /auth/step-up` と `POST /auth/step-up/verify`）:
+
+コマンドセットの作成、変更、削除、インポート（4.1 章の「A（再認証）」）は、ブラウザからは、そのセッションで再認証のコードを入力した後の一定の時間だけ受け付けます（[システム仕様.md](システム仕様.md) の 12.5.10）。それ以外のときは、その操作の要求に次の応答を返し、何も変更しません。画面はコードを求めてから同じ要求をやり直します。
+
+```json
+{"error":"re-authentication required: request a verification code by mail and enter it to change command sets","step_up_required":true}
+```
+
+（状態は `428`。ログインのときに入力したコードは数えない。`/admin/v1` と開発モードでは返さない）
+
+| 要求 | 状態 | 応答 |
+| --- | --- | --- |
+| `/auth/step-up` | 200 | `{"required":false}`。開発モードのため、再認証は要らない（何も送らない） |
+| `/auth/step-up` | 202 | `{"required":true}`。確認コードをアカウントのメールアドレスへ送った。このセッションの前のコードは置き換わる |
+| `/auth/step-up` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}`。コードは作らない（履歴に `step_up_code_failed`） |
+| `/auth/step-up/verify` | 200 | `{"required":true}`。再認証した（開発モードでは `{"required":false}` で何もしない） |
+| `/auth/step-up/verify` | 400 | `{"error":"invalid code"}`（401 は使わない。ログインの失敗の回数にも数えない） |
+| `/auth/step-up/verify` | 410 | `{"error":"the verification code has expired or was entered wrongly too often; request a new code"}`。コードが無い（このセッションで求めていない、使用済み）、期限切れ、または誤りが 5 回になって破棄した |
+
+- コードの条件（6 桁、有効期限 10 分、誤りは 5 回まで）はログインと同じです。入力できるのはコードを求めたセッションだけで、1 つのコードで成功するのは 1 回だけです。
+- 管理者のルートです（閲覧者には存在しない）。本文は無視します。
 
 ## 3. 概要
 
@@ -170,7 +194,7 @@ interface HostInfo {
 
 ## 4.1 コマンドセット
 
-監視対象のホストでエージェントが実行するコマンドの組（コマンドセット）の定義、手動の実行指示、結果です。定義は監視対象ごとに持ちます（監視対象をまたいだ定義の一覧はありません）。動作は [システム仕様.md](システム仕様.md) を参照してください。
+監視対象のホストでエージェントが実行するコマンドの組（コマンドセット）の定義、手動の実行指示、結果です。定義は監視対象ごとに持ちます（監視対象をまたいだ定義の一覧はありません）。動作は [システム仕様.md](システム仕様.md) の 12.5 を参照してください。
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
@@ -188,7 +212,7 @@ interface HostInfo {
 | GET | `/agents/{id}/command-sets/{set}/runs?limit=&before=` | V | - | `CommandRunList` |
 | GET | `/agents/{id}/command-runs/{run}` | V | - | `CommandRunDetail` |
 
-- 「A（再認証）」の 4 つの操作（作成、変更、削除、インポート）は、ブラウザからは再認証の対象です（[システム仕様.md](システム仕様.md)。再認証が必要な場合は 428）。`/admin/v1`（CLI）と、実行指示と破棄は対象外です。
+- 「A（再認証）」の 4 つの操作（作成、変更、削除、インポート）は、ブラウザからは再認証の対象で、再認証が必要な場合は、要求の内容を確かめる前に 428 を返します（応答は 2 章の「再認証」、動作は [システム仕様.md](システム仕様.md) の 12.5.10）。`/admin/v1`（CLI）、開発モード、検証、実行指示と破棄は対象外です。
 - 定義の要求（`CommandSetSpec`）は JSON のオブジェクト 1 つです。未知のフィールド、型の誤り、不正な値、上限を超える入力は 400 で、本文は `{"error":"invalid command set: <問題>; <問題>","errors":["<問題>", ...]}` です（各問題は `name: ...`、`command 2: timeout_sec: ...` のように項目と、コマンドなら位置（1 から）を示します）。日時を指定した 1 回のスケジュールで、過去の日時は 400 です（変更で、保存済みと同じ日時のままなら可）。
 - 名前が、その監視対象の削除されていない別のセットと同じ場合は 409 です。
 - `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にしません）。JSON として解釈できない場合も 200 で、`errors` に 1 件、`definition` は `null` です。`definition` は既定値を補った定義です。

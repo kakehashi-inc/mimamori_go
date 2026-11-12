@@ -108,8 +108,11 @@ const (
 	// browser" spares new logins from the same browser a code. Like
 	// SessionIdleTimeout it is never shown to browser users.
 	VerifiedBrowserTTL = 3 * time.Hour
+	// StepUpValidity is how long a re-authentication (a mailed code entered
+	// in a login session) allows changes to command sets from that session.
+	StepUpValidity = time.Hour
 	// AuthCodeLifetime and AuthCodeMaxAttempts bound a mailed verification
-	// code (login or e-mail address change).
+	// code (login, e-mail address change or re-authentication).
 	AuthCodeLifetime    = 10 * time.Minute
 	AuthCodeMaxAttempts = 5
 	// AuthCodeMailTimeoutCap bounds the sending of a code mail inside a

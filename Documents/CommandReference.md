@@ -66,7 +66,7 @@ Commands for the agent. Run them on each monitored host.
 
 ## ctl
 
-Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON (`ctl rules export` always prints JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
+Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON (`ctl rules export` and `ctl command-sets export` always print JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
 
 ### agents
 
@@ -128,6 +128,43 @@ Management commands. Run them on the central host while the central is running. 
 | `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`). At least one of `--type`, `--user`, `--exe` and `--target` is required; `--agent` alone is an argument error (without `--agent` the condition applies to all agents) |
 | `ctl suppressions delete ID` | Delete a suppression condition |
 
+### command-sets
+
+Command sets of one agent (the built-in agent included): definitions, run requests and results. `AGENT_ID` is the id of `ctl agents list`. These commands are never asked for a verification code.
+
+| Command | Description |
+| --- | --- |
+| `ctl command-sets list AGENT_ID` | List the command sets of an agent. Above the table: the agent, the OS user new sets default to (the user the agent runs as; `(not reported yet)` before the agent has connected), the host's time zone, and whether the agent holds the current definitions |
+| `ctl command-sets show AGENT_ID SET_ID` | Show a command set: its definition, schedule summary, open run request, last finished run, whether it is running, and problems the agent reported about it |
+| `ctl command-sets export AGENT_ID SET_ID` | Print only the definition of a command set as JSON (always JSON), in the shape `create` and `update` read. The time of a once schedule is printed in local time with its offset |
+| `ctl command-sets create AGENT_ID --file F` | Create a command set from a definition file (`-` for standard input). When `os_user` is omitted, the OS user the agent runs as is used (an agent that has never connected has none; then `os_user` is required) |
+| `ctl command-sets update AGENT_ID SET_ID --file F` | Replace the whole definition of a command set with a definition file. When `os_user` is omitted, the set's current OS user is kept |
+| `ctl command-sets delete AGENT_ID SET_ID` | Delete a command set. Its runs are kept until the retention removes them; a run request not yet delivered is discarded |
+| `ctl command-sets import AGENT_ID --from SOURCE_AGENT_ID SET_ID[=NEW_NAME]...` | Copy command sets of the agent `SOURCE_AGENT_ID` (it may be `AGENT_ID` itself) into `AGENT_ID`, with everything including the OS user and the working directory. `=NEW_NAME` renames the copy (default: the source name; everything after the first `=` is the name). When a name is already used in the destination or repeated in the import, nothing is created and the names are printed. `SET_ID` must be a positive integer and `NEW_NAME` must not be empty |
+| `ctl command-sets run AGENT_ID SET_ID` | Request a run of a command set (also of a scheduled one); the agent receives the request with its next sync. A set can have only one request that the agent has not answered; a request not delivered within 24 hours expires |
+| `ctl command-sets discard AGENT_ID REQUEST_ID` | Discard a run request that was not yet delivered to the agent (`REQUEST_ID` is the `id` printed by `run`, or `request.id` of `show`) |
+| `ctl command-sets runs AGENT_ID SET_ID [--limit N] [--before RUN_ID]` | List the runs of a command set, newest first (also of a deleted set while its runs are kept): trigger, due time of a scheduled run, start, end, state, reason and the display value on one line. `--limit` defaults to 50 and is held between 1 and 500; when older runs exist, the `--before` value of the next page is printed below the table |
+| `ctl command-sets show-run AGENT_ID RUN_ID` | Show a run: trigger, OS user, working directory, times, state, display value, and for every executed command its result, exit code, times, command line, note and console output (up to 1 MiB per command), and how many commands were not executed |
+
+The definition file is one JSON object in the shape of `CommandSetSpec` of the API (see [API仕様.md](API仕様.md), chapter 4.1, for every field, its values and limits); unknown fields are refused. Omitted fields take their defaults: run mode from whether a schedule is given, 100 kept runs, comma joiner, success code 0, failure codes 1 or more, `on_problems` `stop`, 300 seconds, 20 lines. Example:
+
+```json
+{
+  "name": "disk usage",
+  "description": "Usage of the root file system",
+  "purpose": "collect_output",
+  "work_dir": "",
+  "schedule": {"kind": "daily", "time": "03:00"},
+  "commands": [
+    {"command_line": "df -h /", "patterns": ["(?P<use>\\d+%)"]}
+  ]
+}
+```
+
+- An empty `work_dir` is the home directory of the OS user. Every command line is run by bash exactly as written, as the set's OS user.
+- Recurring schedules (`weekly`, `daily`, `every_hours`, `every_minutes`, `hourly_at`) run in the local time of the monitored host. The time of a once schedule (`{"kind": "once", "at": "2026-12-01 03:00"}`) may be written without an offset (`YYYY-MM-DD HH:MM[:SS]`, also with `T` instead of the space); it is then read in the local time of the host where `ctl` runs. A time in the past is refused.
+- Values the central refuses (an invalid definition, a name already used by another set of the agent, a second open run request) end with exit code 2 and a message that names the field and, for a command, its position (from 1).
+
 ### accounts
 
 | Command | Description |
@@ -147,7 +184,7 @@ Management commands. Run them on the central host while the central is running. 
 | Command | Description |
 | --- | --- |
 | `ctl certs status` | Show the CA and server certificate status |
-| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config` |
+| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command` |
 
 ## version
 

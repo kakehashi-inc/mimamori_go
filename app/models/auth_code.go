@@ -4,18 +4,20 @@ package models
 const (
 	CodePurposeLogin       = "login"
 	CodePurposeEmailChange = "email_change"
+	CodePurposeStepUp      = "step_up"
 )
 
 // AuthCode is a row of the auth_codes table: a verification code mailed to
 // an account and not yet entered. The code itself is never stored, only its
 // hash. A login code is found by its challenge (stored hashed); an e-mail
-// address change code by the session that asked for it.
+// address change code and a re-authentication (step-up) code by the session
+// that asked for it.
 type AuthCode struct {
 	ID            int64
 	Purpose       string
 	AccountID     int64
 	ChallengeHash string // login: hash of the challenge given to the browser
-	SessionID     string // email_change: hashed id of the requesting session
+	SessionID     string // email_change, step_up: hashed id of the requesting session
 	NewEmail      string // email_change: the requested address
 	CodeHash      string
 	Remember      bool // login: "keep me logged in" was chosen
@@ -64,8 +66,21 @@ func GetLoginCodeByChallenge(db Execer, challengeHash string) (*AuthCode, error)
 // GetEmailChangeCode returns the pending e-mail address change of an
 // account requested from the given session (hashed id).
 func GetEmailChangeCode(db Execer, accountID int64, sessionID string) (*AuthCode, error) {
+	return GetSessionAuthCode(db, CodePurposeEmailChange, accountID, sessionID)
+}
+
+// GetSessionAuthCode returns the latest code of the purpose that the given
+// session (hashed id) of an account asked for.
+func GetSessionAuthCode(db Execer, purpose string, accountID int64, sessionID string) (*AuthCode, error) {
 	return scanAuthCode(db.QueryRow(`SELECT `+authCodeCols+` FROM auth_codes WHERE purpose = ? AND account_id = ? AND session_id = ? AND session_id <> ''
-		ORDER BY id DESC LIMIT 1`, CodePurposeEmailChange, accountID, sessionID))
+		ORDER BY id DESC LIMIT 1`, purpose, accountID, sessionID))
+}
+
+// DeleteSessionAuthCodes removes the codes of the purpose that the given
+// session (hashed id) of an account asked for.
+func DeleteSessionAuthCodes(db Execer, purpose string, accountID int64, sessionID string) error {
+	_, err := db.Exec(`DELETE FROM auth_codes WHERE purpose = ? AND account_id = ? AND session_id = ?`, purpose, accountID, sessionID)
+	return err
 }
 
 // RecordAuthCodeAttempt counts one wrong entry of a code in a single

@@ -27,14 +27,15 @@ CREATE TABLE sessions (
     created_at   INTEGER NOT NULL,
     expires_at   INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL,
-    remember     INTEGER NOT NULL DEFAULT 0
+    remember     INTEGER NOT NULL DEFAULT 0,
+    step_up_at   INTEGER NOT NULL DEFAULT 0
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
 CREATE TABLE auth_codes (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    purpose        TEXT    NOT NULL CHECK (purpose IN ('login', 'email_change')),
+    purpose        TEXT    NOT NULL CHECK (purpose IN ('login', 'email_change', 'step_up')),
     account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     challenge_hash TEXT    NOT NULL DEFAULT '',
     session_id     TEXT    NOT NULL DEFAULT '',

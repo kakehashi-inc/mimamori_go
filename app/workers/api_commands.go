@@ -23,15 +23,6 @@ import (
 // OS user, working directory, schedule, purpose, description, patterns or
 // code specs.
 
-// requireCommandStepUp is the hook for the re-authentication (step-up) of
-// the changing operations on command sets from the browser (create, update,
-// delete, import). It currently passes every request on; the check that a
-// browser session entered a mailed code recently (answering 428 otherwise)
-// is added here. The management API (CLI) and run requests never need it.
-func (c *core) requireCommandStepUp(h http.HandlerFunc) http.HandlerFunc {
-	return h
-}
-
 type commandRequestJSON struct {
 	ID          int64   `json:"id"`
 	SetID       int64   `json:"set_id"`

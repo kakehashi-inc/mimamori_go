@@ -26,7 +26,7 @@ import (
 // CtlCmd groups the management commands. They run on the central host and
 // use the management API over the loopback address.
 type CtlCmd struct {
-	JSON bool `help:"Print raw JSON (rules export always prints JSON; rules edit prints its messages only)"`
+	JSON bool `help:"Print raw JSON (rules export and command-sets export always print JSON; rules edit prints its messages only)"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
 	Tokens       CtlTokensCmd       `cmd:"" help:"Tokens"`
@@ -34,6 +34,7 @@ type CtlCmd struct {
 	Templates    CtlTemplatesCmd    `cmd:"" help:"Templates"`
 	Detections   CtlDetectionsCmd   `cmd:"" help:"Detections"`
 	Suppressions CtlSuppressionsCmd `cmd:"" help:"Suppression conditions"`
+	CommandSets  CtlCommandSetsCmd  `cmd:"" name:"command-sets" help:"Command sets of agents: definitions, run requests and results"`
 	Accounts     CtlAccountsCmd     `cmd:"" help:"Accounts"`
 	Certs        CtlCertsCmd        `cmd:"" help:"Certificate status"`
 	History      CtlHistoryCmd      `cmd:"" help:"History"`
@@ -189,7 +190,7 @@ func localizeText(s string) string {
 // isTimeKey reports whether a field of the API holds a timestamp.
 func isTimeKey(key string) bool {
 	switch key {
-	case "at", "not_before", "not_after", "locked_until", "switch_after":
+	case "at", "not_before", "not_after", "locked_until", "switch_after", "scheduled_for":
 		return true
 	}
 	return strings.HasSuffix(key, "_at") || strings.HasSuffix(key, "ctime")
@@ -1023,7 +1024,7 @@ type CtlCertsStatusCmd struct{}
 func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/certificates", nil) }
 
 type CtlHistoryCmd struct {
-	Category string `help:"account, rule, token, certificate, rejected, template, suppression, detection or config"`
+	Category string `help:"account, rule, token, certificate, rejected, template, suppression, detection, config or command"`
 	Limit    int    `help:"Maximum rows" default:"50"`
 	Offset   int    `help:"Rows to skip"`
 }

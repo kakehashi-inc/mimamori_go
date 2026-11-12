@@ -66,7 +66,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 ## ctl
 
-管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します（`ctl rules export` は常に JSON を出力し、`ctl rules edit` はメッセージだけを表示します）。表では時刻をローカル時間で表示し、それ以外の値はそのまま表示します。長い値は 60 文字に省略します（`ctl tokens list` を除く）。`--file` で指定する内容のファイルは JSON のオブジェクトである必要があります。同時に指定した他のフラグと組み合わせが合わないフラグは、エラーにならずに無視されます。どれが使われるかは、以下の各コマンドの説明に書いています。
+管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します（`ctl rules export` と `ctl command-sets export` は常に JSON を出力し、`ctl rules edit` はメッセージだけを表示します）。表では時刻をローカル時間で表示し、それ以外の値はそのまま表示します。長い値は 60 文字に省略します（`ctl tokens list` を除く）。`--file` で指定する内容のファイルは JSON のオブジェクトである必要があります。同時に指定した他のフラグと組み合わせが合わないフラグは、エラーにならずに無視されます。どれが使われるかは、以下の各コマンドの説明に書いています。
 
 ### agents
 
@@ -128,6 +128,43 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | 抑止条件を作成する（空の項目はすべてに一致し、`--exe` と `--target` は `*` を使える）。`--type`、`--user`、`--exe`、`--target` のうち少なくとも 1 つが必要で、`--agent` だけの指定は引数エラー（`--agent` を省略するとすべてのエージェントが対象） |
 | `ctl suppressions delete ID` | 抑止条件を削除する |
 
+### command-sets
+
+1 つのエージェント（内蔵エージェントを含む）のコマンドセットの定義、実行の指示、結果を扱います。`AGENT_ID` は `ctl agents list` の id です。これらのコマンドで確認コードを求められることはありません。
+
+| コマンド | 説明 |
+| --- | --- |
+| `ctl command-sets list AGENT_ID` | エージェントのコマンドセットの一覧。表の上に、エージェント、新しいセットの OS のユーザーの既定値（エージェントの実行ユーザー。エージェントが接続する前は `(not reported yet)`）、ホストのタイムゾーン、エージェントが現在の定義を持っているかを表示する |
+| `ctl command-sets show AGENT_ID SET_ID` | コマンドセットを表示する。定義、スケジュールの要約、応答の無い実行の指示、最後に終わった実行、実行中か、エージェントが報告したそのセットの問題 |
+| `ctl command-sets export AGENT_ID SET_ID` | コマンドセットの定義だけを、`create` と `update` が読む形の JSON で出力する（常に JSON）。日時を指定した 1 回の日時は、ローカル時間のオフセット付きで出力する |
+| `ctl command-sets create AGENT_ID --file F` | 定義ファイル（`-` で標準入力）からコマンドセットを作成する。`os_user` を省略すると、エージェントの実行ユーザーを使う（一度も接続していないエージェントには無いので、`os_user` が必要） |
+| `ctl command-sets update AGENT_ID SET_ID --file F` | コマンドセットの定義全体を定義ファイルの内容に置き換える。`os_user` を省略すると、そのセットの現在の OS のユーザーのまま |
+| `ctl command-sets delete AGENT_ID SET_ID` | コマンドセットを削除する。実行の結果は保存期間の処理で消えるまで残る。まだ配信していない実行の指示は破棄する |
+| `ctl command-sets import AGENT_ID --from SOURCE_AGENT_ID SET_ID[=NEW_NAME]...` | エージェント `SOURCE_AGENT_ID`（`AGENT_ID` 自身でもよい）のコマンドセットを、OS のユーザーと作業ディレクトリを含めてすべて `AGENT_ID` に写す。`=NEW_NAME` で写したセットの名前を変える（既定は元の名前。最初の `=` より後がすべて名前）。名前が写し先ですでに使われているか、インポートの中で重なる場合は、何も作らずにその名前を表示する。`SET_ID` は正の整数で、`NEW_NAME` は空にできない |
+| `ctl command-sets run AGENT_ID SET_ID` | コマンドセットの実行を指示する（定期のセットにも出せる）。エージェントは次の同期で指示を受け取る。1 つのセットに、エージェントが応答していない指示は 1 つだけ。24 時間以内に配信されなかった指示は期限切れになる |
+| `ctl command-sets discard AGENT_ID REQUEST_ID` | まだエージェントに配信していない実行の指示を破棄する（`REQUEST_ID` は `run` が表示した `id`、または `show` の `request.id`） |
+| `ctl command-sets runs AGENT_ID SET_ID [--limit N] [--before RUN_ID]` | コマンドセットの実行の一覧を新しい順に表示する（削除したセットも、実行が残っている間は表示できる）。きっかけ、定期の予定の日時、開始、終了、状態、理由、1 行にした表示用の値。`--limit` の既定は 50 で、1 から 500 の範囲に収められる。より古い実行があれば、次のページの `--before` の値を表の下に表示する |
+| `ctl command-sets show-run AGENT_ID RUN_ID` | 実行を表示する。きっかけ、OS のユーザー、作業ディレクトリ、日時、状態、表示用の値と、実行したコマンドごとの結果、終了コード、日時、コマンドライン、備考、コンソール出力（1 コマンド 1 MiB まで）、実行しなかったコマンドの数 |
+
+定義ファイルは、API の `CommandSetSpec` の形の JSON のオブジェクト 1 つです（項目、値、上限は [API仕様.md](API仕様.md) の 4.1 章）。未知の項目は拒否されます。省略した項目は既定値になります（実行方法はスケジュールの有無から、保存する実行は 100 回、つなぎ方はカンマ、成功の戻り値は 0、失敗の戻り値は 1 以上、`on_problems` は `stop`、300 秒、20 行）。例:
+
+```json
+{
+  "name": "disk usage",
+  "description": "Usage of the root file system",
+  "purpose": "collect_output",
+  "work_dir": "",
+  "schedule": {"kind": "daily", "time": "03:00"},
+  "commands": [
+    {"command_line": "df -h /", "patterns": ["(?P<use>\\d+%)"]}
+  ]
+}
+```
+
+- `work_dir` が空なら OS のユーザーのホームディレクトリです。どのコマンドラインも、セットの OS のユーザーとして、書いたとおりに bash で実行されます。
+- 繰り返しのスケジュール（`weekly`、`daily`、`every_hours`、`every_minutes`、`hourly_at`）は、監視対象のホストのローカル時間で実行されます。日時を指定した 1 回の日時（`{"kind": "once", "at": "2026-12-01 03:00"}`）はオフセットを省略でき（`YYYY-MM-DD HH:MM[:SS]`。空白の代わりに `T` も可）、その場合は `ctl` を実行したホストのローカル時間として解釈します。過去の日時は拒否されます。
+- セントラルが拒否した値（不正な定義、エージェントの別のセットと同じ名前、応答の無い実行の指示がある状態での 2 つ目の指示）は、終了コード 2 で、項目と、コマンドならその位置（1 から）を示すメッセージを表示します。
+
 ### accounts
 
 | コマンド | 説明 |
@@ -147,7 +184,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl certs status` | 独自 CA とサーバー証明書の状態を表示する |
-| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config` |
+| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config`、`command` |
 
 ## version
 

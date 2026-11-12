@@ -245,6 +245,7 @@ type principal struct {
 	Role        string
 	Language    string
 	SessionID   string // hashed session id (browser only)
+	StepUpAt    int64  // when a re-authentication code was entered in the session (browser only)
 	ViaCLI      bool
 }
 
