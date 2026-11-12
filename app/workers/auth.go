@@ -31,8 +31,36 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-// sessionAuth authenticates browser requests by the session cookie.
-func (c *core) sessionAuth(next http.Handler) http.Handler {
+// sessionPrincipal validates the session cookie of a browser request and
+// returns the account it belongs to, or nil when the request has no valid
+// session. A session of a disabled account is deleted. It never extends the
+// session: the API middleware (sessionAuth) does that for operations, and
+// the static file handler uses it only to decide what it may serve.
+func (c *core) sessionPrincipal(r *http.Request) (*principal, *models.Session) {
+	ck, err := r.Cookie(sessionCookie)
+	if err != nil || !strings.HasPrefix(ck.Value, modules.SessionPrefix) {
+		return nil, nil
+	}
+	id := modules.HashSecret(ck.Value)
+	s, err := models.GetSession(c.db, id)
+	if err != nil || s.ExpiresAt < time.Now().Unix() {
+		return nil, nil
+	}
+	a, err := models.GetAccount(c.db, s.AccountID)
+	if err != nil || a.Disabled {
+		_ = models.DeleteSession(c.db, id)
+		return nil, nil
+	}
+	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id}, s
+}
+
+// sessionAuth authenticates browser requests by the session cookie and
+// passes them to one of two route tables: admin (every route) for an
+// administrator, viewer (the routes any account may use) for everybody
+// else. A viewer who calls an administrator route therefore gets exactly
+// what a route that does not exist gives, for every method (404, or 405
+// with the Allow header of the routes a viewer has on that path).
+func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get(csrfHeader) != "1" {
 			writeError(w, http.StatusForbidden, "missing request header")
@@ -41,27 +69,15 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 		public := (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
 			(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 		if public {
-			next.ServeHTTP(w, r)
+			viewer.ServeHTTP(w, r)
 			return
 		}
-		ck, err := r.Cookie(sessionCookie)
-		if err != nil || !strings.HasPrefix(ck.Value, modules.SessionPrefix) {
+		p, s := c.sessionPrincipal(r)
+		if p == nil {
 			writeError(w, http.StatusUnauthorized, "login required")
 			return
 		}
-		id := modules.HashSecret(ck.Value)
-		s, err := models.GetSession(c.db, id)
 		now := time.Now().Unix()
-		if err != nil || s.ExpiresAt < now {
-			writeError(w, http.StatusUnauthorized, "login required")
-			return
-		}
-		a, err := models.GetAccount(c.db, s.AccountID)
-		if err != nil || a.Disabled {
-			_ = models.DeleteSession(c.db, id)
-			writeError(w, http.StatusUnauthorized, "login required")
-			return
-		}
 		if r.Header.Get(backgroundHeader) != "1" && now-s.LastSeenAt > 60 {
 			// A session without "keep me logged in" ends SessionIdleTimeout
 			// after the last operation, so every operation extends it; a
@@ -71,9 +87,13 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 			if s.Remember {
 				expires = s.ExpiresAt
 			}
-			_ = models.TouchSession(c.db, id, now, expires)
+			_ = models.TouchSession(c.db, s.ID, now, expires)
 		}
-		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id}))
+		next := viewer
+		if p.isAdmin() {
+			next = admin
+		}
+		next.ServeHTTP(w, withPrincipal(r, p))
 	})
 }
 
@@ -96,11 +116,14 @@ func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 	})
 }
 
-// requireAdmin wraps a handler that only administrators may use.
+// requireAdmin wraps a handler that only administrators may use. Browser
+// requests of other accounts never reach it (sessionAuth routes them to the
+// viewer route table); this check is kept as a second line and answers like
+// a route that does not exist.
 func requireAdmin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !principalFrom(r).isAdmin() {
-			writeError(w, http.StatusForbidden, "administrator role required")
+			http.NotFound(w, r)
 			return
 		}
 		h(w, r)

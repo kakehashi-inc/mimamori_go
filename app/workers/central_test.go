@@ -291,11 +291,13 @@ func TestBrowserPermissions(t *testing.T) {
 		t.Fatalf("viewer list agents: %d", rec.Code)
 	}
 	for _, p := range []string{"/api/v1/tokens", "/api/v1/rules", "/api/v1/suppressions", "/api/v1/accounts"} {
-		if rec := e.do(e.web, "POST", p, map[string]string{}, hdr(viewCk, true), "x:1"); rec.Code != 403 {
+		// Administrator routes do not exist for a viewer (404, or 405 where
+		// the viewer has GET on the same path).
+		if rec := e.do(e.web, "POST", p, map[string]string{}, hdr(viewCk, true), "x:1"); rec.Code != 404 && rec.Code != 405 {
 			t.Fatalf("viewer POST %s: %d", p, rec.Code)
 		}
 	}
-	if rec := e.do(e.web, "GET", "/api/v1/accounts", nil, hdr(viewCk, false), "x:1"); rec.Code != 403 {
+	if rec := e.do(e.web, "GET", "/api/v1/accounts", nil, hdr(viewCk, false), "x:1"); rec.Code != 404 {
 		t.Fatalf("viewer accounts: %d", rec.Code)
 	}
 	// The last enabled administrator is protected.

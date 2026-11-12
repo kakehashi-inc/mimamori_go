@@ -24,7 +24,7 @@ func (c *core) agentHandler() http.Handler {
 	mux.HandleFunc("POST /agent/v1/sync", c.handleAgentSync)
 	mux.HandleFunc("POST /agent/v1/report", c.handleAgentReport)
 	admin := http.NewServeMux()
-	c.registerAPI(admin, "/admin/v1", true)
+	c.registerAPI(admin, admin, "/admin/v1", true)
 	mux.Handle("/admin/", c.adminAPIAuth(admin))
 	return mux
 }

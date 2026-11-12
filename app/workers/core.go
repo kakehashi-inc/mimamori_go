@@ -34,6 +34,7 @@ type core struct {
 	started   *modules.CentralConfig
 	dataDir   string
 	spaFS     fs.FS
+	assets    *webAssets // from the frontend build manifest (webHandler)
 	logger    *log.Logger
 	serverKey []byte
 	hostname  string

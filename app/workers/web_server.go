@@ -18,12 +18,15 @@ func init() {
 }
 
 // webHandler builds the browser listener's handler: the API used by the
-// screens (session authentication) and the embedded SPA.
+// screens (session authentication; one route table for administrators and
+// one for everybody else) and the embedded SPA.
 func (c *core) webHandler() http.Handler {
-	api := http.NewServeMux()
-	c.registerAPI(api, "/api/v1", false)
+	c.assets = c.loadWebAssets()
+	adminAPI := http.NewServeMux()
+	viewerAPI := http.NewServeMux()
+	c.registerAPI(adminAPI, viewerAPI, "/api/v1", false)
 	mux := http.NewServeMux()
-	mux.Handle("/api/", c.sessionAuth(api))
+	mux.Handle("/api/", c.sessionAuth(adminAPI, viewerAPI))
 	mux.HandleFunc("/", c.serveSPA)
 	return securityHeaders(mux)
 }
@@ -39,7 +42,10 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 // serveSPA serves the embedded SPA, falling back to index.html for unknown
-// client-side routes.
+// client-side routes. The build manifest (.vite/) is never served, and the
+// files only the administrator entry uses are served only to a request with
+// a valid administrator session (never cached); every other request for
+// them gets exactly what an unknown path gets.
 func (c *core) serveSPA(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -48,6 +54,16 @@ func (c *core) serveSPA(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 	if p == "" {
 		p = "index.html"
+	}
+	restricted := false
+	if p == ".vite" || strings.HasPrefix(p, ".vite/") {
+		p = "index.html"
+	} else if c.assets != nil && c.assets.restricted[p] {
+		if pr, _ := c.sessionPrincipal(r); pr.isAdmin() {
+			restricted = true
+		} else {
+			p = "index.html"
+		}
 	}
 	data, err := fs.ReadFile(c.spaFS, p)
 	if err != nil {
@@ -69,7 +85,10 @@ func (c *core) serveSPA(w http.ResponseWriter, r *http.Request) {
 		ctype = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ctype)
-	if p == "index.html" {
+	switch {
+	case restricted:
+		w.Header().Set("Cache-Control", "private, no-store")
+	case p == "index.html":
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 	http.ServeContent(w, r, p, time.Time{}, strings.NewReader(string(data)))

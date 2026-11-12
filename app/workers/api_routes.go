@@ -8,11 +8,22 @@ import (
 
 // registerAPI registers the operations shared by the browser API
 // (/api/v1, session) and the management API (/admin/v1, CLI credential).
-// Permissions are checked on every request by requireAny / requireAdmin.
-func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
+// Routes any account may use (h) go into both route tables; administrator
+// routes (a) go into admin only, so that for a viewer they do not exist
+// (see sessionAuth). The management API passes the same table twice.
+// Permissions are still checked on every request by requireAny /
+// requireAdmin.
+func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool) {
 	h := func(pattern string, fn http.HandlerFunc) {
 		method, path, _ := cutSpace(pattern)
-		mux.HandleFunc(method+" "+prefix+path, fn)
+		admin.HandleFunc(method+" "+prefix+path, fn)
+		if viewer != admin {
+			viewer.HandleFunc(method+" "+prefix+path, fn)
+		}
+	}
+	a := func(pattern string, fn http.HandlerFunc) {
+		method, path, _ := cutSpace(pattern)
+		admin.HandleFunc(method+" "+prefix+path, requireAdmin(fn))
 	}
 	if !cli {
 		h("GET /health", c.handleHealth)
@@ -24,6 +35,7 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 		h("PUT /auth/display-name", requireAny(c.handleOwnDisplayName))
 		h("POST /auth/email", requireAny(c.handleOwnEmail))
 		h("POST /auth/email/verify", requireAny(c.handleOwnEmailVerify))
+		h("GET /ui/modules", requireAny(c.handleUIModules))
 	}
 	h("GET /auth/me", requireAny(c.handleMe))
 	h("GET /overview", requireAny(c.handleOverview))
@@ -34,52 +46,52 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 
 	h("GET /tokens", requireAny(c.handleListTokens))
 	h("GET /tokens/{id}", requireAny(c.handleGetToken))
-	h("POST /tokens", requireAdmin(c.handleIssueToken))
-	h("POST /tokens/{id}/reissue", requireAdmin(c.handleReissueToken))
-	h("POST /tokens/{id}/unbind", requireAdmin(c.handleUnbindToken))
-	h("POST /tokens/{id}/revoke", requireAdmin(c.handleRevokeToken))
+	a("POST /tokens", c.handleIssueToken)
+	a("POST /tokens/{id}/reissue", c.handleReissueToken)
+	a("POST /tokens/{id}/unbind", c.handleUnbindToken)
+	a("POST /tokens/{id}/revoke", c.handleRevokeToken)
 
 	h("GET /rules", requireAny(c.handleListRules))
-	h("POST /rules", requireAdmin(c.handleCreateRule))
-	h("POST /rules/merge-preview", requireAdmin(c.handleMergePreview))
-	h("POST /rules/validate", requireAdmin(c.handleValidateRule))
+	a("POST /rules", c.handleCreateRule)
+	a("POST /rules/merge-preview", c.handleMergePreview)
+	a("POST /rules/validate", c.handleValidateRule)
 	h("GET /rules/{id}", requireAny(c.handleGetRule))
-	h("PUT /rules/{id}", requireAdmin(c.handleSaveRule))
-	h("DELETE /rules/{id}", requireAdmin(c.handleDeleteRule))
+	a("PUT /rules/{id}", c.handleSaveRule)
+	a("DELETE /rules/{id}", c.handleDeleteRule)
 	h("GET /rules/{id}/versions/{version}", requireAny(c.handleGetRuleVersion))
 	h("GET /rules/{id}/diff", requireAny(c.handleRuleDiff))
-	h("POST /rules/{id}/apply", requireAdmin(c.handleApplyRule))
-	h("POST /rules/{id}/to-template", requireAdmin(c.handleRuleToTemplate))
+	a("POST /rules/{id}/apply", c.handleApplyRule)
+	a("POST /rules/{id}/to-template", c.handleRuleToTemplate)
 
 	h("GET /templates", requireAny(c.handleListTemplates))
-	h("POST /templates", requireAdmin(c.handleCreateTemplate))
+	a("POST /templates", c.handleCreateTemplate)
 	h("GET /templates/{name}", requireAny(c.handleGetTemplate))
-	h("PUT /templates/{name}", requireAdmin(c.handleUpdateTemplate))
-	h("DELETE /templates/{name}", requireAdmin(c.handleDeleteTemplate))
+	a("PUT /templates/{name}", c.handleUpdateTemplate)
+	a("DELETE /templates/{name}", c.handleDeleteTemplate)
 
 	h("GET /detections", requireAny(c.handleListDetections))
 	h("GET /detections/{agent}/{id}", requireAny(c.handleGetDetection))
-	h("POST /detections/ack", requireAdmin(c.handleAckDetections))
+	a("POST /detections/ack", c.handleAckDetections)
 
 	h("GET /suppressions", requireAny(c.handleListSuppressions))
-	h("POST /suppressions", requireAdmin(c.handleCreateSuppression))
-	h("DELETE /suppressions/{id}", requireAdmin(c.handleDeleteSuppression))
+	a("POST /suppressions", c.handleCreateSuppression)
+	a("DELETE /suppressions/{id}", c.handleDeleteSuppression)
 
 	h("GET /certificates", requireAny(c.handleCertificates))
 	h("GET /history", requireAny(c.handleHistory))
 
-	h("GET /config", requireAdmin(c.handleGetConfig))
-	h("PUT /config", requireAdmin(c.handleUpdateConfig))
+	a("GET /config", c.handleGetConfig)
+	a("PUT /config", c.handleUpdateConfig)
 
-	h("GET /accounts", requireAdmin(c.handleListAccounts))
-	h("POST /accounts", requireAdmin(c.handleCreateAccount))
-	h("PUT /accounts/{id}/email", requireAdmin(c.handleAccountEmail))
-	h("PUT /accounts/{id}/display-name", requireAdmin(c.handleAccountDisplayName))
-	h("PUT /accounts/{id}/role", requireAdmin(c.handleAccountRole))
-	h("PUT /accounts/{id}/password", requireAdmin(c.handleAccountPassword))
-	h("POST /accounts/{id}/disable", requireAdmin(c.handleAccountDisable))
-	h("POST /accounts/{id}/enable", requireAdmin(c.handleAccountEnable))
-	h("DELETE /accounts/{id}", requireAdmin(c.handleDeleteAccount))
+	a("GET /accounts", c.handleListAccounts)
+	a("POST /accounts", c.handleCreateAccount)
+	a("PUT /accounts/{id}/email", c.handleAccountEmail)
+	a("PUT /accounts/{id}/display-name", c.handleAccountDisplayName)
+	a("PUT /accounts/{id}/role", c.handleAccountRole)
+	a("PUT /accounts/{id}/password", c.handleAccountPassword)
+	a("POST /accounts/{id}/disable", c.handleAccountDisable)
+	a("POST /accounts/{id}/enable", c.handleAccountEnable)
+	a("DELETE /accounts/{id}", c.handleDeleteAccount)
 }
 
 func cutSpace(s string) (string, string, bool) {
