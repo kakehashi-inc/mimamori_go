@@ -37,9 +37,15 @@ export interface SlotProps {
     'rules.headerActions': NoProps;
     'ruleDetail.headerActions': { rule: RuleDetail; reload: () => void };
     'templates.headerActions': { templates: TemplateSummary[] };
-    'templateDetail.headerActions': { template: TemplateDetail; editing: boolean; setEditing: (v: boolean) => void };
+    // While the panel is open it replaces the page's content; onClose passes
+    // the template again when the panel changed it.
+    'templateDetail.headerActions': {
+        template: TemplateDetail;
+        panelOpen: boolean;
+        setPanelOpen: (v: boolean) => void;
+    };
     'templateDetail.notices': { template: TemplateDetail };
-    'templateDetail.editor': { template: TemplateDetail; onSaved: (t: TemplateDetail) => void; onCancel: () => void };
+    'templateDetail.panel': { template: TemplateDetail; onClose: (updated?: TemplateDetail) => void };
     'suppressions.headerActions': { reload: () => void };
     'suppressions.headEnd': NoProps;
     'suppressions.rowEnd': { suppression: Suppression; reload: () => void };

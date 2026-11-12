@@ -14,7 +14,7 @@ export function TemplateDetailPage() {
     const { t } = useTranslation();
     const { name = '' } = useParams();
     const { data: tpl, error, loading, reload, setData } = useApi(() => getTemplate(name), [name]);
-    const [editing, setEditing] = useState(false);
+    const [panelOpen, setPanelOpen] = useState(false);
 
     return (
         <>
@@ -31,15 +31,17 @@ export function TemplateDetailPage() {
                     </span>
                 }
                 description={
-                    !editing && tpl?.description ? <span className='wrap-anywhere'>{tpl.description}</span> : undefined
+                    !panelOpen && tpl?.description ? (
+                        <span className='wrap-anywhere'>{tpl.description}</span>
+                    ) : undefined
                 }
                 actions={
                     tpl && (
                         <Slot
                             name='templateDetail.headerActions'
                             template={tpl}
-                            editing={editing}
-                            setEditing={setEditing}
+                            panelOpen={panelOpen}
+                            setPanelOpen={setPanelOpen}
                         />
                     )
                 }
@@ -51,7 +53,7 @@ export function TemplateDetailPage() {
                 tpl && (
                     <div className='flex flex-col gap-4'>
                         <Slot name='templateDetail.notices' template={tpl} />
-                        {!editing && (
+                        {!panelOpen && (
                             <>
                                 <p className='text-xs text-muted'>
                                     {t('templates.updatedAt')}: {formatDateTime(tpl.updated_at)}
@@ -59,15 +61,14 @@ export function TemplateDetailPage() {
                                 <RuleContentView content={tpl.content} />
                             </>
                         )}
-                        {editing && (
+                        {panelOpen && (
                             <Slot
-                                name='templateDetail.editor'
+                                name='templateDetail.panel'
                                 template={tpl}
-                                onSaved={saved => {
-                                    setData(saved);
-                                    setEditing(false);
+                                onClose={updated => {
+                                    if (updated) setData(updated);
+                                    setPanelOpen(false);
                                 }}
-                                onCancel={() => setEditing(false)}
                             />
                         )}
                     </div>

@@ -59,12 +59,12 @@ export function BuiltinTemplateNotice({ template }: { template: TemplateDetail }
 /** Edit and delete buttons of a template made by an administrator (not built in). */
 export function TemplateActions({
     template: tpl,
-    editing,
-    setEditing,
+    panelOpen: editing,
+    setPanelOpen: setEditing,
 }: {
     template: TemplateDetail;
-    editing: boolean;
-    setEditing: (v: boolean) => void;
+    panelOpen: boolean;
+    setPanelOpen: (v: boolean) => void;
 }) {
     const { t } = useTranslation();
     const { showToast } = useToast();
@@ -100,15 +100,13 @@ export function TemplateActions({
     );
 }
 
-/** Editor of a template's description and content (shown while editing). */
+/** Editor of a template's description and content (the page's panel, opened by the edit button). */
 export function TemplateEditor({
     template: tpl,
-    onSaved,
-    onCancel,
+    onClose,
 }: {
     template: TemplateDetail;
-    onSaved: (t: TemplateDetail) => void;
-    onCancel: () => void;
+    onClose: (updated?: TemplateDetail) => void;
 }) {
     const { t } = useTranslation();
     const { showToast } = useToast();
@@ -131,7 +129,7 @@ export function TemplateEditor({
             setValidation(errors);
             if (errors.length > 0) return;
             const saved = await updateTemplate(tpl.name, { description: description.trim(), content });
-            onSaved(saved);
+            onClose(saved);
             showToast(t('common.saved'));
         } catch (e) {
             setSaveError(errorMessage(t, e));
@@ -163,7 +161,7 @@ export function TemplateEditor({
             <ValidationResult errors={validation} />
             {saveError && <Alert tone='danger'>{saveError}</Alert>}
             <div className='sticky bottom-0 -mx-4 flex justify-end gap-2 border-t border-line bg-canvas/95 px-4 py-3 backdrop-blur'>
-                <Button onClick={onCancel} disabled={busy}>
+                <Button onClick={() => onClose()} disabled={busy}>
                     {t('common.cancel')}
                 </Button>
                 <Button variant='primary' icon='save' busy={busy} disabled={jsonInvalid} onClick={() => void save()}>

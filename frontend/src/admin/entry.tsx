@@ -45,7 +45,7 @@ registerExtension({
         'templates.headerActions': [CreateTemplateAction],
         'templateDetail.headerActions': [TemplateActions],
         'templateDetail.notices': [BuiltinTemplateNotice],
-        'templateDetail.editor': [TemplateEditor],
+        'templateDetail.panel': [TemplateEditor],
         'suppressions.headerActions': [CreateSuppressionAction],
         'suppressions.headEnd': [SuppressionActionsHead],
         'suppressions.rowEnd': [DeleteSuppressionAction],

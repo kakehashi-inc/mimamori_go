@@ -133,6 +133,46 @@ func TestStaticAdminFiles(t *testing.T) {
 	}
 }
 
+// TestStaticAdminFilesInvalidSessionsAndPaths checks that an expired
+// session and a session of a disabled administrator do not get the
+// administrator files, and that other spellings of their paths do not reach
+// them either.
+func TestStaticAdminFilesInvalidSessionsAndPaths(t *testing.T) {
+	e := newTestEnv(t)
+	e.c.spaFS = testSPA(true)
+	e.web = e.c.webHandler()
+	get := func(p, ck string) *httptest.ResponseRecorder {
+		return e.do(e.web, "GET", p, nil, browserHdr(ck, false), "x:1")
+	}
+
+	expiredCk := login(t, e, testAdminEmail, "Admin-pass-123")
+	if _, err := e.c.db.Exec(`UPDATE sessions SET expires_at = 1`); err != nil {
+		t.Fatal(err)
+	}
+	e.admin("POST", "/accounts", map[string]string{"email": "admin2@example.com", "display_name": "Admin 2", "role": "admin", "password": "Admin2-pass-12"})
+	disabledCk := login(t, e, "admin2@example.com", "Admin2-pass-12")
+	if _, err := e.c.db.Exec(`UPDATE accounts SET disabled = 1 WHERE email = 'admin2@example.com'`); err != nil {
+		t.Fatal(err)
+	}
+	for name, ck := range map[string]string{"expired": expiredCk, "disabled": disabledCk} {
+		sameResponse(t, name+" admin.js", get("/assets/admin.js", ck), get("/assets/unknown.js", ck))
+	}
+
+	viewCk := newViewer(t, e)
+	unknown := get("/assets/unknown.js", viewCk)
+	for _, p := range []string{"/assets/admin.js/", "/assets/admin.js?v=1", "/assets%2Fadmin.js", "/ASSETS/admin.js", "/assets/ADMIN.JS", "/./assets/admin.js", "/assets//admin.js", "/x/../assets/admin.js"} {
+		rec := get(p, viewCk)
+		if rec.Body.String() == "admin()" {
+			t.Fatalf("viewer %s: got the administrator file", p)
+		}
+		// ServeMux redirects unclean paths (the same for every path); the
+		// rest must answer like an unknown file.
+		if rec.Code < 300 || rec.Code >= 400 {
+			sameResponse(t, "viewer "+p, rec, unknown)
+		}
+	}
+}
+
 func TestUIModules(t *testing.T) {
 	e := newTestEnv(t)
 	e.c.spaFS = testSPA(true)
