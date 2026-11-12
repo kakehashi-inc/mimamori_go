@@ -38,24 +38,27 @@ type Agent struct {
 	// HostOSUser is the OS user the agent runs as; TimeZone and
 	// UTCOffsetSec describe the host's local time (all from its host
 	// information). CommandSig is the signature of the command set
-	// definitions the agent reported holding.
-	HostOSUser   string
-	TimeZone     string
-	UTCOffsetSec int
-	CommandSig   string
-	CreatedAt    int64
+	// definitions the agent reported holding; CommandProblems is the JSON
+	// of the last outcome the agent reported for storing delivered
+	// definitions (modules.CommandApplyResult, "" when none).
+	HostOSUser      string
+	TimeZone        string
+	UTCOffsetSec    int
+	CommandSig      string
+	CommandProblems string
+	CreatedAt       int64
 }
 
 const agentCols = `id, kind, token_id, db_file, hostname, os_name, os_version, agent_version, assigned_rule_id, assigned_rule_version,
 	assigned_at, reported_rule_id, reported_rule_version, apply_status, apply_message, apply_warnings, apply_version, apply_at,
-	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, created_at`
+	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, command_problems, created_at`
 
 func scanAgent(s rowScanner) (*Agent, error) {
 	a := &Agent{}
 	if err := s.Scan(&a.ID, &a.Kind, &a.TokenID, &a.DBFile, &a.Hostname, &a.OSName, &a.OSVersion, &a.AgentVersion,
 		&a.AssignedRuleID, &a.AssignedRuleVersion, &a.AssignedAt, &a.ReportedRuleID, &a.ReportedRuleVersion, &a.ApplyStatus,
 		&a.ApplyMessage, &a.ApplyWarnings, &a.ApplyVersion, &a.ApplyAt, &a.CAFingerprints, &a.AuditdJSON, &a.LastSyncAt,
-		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CreatedAt); err != nil {
+		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -163,5 +166,12 @@ func RecordAgentReport(db Execer, id int64, f AgentReportFields) error {
 // an agent reported holding.
 func RecordAgentCommandSig(db Execer, id int64, sig string) error {
 	_, err := db.Exec(`UPDATE agents SET command_sig = ? WHERE id = ?`, sig, id)
+	return err
+}
+
+// RecordAgentCommandApply stores the outcome an agent reported for storing
+// delivered command set definitions (JSON of modules.CommandApplyResult).
+func RecordAgentCommandApply(db Execer, id int64, applyJSON string) error {
+	_, err := db.Exec(`UPDATE agents SET command_problems = ? WHERE id = ?`, applyJSON, id)
 	return err
 }

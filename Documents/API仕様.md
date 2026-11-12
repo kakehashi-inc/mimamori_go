@@ -168,6 +168,147 @@ interface HostInfo {
 }
 ```
 
+## 4.1 コマンドセット
+
+監視対象のホストでエージェントが実行するコマンドの組（コマンドセット）の定義、手動の実行指示、結果です。定義は監視対象ごとに持ちます（監視対象をまたいだ定義の一覧はありません）。動作は [システム仕様.md](システム仕様.md) を参照してください。
+
+| メソッド | パス | 権限 | 要求 | 応答 |
+| --- | --- | --- | --- | --- |
+| GET | `/agents/{id}/command-sets` | A | - | `CommandSetList` |
+| POST | `/agents/{id}/command-sets` | A（再認証） | `CommandSetSpec` | `CommandSet`（作成。`os_user` を省略すると、エージェントが報告した実行ユーザー） |
+| POST | `/agents/{id}/command-sets/validate?set_id=` | A | `CommandSetSpec` | `{"errors":string[],"definition":CommandSetSpec \| null}`（保存しないで検証する） |
+| POST | `/agents/{id}/command-sets/import` | A（再認証） | `{"source_agent_id","items":[{"set_id","name"?}]}` | `{"sets":CommandSet[]}` |
+| GET | `/agents/{id}/command-sets/{set}` | A | - | `CommandSet` |
+| PUT | `/agents/{id}/command-sets/{set}` | A（再認証） | `CommandSetSpec` | `CommandSet`（変更。`os_user` を省略すると、そのセットの現在の値） |
+| DELETE | `/agents/{id}/command-sets/{set}` | A（再認証） | - | `{}`（論理削除） |
+| POST | `/agents/{id}/command-sets/{set}/run` | A | - | `CommandRequest`（手動の実行指示） |
+| DELETE | `/agents/{id}/command-requests/{req}` | A | - | `CommandRequest`（まだ配信していない指示の破棄） |
+| GET | `/agents/{id}/command-results` | V | - | `{"agent_id","agent_name","results":CommandLatest[],"sets":CommandLatest[]}` |
+| GET | `/command-results?name=` | V | - | `{"names":string[],"name":string,"results":CommandLatest[]}` |
+| GET | `/agents/{id}/command-sets/{set}/runs?limit=&before=` | V | - | `CommandRunList` |
+| GET | `/agents/{id}/command-runs/{run}` | V | - | `CommandRunDetail` |
+
+- 「A（再認証）」の 4 つの操作（作成、変更、削除、インポート）は、ブラウザからは再認証の対象です（[システム仕様.md](システム仕様.md)。再認証が必要な場合は 428）。`/admin/v1`（CLI）と、実行指示と破棄は対象外です。
+- 定義の要求（`CommandSetSpec`）は JSON のオブジェクト 1 つです。未知のフィールド、型の誤り、不正な値、上限を超える入力は 400 で、本文は `{"error":"invalid command set: <問題>; <問題>","errors":["<問題>", ...]}` です（各問題は `name: ...`、`command 2: timeout_sec: ...` のように項目と、コマンドなら位置（1 から）を示します）。日時を指定した 1 回のスケジュールで、過去の日時は 400 です（変更で、保存済みと同じ日時のままなら可）。
+- 名前が、その監視対象の削除されていない別のセットと同じ場合は 409 です。
+- `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にしません）。JSON として解釈できない場合も 200 で、`errors` に 1 件、`definition` は `null` です。`definition` は既定値を補った定義です。
+- インポートは、`source_agent_id` の監視対象（`{id}` と同じでもよい）の削除されていないセットを、OS のユーザーと作業ディレクトリを含めてすべて写します。`name` を省略するか空にすると元の名前です。写し先の削除されていないセットの名前、またはインポートの中で名前が重なると 409 で、本文は `{"error":"...","conflicts":["<名前>", ...]}`、何も作りません。存在しない、または削除されたセットと、不正な新しい名前は 400 です。作ったセットの `imported_from` は「<元の監視対象名> / <元のセット名>」です。
+- 実行指示は、そのセットにまだ応答の無い指示（`pending` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、まだ配信していない指示は破棄します。
+- 破棄は `pending`（まだエージェントに渡していない）の指示だけで、それ以外は 409 です。
+- `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（`name` が空なら空の配列）。
+- 実行の一覧は新しい順で、`limit` は既定 50、最大 500、`before` はその ID より前の実行だけを返します（次のページは `next_before` を `before` に指定。最後のページでは `null`）。削除したセットの実行も、保存期間の間は見られます。
+- 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
+- コマンドセットの作成、変更、削除、インポート、実行指示、破棄、指示の期限切れは、履歴の分類 `command` に記録します。
+
+```ts
+type CodeSpec = { kind: 'single' | 'range' | 'min' | 'max'; a: number; b?: number };   // 0〜255。b は range だけ（a < b）
+type CommandSchedule =
+  | { kind: 'once'; at: string }                         // RFC3339（オフセット付き）。UTC に正規化して返す
+  | { kind: 'weekly'; weekdays: ('sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat')[]; time: string }   // time は "HH:MM"
+  | { kind: 'daily'; time: string }
+  | { kind: 'every_hours'; every: 1 | 2 | 3 | 4 | 6 | 8 | 12 }
+  | { kind: 'every_minutes'; every: 1 | 2 | 3 | 4 | 5 | 6 | 10 | 12 | 15 | 20 | 30 }
+  | { kind: 'hourly_at'; minute: number };               // 0〜59
+// once 以外は監視対象のホストのローカル時刻で解釈する
+interface CommandSpec {
+  command_line: string;               // bash -c にそのまま渡す。空、NUL を含む、102400 バイト超は 400
+  note: string;                       // 1000 文字まで
+  success: CodeSpec;                  // 省略時 {kind:'single',a:0}
+  failure: CodeSpec;                  // 省略時 {kind:'min',a:1}。success と重なると 400
+  on_problems: 'stop' | 'continue_on_failure' | 'continue_always';   // 省略時 'stop'
+  timeout_sec: number;                // 1〜86400、省略時 300
+  line_limit: number;                 // 1〜10000、省略時 20（出力収集だけで使う）
+  patterns: string[];                 // 正規表現（名前付きグループが必須）。出力収集だけ（実行のみで指定すると 400）
+}
+interface CommandSetSpec {
+  name: string;                       // 1〜100 文字、制御文字なし。監視対象の中で一意
+  description: string;                // 1000 文字まで
+  purpose: 'collect_output' | 'run_only';
+  os_user: string;                    // 1〜256 文字、空白と制御文字なし、先頭が '-' でない
+  work_dir: string;                   // 空はそのユーザーのホーム。それ以外は絶対パス
+  run_mode: 'manual' | 'schedule';    // 省略時は schedule の有無から決める
+  schedule: CommandSchedule | null;   // manual では null
+  keep_runs: number;                  // 1〜10000、省略時 100
+  joiner: 'comma' | 'newline';        // 省略時 'comma'
+  commands: CommandSpec[];            // 1 つ以上
+}
+interface CommandSet extends CommandSetSpec {
+  id: number;
+  revision: number;                   // 保存のたびに増える
+  schedule_summary: string;           // スケジュールの英語の 1 行の要約（"manual"、"daily at 03:00 (host time JST, UTC+09:00)" など）
+  imported_from: string;              // インポートしたセットの元。それ以外は ""
+  created_at: string; created_by: string; updated_at: string; updated_by: string;
+  request: CommandRequest | null;     // まだ応答の無い実行指示（pending / delivered）
+  last_run: CommandRun | null;        // 最後に終わった実行
+  running: boolean;                   // 実行中の実行がある
+  agent_problems: string[];           // エージェントがこのセットを受け取らなかった理由（現在の定義について報告されたもの）
+}
+interface CommandSetList {
+  agent_id: number; agent_name: string;
+  default_os_user: string;            // エージェントが報告した実行ユーザー（新しいセットの OS のユーザーの既定値）。一度も報告が無ければ ""
+  time_zone: string;                  // ホストのタイムゾーンの略称（"JST" など）。報告が無ければ ""
+  utc_offset_sec: number;             // ホストの UTC からのずれ（秒）
+  definitions_delivered: boolean;     // エージェントが現在の定義を受け取ったと報告している
+  sets: CommandSet[];                 // 削除されていないセット（名前の順）
+}
+interface CommandRequest {
+  id: number; set_id: number;
+  state: 'pending' | 'delivered' | 'done' | 'expired' | 'discarded';
+  requested_at: string; requested_by: string;
+  expires_at: string;                 // requested_at の 24 時間後。それまでに配信しなければ expired
+  delivered_at: string | null; done_at: string | null;
+  run_uid: string;                    // done のとき、エージェントが始めた実行の一意な ID
+  discarded_at: string | null; discarded_by: string;
+}
+interface DisplayValue {
+  rows: { name: string; values: string[]; value: string }[];   // グループ名ごとに 1 行（最初に出た順）。name が "" の行は、正規表現の無いコマンドの出力。value は values をセットのつなぎ方で連結したもの
+  truncated: boolean;                 // 行数の上限で切り詰めた
+}
+interface CommandRun {
+  id: number; set_id: number;
+  set_name: string;                   // 実行したときの名前
+  trigger: 'manual' | 'schedule';
+  scheduled_for: string | null;       // 定期の予定時刻
+  request_id: number;                 // 手動の実行指示の ID（定期は 0）
+  commands_total: number;
+  started_at: string; finished_at: string | null;   // 実行中は null
+  state: 'running' | 'success' | 'failure' | 'error';   // 終わった実行は、実行したコマンドの最も悪い区分
+  reason: string;                     // 実行全体の理由（"interrupted" など。通常は ""）
+  display: DisplayValue | null;       // 出力収集の終わった実行だけ
+  received_at: string;                // 最初の報告を受け取った日時（保存期間の基準）
+  set_revision?: number; purpose?: string; os_user?: string; work_dir?: string;   // A のみ。実行したときの値
+}
+interface CommandLatest {
+  agent_id: number; agent_name: string; set_id: number; set_name: string;
+  running: boolean;
+  last_run: CommandRun | null;        // 最後に終わった実行（区分を問わない）
+  purpose?: string;                   // A のみ
+}
+interface CommandRunList {
+  agent_id: number; agent_name: string; set_id: number; set_name: string;
+  deleted: boolean;                   // セットは削除済み
+  runs: CommandRun[];
+  next_before: number | null;
+  purpose?: string;                   // A のみ
+}
+interface CommandRunDetail extends CommandRun {
+  agent_id: number; agent_name: string;
+  not_executed: number;               // セットが止まったため実行しなかったコマンドの数（終わった実行だけ）
+  commands: {
+    position: number;                 // セットの中の位置（0 から）
+    kind: 'success' | 'failure' | 'error';
+    reason: string;                   // error の理由: unexpected_code、start_failed、workdir_failed、timeout、signaled、interrupted
+    exit_code: number | null;         // 正常に終了しなかった場合は null
+    started_at: string; finished_at: string;
+    output: string;                   // コンソール出力（1 MiB まで。不正な UTF-8 は置換文字にする）
+    output_bytes: number;             // コマンドが出力した全体の大きさ
+    output_truncated: boolean;
+    command_line?: string; note?: string;   // A のみ。実行したときの値
+    values?: { values: { name: string; value: string }[]; truncated: boolean; pattern_problems?: { pattern: number; problem: 'timeout' | 'invalid' }[] };   // A のみ。出力収集のとき
+  }[];
+}
+```
+
 ## 5. トークン
 
 | メソッド | パス | 権限 | 要求 | 応答 |
@@ -353,10 +494,10 @@ interface CertStatus {
 
 `limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。
 
-閲覧者には、分類が `account`（アカウント）と `config`（システム設定）の行を返しません（`total` にも数えません）。`category` にこれらを指定した場合は、空の一覧を返します。
+閲覧者には、分類が `account`（アカウント）、`config`（システム設定）、`command`（コマンドセットの変更と実行指示）の行を返しません（`total` にも数えません）。`category` にこれらを指定した場合は、空の一覧を返します。
 
 ```ts
-type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
+type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config' | 'command';
 interface HistoryItem {
   id: number; at: string; account_name: string;   // 操作したアカウントのその時点のメールアドレス（閲覧者には 1.3 の変換をした値）。システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
   category: HistoryCategory; action: string; target: string; detail: string;
@@ -457,6 +598,7 @@ interface SyncRequest {
   rule_id: number; rule_version: number;   // エージェントが適用中の監視ルールと版（無ければ 0）
   ca_fingerprints: string[];               // 信頼している独自 CA の SHA-256 フィンガープリント
   last_apply: ApplyResult | null;          // 最後の適用の結果
+  command_sig: string;                     // 保持しているコマンドセットの定義の署名（無ければ ""）
 }
 interface RuleAssignment { id: number; name: string; version: number; content: RuleContent }   // RuleContent は 6 章
 interface TokenRenewal { token: string; expires_at: number }
@@ -467,8 +609,16 @@ interface SyncResponse {
   default_interval_sec: number;            // 監視ルールが無い場合の確認の間隔（秒）
   token_renewal?: TokenRenewal;            // 有効期限が近いときだけ。使われるまで同じ値を返す
   ca_pems?: string[];                      // 信頼していない独自 CA があるときだけ。信頼すべきすべての CA の証明書（PEM）
+  command_sets?: {                         // command_sig がセントラルの署名と違うときだけ。その監視対象のすべての定義（削除されていないセット）
+    signature: string;
+    sets: (CommandSetSpec & { id: number; revision: number })[];   // CommandSetSpec は 4.1 章（schedule.at は RFC3339 の文字列）
+  };
+  command_requests?: { id: number; set_id: number; requested_at: number; expires_at: number }[];   // 応答を待っている手動の実行指示
 }
 ```
+
+- 定義の署名は、監視対象の DB を作ったときの乱数と、削除されていない各セットの ID と版から作ります（DB を作り直すと署名が変わり、定義を送り直します）。セントラルは、エージェントが送った `command_sig` を監視対象ごとに記録します（4.1 章の `definitions_delivered`）。
+- 実行指示は、`pending` のうち期限（`expires_at`）前のものと、`delivered` のもの（エージェントが応答するまで毎回）を送ります。`pending` の指示は最初に送ったときに `delivered` にします。内蔵エージェントにも同じものを渡します。
 
 ### 14.2 報告（`POST /agent/v1/report`）
 
@@ -486,8 +636,34 @@ interface ReportRequest {
   host_info?: HostInfo;                // 4 章の HostInfo と同じ項目。日時（collected_at、trusted_cas[].not_after）は Unix 秒
   apply?: ApplyResult;                 // 最後の適用の結果（まだ適用していなければ省略）
   dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
+  command_runs?: CommandRunReport[];   // コマンドセットの実行（開始、コマンドごと、終了のたびに送る）
+  command_request_acks?: { request_id: number; status: 'started' | 'expired' | 'unknown_set'; run_uid?: string; at: number }[];
+  command_apply?: { signature: string; at: number; problems: { set_id: number; set_name: string; problems: string[] }[] };   // 配信された定義の受け取り結果
+}
+interface CommandRunReport {
+  run_uid: string;                     // エージェントが作る実行の一意な ID（128 バイトまで）
+  set_id: number; set_revision: number; set_name: string; purpose: string; joiner: string;
+  os_user: string; work_dir: string;
+  trigger: 'manual' | 'schedule'; request_id: number; scheduled_for: number;
+  commands_total: number; started_at: number;
+  finished: boolean;                   // 実行の最後の報告
+  finished_at: number; state: 'success' | 'failure' | 'error'; reason: string;   // finished のとき
+  display?: DisplayValue;              // 出力収集の finished のとき（4.1 章）
+  results: {
+    position: number; command_line: string; note: string;
+    kind: 'success' | 'failure' | 'error'; reason: string; exit_code: number | null;
+    started_at: number; finished_at: number;
+    output: string;                    // コンソール出力のバイト列（base64）
+    output_bytes: number; truncated: boolean;
+    values?: { values: { name: string; value: string }[]; truncated: boolean; pattern_problems?: { pattern: number; problem: string }[] };
+  }[];
 }
 ```
 
 - `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
+- `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
+- コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。`request_id` のある実行を作ると、その指示を `done` にします。
+- `command_request_acks` の `started` は指示を `done` に、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `expired` にします（後の 2 つは履歴に残す）。
+- `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
+- コマンドセットの結果について、メールで通知することはありません。
 - 応答は `{}` です。

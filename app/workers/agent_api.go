@@ -99,6 +99,9 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		}
 		resp.Rule = ra
 	}
+	if err := c.commandSync(agent, req, resp, now); err != nil {
+		return nil, err
+	}
 	if tok == nil {
 		return resp, nil
 	}
@@ -198,8 +201,9 @@ func findSuppression(list []*models.Suppression, agentID int64, typ, user, exe, 
 }
 
 // centralReport stores a report: detections into the target's own database
-// (aggregated with the open row of the same detection), host information and
-// the rule application result.
+// (aggregated with the open row of the same detection), host information,
+// the rule application result, and command set runs, request answers and
+// the outcome of storing definitions. Command results are never mailed.
 func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) error {
 	tdb, err := c.targetDB(agent)
 	if err != nil {
@@ -283,14 +287,30 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			return err
 		}
 	}
+	if err := c.storeCommandRuns(tx, agent, req.CommandRuns, now); err != nil {
+		return err
+	}
+	ended, err := storeCommandAcks(tx, req.CommandRequestAcks, now)
+	if err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	for _, e := range ended {
+		c.history(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
+	}
+	if req.CommandApply != nil {
+		if err := c.recordCommandApply(agent, req.CommandApply); err != nil {
+			return err
+		}
 	}
 
 	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
 	if hi := req.HostInfo; hi != nil {
 		f.HasHost = true
 		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
+		f.HostOSUser, f.TimeZone, f.UTCOffsetSec = truncate(hi.OSUser, 256), truncate(hi.TimeZone, 64), hi.UTCOffsetSec
 		b, _ := json.Marshal(hi.Auditd)
 		f.AuditdJSON = string(b)
 	}

@@ -19,6 +19,7 @@ func (c *core) periodicTasks() {
 		c.logger.Printf("certificates: %v", err)
 	}
 	c.processTokenExpiry(now)
+	c.expireCommandRequests(now)
 	c.retention(now)
 	c.notify(now)
 }
@@ -48,7 +49,9 @@ func (c *core) processTokenExpiry(now time.Time) {
 	_ = models.SetSetting(c.db, settingLastTokenCheck, strconv.FormatInt(n, 10))
 }
 
-// retention deletes detections older than the retention period (once an hour).
+// retention deletes detections, command runs and ended run requests older
+// than the retention period, and command runs beyond each set's keep count
+// (once an hour).
 func (c *core) retention(now time.Time) {
 	if now.Unix()-c.settingInt(settingLastRetentionAt) < 3600 {
 		return
@@ -66,6 +69,7 @@ func (c *core) retention(now time.Time) {
 		if n, err := models.DeleteDetectionsBefore(tdb, cut); err == nil && n > 0 {
 			c.logger.Printf("retention: removed %d detection(s) of %s", n, c.agentDisplayName(a))
 		}
+		c.commandRetention(a, tdb, cut)
 	}
 	_ = models.DeleteRejectedHistoryBefore(c.db, cut)
 	_ = models.DeleteExpiredSessions(c.db, now.Unix())

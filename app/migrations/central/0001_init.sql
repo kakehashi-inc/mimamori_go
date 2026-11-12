@@ -163,6 +163,7 @@ CREATE TABLE agents (
     time_zone             TEXT    NOT NULL DEFAULT '',
     utc_offset_sec        INTEGER NOT NULL DEFAULT 0,
     command_sig           TEXT    NOT NULL DEFAULT '',
+    command_problems      TEXT    NOT NULL DEFAULT '',
     created_at            INTEGER NOT NULL
 );
 -- +goose StatementEnd

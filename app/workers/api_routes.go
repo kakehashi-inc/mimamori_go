@@ -44,6 +44,22 @@ func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool
 	h("GET /agents", requireAny(c.handleListAgents))
 	h("GET /agents/{id}", requireAny(c.handleGetAgent))
 
+	// Command sets: definitions and run requests (administrators; the
+	// changing operations pass the step-up hook), results (any account).
+	a("GET /agents/{id}/command-sets", c.handleListCommandSets)
+	a("POST /agents/{id}/command-sets", c.requireCommandStepUp(c.handleCreateCommandSet))
+	a("POST /agents/{id}/command-sets/validate", c.handleValidateCommandSet)
+	a("POST /agents/{id}/command-sets/import", c.requireCommandStepUp(c.handleImportCommandSets))
+	a("GET /agents/{id}/command-sets/{set}", c.handleGetCommandSet)
+	a("PUT /agents/{id}/command-sets/{set}", c.requireCommandStepUp(c.handleUpdateCommandSet))
+	a("DELETE /agents/{id}/command-sets/{set}", c.requireCommandStepUp(c.handleDeleteCommandSet))
+	a("POST /agents/{id}/command-sets/{set}/run", c.handleRequestCommandRun)
+	a("DELETE /agents/{id}/command-requests/{req}", c.handleDiscardCommandRequest)
+	h("GET /agents/{id}/command-results", requireAny(c.handleAgentCommandResults))
+	h("GET /agents/{id}/command-sets/{set}/runs", requireAny(c.handleListCommandRuns))
+	h("GET /agents/{id}/command-runs/{run}", requireAny(c.handleGetCommandRun))
+	h("GET /command-results", requireAny(c.handleCommandResultsByName))
+
 	h("GET /tokens", requireAny(c.handleListTokens))
 	h("GET /tokens/{id}", requireAny(c.handleGetToken))
 	a("POST /tokens", c.handleIssueToken)
