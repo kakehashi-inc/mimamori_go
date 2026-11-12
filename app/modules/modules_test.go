@@ -148,7 +148,9 @@ func TestAuditParsing(t *testing.T) {
 func TestGenerateAuditRules(t *testing.T) {
 	c := &RuleContent{Users: []Element{{Value: "apache"}}, Exec: CategoryOnly{Category: "alert"}, Read: ReadSpec{Category: "alert"}}
 	r := &ResolvedRule{Content: c, UIDs: []int{48}, Dirs: []string{"/etc/ssh"}}
-	lines := GenerateAuditRules(r)
+	// The x86_64 rules, whatever the architecture of the test host
+	// (TestGenerateAuditRulesArm64 checks the aarch64 rules).
+	lines := generateAuditRules(r, "amd64")
 	if len(lines) != 2 {
 		t.Fatalf("read without dirs in content must be disabled: %v", lines)
 	}

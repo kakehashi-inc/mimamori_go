@@ -359,9 +359,9 @@ func neverRuleInRulesDir() bool {
 
 // RemoveAuditRules removes what the agent applied: the rules file and the
 // loaded rules carrying this system's key. Other rules and the global
-// settings are not touched, and a suppression rule cancelled by the agent is
-// not loaded again: the distribution's rules take effect again at the next
-// boot (or reload of the rules).
+// settings are not touched. When a rule file loaded at boot adds the
+// suppression rule (neverRuleLine), which ApplyAuditRules cancels, it is
+// loaded again, so the host is back in its configured state at once.
 func RemoveAuditRules() error {
 	st, err := ReadAuditdStatus()
 	if err != nil {
@@ -380,9 +380,18 @@ func RemoveAuditRules() error {
 	if err != nil {
 		return err
 	}
+	neverLoaded := false
 	for _, l := range rules {
 		if isOwnRule(l) {
 			return fmt.Errorf("a rule with key %s is still loaded: %s", AuditKey, l)
+		}
+		if l == neverRuleLine {
+			neverLoaded = true
+		}
+	}
+	if !neverLoaded && neverRuleInRulesDir() {
+		if _, err := RunSimple("auditctl", strings.Fields(neverRuleLine)...); err != nil {
+			return fmt.Errorf("loading the suppression rule of %s again (%s) failed: %w", filepath.Dir(auditRulesFile), neverRuleLine, err)
 		}
 	}
 	return nil

@@ -24,11 +24,15 @@ export function ElapsedSinceReport({ seconds }: { seconds: number | null }) {
     );
 }
 
-/** Rule name, assigned version, and outdated / unreported badges. */
+/**
+ * Rule name, assigned version, and the outdated badge; the reported version
+ * is shown only when the agent reported one that differs from the assigned.
+ */
 export function AgentRuleCell({ rule }: { rule: AgentRuleRef | null }) {
     const { t } = useTranslation();
     if (!rule) return <span className='text-muted'>{t('agents.noRule')}</span>;
-    const mismatch = rule.reported_version !== rule.assigned_version;
+    const reported = rule.reported_version;
+    const mismatch = reported !== null && reported !== rule.assigned_version;
     return (
         <div className='flex flex-col gap-1'>
             <Link
@@ -53,11 +57,11 @@ export function AgentRuleCell({ rule }: { rule: AgentRuleRef | null }) {
                         tone='accent'
                         icon='sync_problem'
                         title={t('agents.reportedMismatchTitle', {
-                            reported: rule.reported_version ?? '-',
+                            reported,
                             assigned: rule.assigned_version,
                         })}
                     >
-                        {t('agents.reportedVersion', { version: rule.reported_version ?? '-' })}
+                        {t('agents.reportedVersion', { version: reported })}
                     </Badge>
                 )}
             </div>

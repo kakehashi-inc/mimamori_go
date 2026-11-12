@@ -278,3 +278,44 @@ func TestConcurrentFirstUseOfToken(t *testing.T) {
 		}
 	}
 }
+
+// The overview reports a built-in agent disabled in the configuration as
+// disabled, without a reason to show; one that is enabled but cannot run
+// because auditd is not usable is reported as stopped with the reason.
+func TestOverviewBuiltinDisabled(t *testing.T) {
+	e := newTestEnv(t)
+	b, _ := models.GetBuiltinAgent(e.c.db)
+	// No audit tools: CheckAuditd fails whatever the host has.
+	t.Setenv("PATH", t.TempDir())
+	type overview struct {
+		BuiltinAgent struct {
+			Enabled bool   `json:"enabled"`
+			Running bool   `json:"running"`
+			Message string `json:"message"`
+		} `json:"builtin_agent"`
+	}
+	get := func() overview {
+		rec := httptest.NewRecorder()
+		e.c.handleOverview(rec, httptest.NewRequest("GET", "/api/v1/overview", nil))
+		return decode[overview](t, rec)
+	}
+	stop := make(chan struct{})
+	close(stop)
+
+	cfg := *e.c.conf()
+	disabled := false
+	cfg.BuiltinAgent = &disabled
+	e.c.cfg.Store(&cfg)
+	e.c.startBuiltinAgent(b, stop)()
+	if o := get(); o.BuiltinAgent.Enabled || o.BuiltinAgent.Running || o.BuiltinAgent.Message != "" {
+		t.Fatalf("disabled built-in agent: %+v", o.BuiltinAgent)
+	}
+
+	enabled := true
+	cfg.BuiltinAgent = &enabled
+	e.c.cfg.Store(&cfg)
+	e.c.startBuiltinAgent(b, stop)()
+	if o := get(); !o.BuiltinAgent.Enabled || o.BuiltinAgent.Running || !strings.HasPrefix(o.BuiltinAgent.Message, "auditd is not usable") {
+		t.Fatalf("built-in agent without auditd: %+v", o.BuiltinAgent)
+	}
+}

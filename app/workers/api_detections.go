@@ -606,6 +606,10 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 	running, msg := c.builtinStatus()
+	// enabled is the configuration the central started with: a built-in
+	// agent disabled there is the administrator's choice, so the screens do
+	// not report it as stopped.
+	enabled := *c.conf().BuiltinAgent
 	agents, _ := models.ListAgents(c.db)
 	unacked := 0
 	for _, a := range agents {
@@ -616,7 +620,7 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": modules.AppVersion, "central_hostname": c.hostname,
-		"builtin_agent": map[string]any{"running": running, "message": msg},
+		"builtin_agent": map[string]any{"enabled": enabled, "running": running, "message": msg},
 		"agents":        len(agents), "unacked_alerts": unacked,
 	})
 }

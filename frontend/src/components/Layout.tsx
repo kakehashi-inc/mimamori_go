@@ -43,7 +43,9 @@ export function Layout() {
     if (status === 'anonymous')
         return <Navigate to='/login' replace state={{ from: location.pathname + location.search }} />;
 
-    const stopped = overview && !overview.builtin_agent.running;
+    // A built-in agent disabled in the configuration is the administrator's
+    // choice and is not reported as stopped.
+    const stopped = overview && overview.builtin_agent.enabled && !overview.builtin_agent.running;
 
     return (
         <div className='flex min-h-screen flex-col'>

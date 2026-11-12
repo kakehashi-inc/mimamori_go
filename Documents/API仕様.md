@@ -133,7 +133,7 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 interface Overview {
   version: string;
   central_hostname: string;
-  builtin_agent: { running: boolean; message: string };   // 停止中の理由を message に入れる
+  builtin_agent: { enabled: boolean; running: boolean; message: string };   // enabled は起動時の設定 builtin_agent。停止中の理由を message に入れる（設定で無効にしている場合は空）
   agents: number; unacked_alerts: number;
 }
 ```

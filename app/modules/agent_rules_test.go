@@ -39,6 +39,7 @@ case "$1" in
 -s) printf 'enabled ENABLED\nfailure 1\npid 123\nbacklog_wait_time 0\n' ;;
 -l) if grep -q . 'STATE'; then cat 'STATE'; else echo "No rules"; fi ;;
 -d) shift; line="-a $*"; grep -vxF -- "$line" 'STATE' > 'STATE.tmp'; mv 'STATE.tmp' 'STATE' ;;
+-a) echo "$*" >> 'STATE' ;;
 *) exit 1 ;;
 esac
 `
@@ -80,6 +81,48 @@ func TestRemoveAuditRules(t *testing.T) {
 	}
 	if _, err := os.Stat(auditRulesFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the rules file must be removed: %v", err)
+	}
+}
+
+// When a rule file loaded at boot adds the suppression rule, which applying
+// the rules cancelled, removing the rules loads it again; without such a
+// file, or when it is still loaded, it is not added.
+func TestRemoveAuditRulesRestoresNeverRule(t *testing.T) {
+	own := "-a always,exit -F arch=b64 -S connect -F exe=/usr/bin/curl -F key=" + AuditKey
+	other := "-w /etc/passwd -p wa -k identity"
+
+	// No distribution file with the rule: nothing is added.
+	state, calls := fakeAuditctl(t, "1", []string{own, other})
+	if err := RemoveAuditRules(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, state); got != other+"\n" || strings.Contains(readFile(t, calls), "never") {
+		t.Fatalf("without the distribution rule nothing may be added: %q", got)
+	}
+
+	// The distribution file adds it and the agent had cancelled it.
+	state, _ = fakeAuditctl(t, "1", []string{own, other})
+	dist := filepath.Join(filepath.Dir(auditRulesFile), "10-base-config.rules")
+	if err := os.WriteFile(dist, []byte("-D\n-a task,never\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAuditRules(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, state); got != other+"\n"+neverRuleLine+"\n" {
+		t.Fatalf("the suppression rule must be loaded again: %q", got)
+	}
+
+	// Still loaded: not added twice.
+	state, calls = fakeAuditctl(t, "1", []string{neverRuleLine, own})
+	if err := os.WriteFile(filepath.Join(filepath.Dir(auditRulesFile), "10-base-config.rules"), []byte("-a never,task\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAuditRules(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, state); got != neverRuleLine+"\n" || strings.Contains(readFile(t, calls), "-a never") {
+		t.Fatalf("a loaded suppression rule must not be added again: %q", got)
 	}
 }
 

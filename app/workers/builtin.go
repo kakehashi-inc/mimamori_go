@@ -78,7 +78,8 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func() {
 	none := func() {}
 	if !*c.conf().BuiltinAgent {
-		c.setBuiltinStatus(false, "the built-in agent is disabled in the configuration")
+		// Nothing to report: disabling it is the administrator's choice.
+		c.setBuiltinStatus(false, "")
 		c.clearDisabledBuiltin(agent)
 		return none
 	}

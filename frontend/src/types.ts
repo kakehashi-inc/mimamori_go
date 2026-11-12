@@ -50,7 +50,8 @@ export type Operator = string;
 export interface Overview {
     version: string;
     central_hostname: string;
-    builtin_agent: { running: boolean; message: string };
+    // enabled is false when the configuration disables the built-in agent.
+    builtin_agent: { enabled: boolean; running: boolean; message: string };
     agents: number;
     unacked_alerts: number;
 }
