@@ -14,29 +14,35 @@
 | エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がループバックで、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
 - `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
+- 例外として、2 章の `/health`、`/auth/login`、`/auth/logout`、`/auth/password`、`/auth/language` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
 - ループバック以外からの `/admin/v1/*` は 404 を返します。接続元の判定には TCP の接続元アドレスだけを使います。
 - 1 接続で 1 リクエストを処理し、応答は `Connection: close` です。
 
 ### 1.2 形式
 
-- 要求・応答は JSON（`Content-Type: application/json`）。日時は RFC3339（UTC）の文字列、未設定は `null`。
+- 要求・応答は JSON（`Content-Type: application/json`）。ブラウザ用と管理用の API では、日時は RFC3339（UTC）の文字列、未設定は `null` です。型で `string` と宣言した日時は、通常は `null` になりません（`null` になり得る項目は型に `| null` を付けています）。エージェント用の API（14 章）では、日時は Unix 秒（整数）です。
 - 要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。
+- ブラウザ用と管理用の API は、要求の JSON に未知のフィールドがあると 400 を返します。エージェント用の API は未知のフィールドを無視します。
 - エラー時は 4xx/5xx と `{"error": "<message>"}` を返します。
-  - 400: 入力の誤り、401: 未認証、403: 権限なし、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、423: ログインの一時停止、503: 混雑。
+  - 400: 入力の誤り、401: 未認証、403: 権限なし、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、423: ログインの一時停止、500: 内部エラー（`internal error`）、503: 混雑。
+  - 503 を返すのはブラウザ用の待ち受けだけです。エージェントおよび管理用の待ち受け（HTTPS）では、混雑すると応答を返さずに接続を切ります。
+- 存在しないパスと、そのパスで対応していないメソッドへの要求は、`{"error": ...}` ではなく `text/plain` の `404 page not found` と `405 Method Not Allowed` を返します（ブラウザ用はログイン済みの場合）。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
 
 ### 1.3 権限
 
 `A` は管理者のみ、`V` は管理者と閲覧者が使えます。権限の判定はすべてのリクエストでセントラルが行います。
 
-## 2. 認証（ブラウザ用のみ）
+## 2. 認証
+
+この章のうち `GET /auth/me` 以外は、ブラウザ用（`/api/v1`）だけにあります。
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30}` |
 | POST | `/auth/login` | なし | `{"name","password","remember"?}` | `Me`（Cookie を設定）。`remember` が true なら有効期限付きの Cookie（ログインを保持）。失敗は 401、一時停止中は 423 |
 | POST | `/auth/logout` | V | - | `{}` |
-| GET | `/auth/me` | V | - | `Me` |
+| GET | `/auth/me` | V | - | `Me`。`/admin/v1` では `{"id":0,"name":"cli","role":"admin","language":""}` |
 | POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッションは無効になる） |
 | PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更） |
 
@@ -141,7 +147,7 @@ interface Token {
 ```
 
 - 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザには略した形だけを返します。
-- `valid_days` を省略すると設定の既定値を使います。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
+- `valid_days` を省略または 0 にすると設定の既定値を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
 
 ## 6. 監視ルール
 
@@ -151,18 +157,18 @@ interface Token {
 | GET | `/rules/{id}` | V | - | `RuleDetail`（最新の版の内容） |
 | GET | `/rules/{id}/versions/{version}` | V | - | `RuleVersion` |
 | GET | `/rules/{id}/diff?from=N&to=M` | V | - | `{"from":N,"to":M,"lines":DiffLine[]}` |
-| POST | `/rules/merge-preview` | A | `{"templates":["base","nginx"]}` | `MergePreview` |
-| POST | `/rules` | A | `RuleCreate` | `RuleDetail` |
-| PUT | `/rules/{id}` | A | `{"description","content","comment"}` | `RuleDetail`（版が 1 上がる） |
-| POST | `/rules/{id}/apply` | A | `{"version","agent_ids":[1,2]}` | `{"applied":2}`（重複した ID は 1 件として扱う） |
-| POST | `/rules/{id}/to-template` | A | `{"version","name","description"}` | `TemplateDetail` |
+| POST | `/rules/merge-preview` | A | `{"templates":["base","nginx"],"choices"?:{field:template}}` | `MergePreview`（`choices` で解決した衝突は `conflicts` に含めない） |
+| POST | `/rules` | A | `RuleCreate` | `RuleDetail`（衝突のあるテンプレートで `choices` が足りないと 400） |
+| PUT | `/rules/{id}` | A | `{"description"?,"content","comment"?}` | `RuleDetail`（版が 1 上がる。`description` を省略すると現在の説明を保つ） |
+| POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400） |
+| POST | `/rules/{id}/to-template` | A | `{"version"?,"name","description"?}` | `TemplateDetail`（`version` を省略または 0 にすると最新の版。名前の形式の誤りは 400、組み込みと同名または既存と重複は 409） |
 | DELETE | `/rules/{id}` | A | - | `{}`（適用中なら 409） |
 | POST | `/rules/validate` | A | `{"content":RuleContent}` | `{"errors":string[]}` |
 
 ```ts
 type Category = 'alert' | 'normal' | '';          // '' は「指定なし」
 interface Element { value: string; if_missing: 'ignore' | 'warn' }
-interface LegitLocation { path: string; extensions: string[]; category: Category }
+interface LegitLocation { path: string; extensions: string[]; category: 'alert' | 'normal' }   // category は必須（空は 400）
 interface RuleContent {
   users: Element[];                                // OSのユーザー（実行、拒否された操作、読み込み、書き込み可能な状態で使う）
   exclude_interactive: boolean | null;             // true: ログインした利用者の操作と cron を対象外にする
@@ -207,6 +213,13 @@ interface RuleCreate {
   - 通信: `network.executables` と `network.category`
   - 書き込み可能な状態: `writable.base` と `writable.category`
   - 実行されるファイル: `writable.base` と `writable.allowed_paths` と `exec_files.extensions` と `exec_files.other_category`
+- 入力の検証（違反は 400）:
+  - 監視ルール名は制御文字を除く 1〜100 文字です。
+  - `check_interval_sec` は 0 または 10〜3600、`scan_interval_sec` は 0 または 60〜604800 です。
+  - `users`、`read.dirs`、`network.executables`、`writable.allowed_paths`、`exec_files.legit` は各 200 件まで、`exec_files.extensions` は 50 件までです。
+  - `writable.base` は絶対パスで、`/` は使えません。`read.dirs` と `network.executables` も絶対パスです。
+  - `exec_files.legit` の各項目は、`extensions` を 1 つ以上と、`category`（`alert` / `normal`）が必要です。
+  - 全体の検証の内容は [システム仕様.md](システム仕様.md) の 7 章を参照してください。
 - 衝突の field の値: `exclude_interactive`、`check_interval_sec`、`scan_interval_sec`、`exec.category`、`denied.category`、`read.category`、`network.category`、`writable.base`、`writable.category`、`exec_files.other_category`、`exec_files.legit:<path>|<ext,ext>`。
 
 ## 7. テンプレート
@@ -215,7 +228,7 @@ interface RuleCreate {
 | --- | --- | --- | --- | --- |
 | GET | `/templates` | V | - | `TemplateSummary[]` |
 | GET | `/templates/{name}` | V | - | `TemplateDetail` |
-| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版） |
+| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版。名前は `[A-Za-z0-9._-]{1,64}`、組み込みと同名または既存と重複は 409） |
 | PUT | `/templates/{name}` | A | `{"description"?,"content"}` | `TemplateDetail`（`description` を省略すると現在の説明を保つ。組み込みは 403） |
 | DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403） |
 
@@ -232,9 +245,9 @@ interface TemplateDetail extends TemplateSummary { content: RuleContent }
 | GET | `/detections/{agent_id}/{id}` | V | - | `Detection` |
 | POST | `/detections/ack` | A | `{"items":[{"agent_id","id"}]}` | `{"acknowledged":N}` |
 
-クエリ: `agent_id`、`category`（alert/normal）、`type`、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`。
+クエリ: `agent_id`、`category`（alert/normal）、`type`、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`（0 以上、最大 1000000）。
 
-`from` と `to` は RFC3339、または `YYYY-MM-DD`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DDTHH:MM:SS`（ローカル時間）です。`acknowledged` と `suppressed` は `true` / `false`（`1` / `0` も可）です。`agent_id`、`limit`、`offset` は整数で、`limit` と `offset` は範囲外なら範囲内に丸めます。空の値は指定なしとして扱います。解釈できない値は、その項目名を示すメッセージとともに 400 を返します。
+`from` と `to` は RFC3339、または `YYYY-MM-DD`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DDTHH:MM:SS`（ローカル時間）です。`acknowledged` と `suppressed` は `true` / `false`（`1` / `0` も可）です。`agent_id`、`limit`、`offset` は整数で、`limit` と `offset` は範囲外なら範囲内に丸めます。`YYYY-MM-DDTHH:MM[:SS]` と `YYYY-MM-DD` のようにタイムゾーンを持たない値は、セントラルのローカル時間として解釈します。空の値は指定なしとして扱います。解釈できない値は、その項目名を示すメッセージとともに 400 を返します。
 
 ```ts
 type DetectionType = 'exec' | 'denied' | 'read' | 'network' | 'writable' | 'exec_file';
@@ -243,7 +256,7 @@ interface Detection {
   type: DetectionType; category: 'alert' | 'normal';
   os_user: string; exe: string; target: string;
   count: number; first_at: string; last_at: string;
-  file: { ctime: string; owner: string; mode: string } | null;
+  file: { ctime: string | null; owner: string; mode: string } | null;   // writable と exec_file だけ。ctime は不明なら null
   suppressed: boolean; suppression_id: number | null;
   acknowledged_at: string | null; acknowledged_by: string;
   notify_state: 'pending' | 'sent' | 'skipped';
@@ -257,7 +270,7 @@ interface Detection {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/suppressions` | V | - | `Suppression[]` |
-| POST | `/suppressions` | A | `{"agent_id"?,"type","os_user","exe","target","comment"}` | `Suppression` |
+| POST | `/suppressions` | A | `{"agent_id"?,"type"?,"os_user"?,"exe"?,"target"?,"comment"?}` | `Suppression`（作成時に、条件に一致する未確認の検知へ抑止を即時に反映する） |
 | DELETE | `/suppressions/{id}` | A | - | `{}` |
 
 ```ts
@@ -268,7 +281,7 @@ interface Suppression {
 }
 ```
 
-作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
+作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要で、すべて空なら 400 です。未知の `type` と存在しない `agent_id` も 400 です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
 
 ## 10. 証明書
 
@@ -279,7 +292,7 @@ interface Suppression {
 interface CertInfo { fingerprint: string; subject: string; not_before: string; not_after: string; status: 'active' | 'next' | 'retired' }
 interface CertStatus {
   cas: CertInfo[];
-  server: CertInfo & { names: string[]; issuer_fingerprint: string };
+  server?: CertInfo & { names: string[]; issuer_fingerprint: string };   // 有効なサーバー証明書が無いと省略
   rotation: { state: 'none' | 'distributing' | 'switched'; next_ca_created_at: string | null; switch_after: string | null };
   agents_missing_new_ca: { agent_id: number; display_name: string }[];   // 一度も同期していないエージェントは含めない
 }
@@ -290,12 +303,12 @@ interface CertStatus {
 | GET | `/history?category=&limit=&offset=` | V | - | `{"items":HistoryItem[],"total":N}` |
 | --- | --- | --- | --- | --- |
 
-`limit`（既定 100、最大 500）と `offset` は整数です。整数として解釈できない値は 400 を返します。
+`limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。
 
 ```ts
 type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
 interface HistoryItem {
-  id: number; at: string; account_name: string;   // システムの処理は "system"
+  id: number; at: string; account_name: string;   // システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
   category: HistoryCategory; action: string; target: string; detail: string;
   remote_addr: string; count: number;            // 拒否した接続は同じ接続元と理由をまとめて数える
 }
@@ -321,7 +334,7 @@ interface Account {
 ```
 
 - 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です（確認と変更は 1 つの書き込みのトランザクションで行うため、同時の要求でも有効な管理者が 0 人になることはありません）。
-- パスワードは 10 文字以上です。
+- アカウント名は `[A-Za-z0-9._@-]{1,64}` で一意です。パスワードは 10 文字以上、256 バイトまでです。
 
 ## 12.1 システム設定
 
@@ -370,5 +383,57 @@ interface Guide {
 | POST | `/agent/v1/sync` | トークン | `SyncRequest` | `SyncResponse` |
 | POST | `/agent/v1/report` | トークン | `ReportRequest` | `{}` |
 
-- すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってローカル DB に保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致の場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
-- 詳細は [システム仕様.md](システム仕様.md) の「エージェントとセントラルの通信」を参照してください。
+- すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってローカル DB に保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致、インスタンス ID が空または 128 文字を超える場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
+- 要求の本文が JSON として解釈できない場合は 400（`{"error":"invalid request"}`）、セントラルの内部エラーは 500（`{"error":"internal error"}`）です。未知のフィールドは無視します。
+- この章の日時は、1 章の例外として Unix 秒（整数）です。`0` は未設定を表します。
+- 通信の流れは [システム仕様.md](システム仕様.md) の 8 章を参照してください。
+
+### 14.1 同期（`POST /agent/v1/sync`）
+
+```ts
+interface ApplyResult {
+  status: 'none' | 'ok' | 'warning' | 'error';
+  message: string;
+  rule_id: number; version: number;   // 適用した監視ルールとその版
+  at: number;                         // 適用した日時（Unix 秒）
+  warnings: string[];
+}
+interface SyncRequest {
+  agent_version: string;
+  rule_id: number; rule_version: number;   // エージェントが適用中の監視ルールと版（無ければ 0）
+  ca_fingerprints: string[];               // 信頼している独自 CA の SHA-256 フィンガープリント
+  last_apply: ApplyResult | null;          // 最後の適用の結果
+}
+interface RuleAssignment { id: number; name: string; version: number; content: RuleContent }   // RuleContent は 6 章
+interface TokenRenewal { token: string; expires_at: number }
+interface SyncResponse {
+  agent_name: string;                      // トークン名。内蔵エージェントは "(central)"
+  token_expires_at: number;                // 現在のトークンの有効期限。内蔵エージェントは 0
+  rule: RuleAssignment | null;             // 割り当てた監視ルールと版。割り当てが無ければ null
+  default_interval_sec: number;            // 監視ルールが無い場合の確認の間隔（秒）
+  token_renewal?: TokenRenewal;            // 有効期限が近いときだけ。使われるまで同じ値を返す
+  ca_pems?: string[];                      // 信頼していない独自 CA があるときだけ。信頼すべきすべての CA の証明書（PEM）
+}
+```
+
+### 14.2 報告（`POST /agent/v1/report`）
+
+```ts
+interface DetectionReport {
+  type: DetectionType; category: 'alert' | 'normal';   // 未知の type の項目は捨てる。category が不正なら 'alert'
+  os_user: string; exe: string; target: string;
+  count: number;                       // 1 未満は 1
+  first_at: number; last_at: number;   // Unix 秒。0 なら受信時刻（last_at は first_at）
+  file_ctime?: number; file_owner?: string; file_mode?: string;   // writable と exec_file の検知
+}
+interface ReportRequest {
+  created_at: number;                  // 報告を作った日時（Unix 秒）
+  detections: DetectionReport[];
+  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目。日時（collected_at、trusted_cas[].not_after）は Unix 秒
+  apply?: ApplyResult;                 // 最後の適用の結果（まだ適用していなければ省略）
+  dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
+}
+```
+
+- `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
+- 応答は `{}` です。
