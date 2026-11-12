@@ -9,23 +9,23 @@ import {
     setAccountDisplayName,
     setAccountEmail,
     setAccountRole,
-} from '../api/client';
-import { Badge } from '../components/Badge';
-import { LANG_SETTINGS, MAX_DISPLAY_NAME_LENGTH, MIN_PASSWORD_LENGTH, type LangSetting } from '../constants';
-import { Button } from '../components/Button';
-import { ConfirmDialog } from '../components/ConfirmDialog';
-import { emailInputProps, Field, inputClass } from '../components/FormControls';
-import { Modal } from '../components/Modal';
-import { PageHeader } from '../components/PageHeader';
-import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
-import { RoleBadge } from '../components/StatusBadges';
-import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
-import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
-import { useApi } from '../hooks/useApi';
-import type { Account, Role } from '../types';
-import { accountErrorMessage } from '../utils/accountErrors';
-import { formatDateTime } from '../utils/format';
+} from '../api';
+import { Badge } from '../../components/Badge';
+import { LANG_SETTINGS, MAX_DISPLAY_NAME_LENGTH, MIN_PASSWORD_LENGTH, type LangSetting } from '../../constants';
+import { Button } from '../../components/Button';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { emailInputProps, Field, inputClass } from '../../components/FormControls';
+import { Modal } from '../../components/Modal';
+import { PageHeader } from '../../components/PageHeader';
+import { Alert, EmptyState, ErrorAlert, Loading } from '../../components/StateViews';
+import { RoleBadge } from '../../components/StatusBadges';
+import { Table, TBody, Td, Th, THead, Tr } from '../../components/Table';
+import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useApi } from '../../hooks/useApi';
+import type { Account, Role } from '../../types';
+import { accountErrorMessage } from '../../utils/accountErrors';
+import { formatDateTime } from '../../utils/format';
 
 /** How an account is named in dialogs: display name and login ID. */
 function accountLabel(a: Account): string {

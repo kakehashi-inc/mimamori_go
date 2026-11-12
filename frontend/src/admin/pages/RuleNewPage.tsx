@@ -1,31 +1,23 @@
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
-import { createRule, listTemplates, mergePreview } from '../api/client';
-import { Badge } from '../components/Badge';
-import { Button, buttonClass } from '../components/Button';
-import { checkboxClass, Field, inputClass } from '../components/FormControls';
-import { RequireAdmin } from '../components/Layout';
-import { Card, PageHeader } from '../components/PageHeader';
-import { RuleContentView } from '../components/RuleContentView';
-import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
-import { Tabs } from '../components/Tabs';
-import { useToast } from '../context/ToastContext';
-import { useApi } from '../hooks/useApi';
-import type { MergePreview } from '../types';
-import { errorMessage } from '../utils/format';
+import { listTemplates } from '../../api/client';
+import { createRule, mergePreview } from '../api';
+import { Badge } from '../../components/Badge';
+import { Button, buttonClass } from '../../components/Button';
+import { checkboxClass, Field, inputClass } from '../../components/FormControls';
+import { Card, PageHeader } from '../../components/PageHeader';
+import { RuleContentView } from '../../components/RuleContentView';
+import { Alert, EmptyState, ErrorAlert, Loading } from '../../components/StateViews';
+import { Tabs } from '../../components/Tabs';
+import { useToast } from '../../context/ToastContext';
+import { useApi } from '../../hooks/useApi';
+import type { MergePreview } from '../../types';
+import { errorMessage } from '../../utils/format';
 
 type Mode = 'templates' | 'empty';
 
 export function RuleNewPage() {
-    return (
-        <RequireAdmin>
-            <RuleCreator />
-        </RequireAdmin>
-    );
-}
-
-function RuleCreator() {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const { showToast } = useToast();

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Category, IfMissing, RuleElement } from '../types';
-import { Button } from './Button';
-import { inputSmAutoClass, inputSmClass } from './FormControls';
+import type { Category, IfMissing, RuleElement } from '../../types';
+import { Button } from '../../components/Button';
+import { inputSmAutoClass, inputSmClass } from '../../components/FormControls';
 
 /** Rows of value + if_missing with add/remove buttons. */
 export function ElementListEditor({

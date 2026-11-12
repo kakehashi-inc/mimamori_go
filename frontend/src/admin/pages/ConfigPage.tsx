@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getConfig, updateConfig } from '../api/client';
-import { Badge } from '../components/Badge';
-import { Button } from '../components/Button';
-import { checkboxClass, Field, inputClass } from '../components/FormControls';
-import { Card, PageHeader } from '../components/PageHeader';
-import { Alert, ErrorAlert, Loading } from '../components/StateViews';
-import { useToast } from '../context/ToastContext';
+import { getConfig, updateConfig } from '../api';
+import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
+import { checkboxClass, Field, inputClass } from '../../components/FormControls';
+import { Card, PageHeader } from '../../components/PageHeader';
+import { Alert, ErrorAlert, Loading } from '../../components/StateViews';
+import { useToast } from '../../context/ToastContext';
 import type ja from '../i18n/ja.json';
-import { useApi } from '../hooks/useApi';
-import type { CentralConfig, ConfigItem } from '../types';
-import { errorMessage } from '../utils/format';
+import { useApi } from '../../hooks/useApi';
+import type { CentralConfig, ConfigItem } from '../../types';
+import { errorMessage } from '../../utils/format';
 
 // Items grouped by subject, in display order. Items the server reports but
 // that are not listed here are shown in the last group.

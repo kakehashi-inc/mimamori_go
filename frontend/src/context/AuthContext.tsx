@@ -8,6 +8,7 @@ import {
     setUnauthorizedHandler,
 } from '../api/client';
 import type { LangSetting } from '../constants';
+import { leaveExtensions, loadExtensions } from '../extensions/loader';
 import { applyLangSetting } from '../i18n/i18n';
 import type { Me } from '../types';
 
@@ -46,12 +47,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         setUnauthorizedHandler(() => {
+            if (leaveExtensions()) return;
             setMe(null);
             setStatus('anonymous');
         });
         let active = true;
         getMe()
-            .then(m => {
+            .then(async m => {
+                // The extension modules of the account register their routes
+                // before any page is shown, so that their URLs never show
+                // "not found" while loading.
+                await loadExtensions(m.role);
                 if (!active) return;
                 setMe(m);
                 setStatus('authenticated');
@@ -69,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const signedIn = useCallback(async (m: Me) => {
+        await loadExtensions(m.role);
         setMe(m);
         setStatus('authenticated');
         await applyLangSetting(m.language);
@@ -114,10 +121,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             await apiLogout();
         } finally {
-            setMe(null);
-            setStatus('anonymous');
-            setAnonLang('auto');
-            void applyLangSetting('auto');
+            if (!leaveExtensions()) {
+                setMe(null);
+                setStatus('anonymous');
+                setAnonLang('auto');
+                void applyLangSetting('auto');
+            }
         }
     }, []);
 

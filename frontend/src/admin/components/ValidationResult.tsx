@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Alert } from './StateViews';
+import { Alert } from '../../components/StateViews';
 
 /** Result of POST /rules/validate: null when not checked yet. */
 export function ValidationResult({ errors }: { errors: string[] | null }) {

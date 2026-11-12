@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useExtensions } from '../extensions/registry';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { useHealth } from '../hooks/useHealth';
 import { formatVersion } from '../utils/format';
@@ -11,43 +12,41 @@ import { RoleBadge } from './StatusBadges';
 
 interface NavItem {
     to: string;
-    key:
-        | 'agents'
-        | 'detections'
-        | 'tokens'
-        | 'rules'
-        | 'templates'
-        | 'suppressions'
-        | 'certificates'
-        | 'history'
-        | 'accounts'
-        | 'config'
-        | 'guide';
     icon: string;
-    adminOnly?: boolean;
+    /** Label in the current language. */
+    label: string;
+    /** Position among the items; extensions place their items by this number. */
+    order: number;
 }
 
-const NAV: NavItem[] = [
-    { to: '/agents', key: 'agents', icon: 'dns' },
-    { to: '/detections', key: 'detections', icon: 'notifications' },
-    { to: '/tokens', key: 'tokens', icon: 'key' },
-    { to: '/rules', key: 'rules', icon: 'rule' },
-    { to: '/templates', key: 'templates', icon: 'library_books' },
-    { to: '/suppressions', key: 'suppressions', icon: 'block' },
-    { to: '/certificates', key: 'certificates', icon: 'verified_user' },
-    { to: '/history', key: 'history', icon: 'history' },
-    { to: '/accounts', key: 'accounts', icon: 'manage_accounts', adminOnly: true },
-    { to: '/config', key: 'config', icon: 'tune', adminOnly: true },
-    { to: '/guide', key: 'guide', icon: 'menu_book' },
+type OwnKey =
+    'agents' | 'detections' | 'tokens' | 'rules' | 'templates' | 'suppressions' | 'certificates' | 'history' | 'guide';
+
+const NAV: { to: string; key: OwnKey; icon: string; order: number }[] = [
+    { to: '/agents', key: 'agents', icon: 'dns', order: 10 },
+    { to: '/detections', key: 'detections', icon: 'notifications', order: 20 },
+    { to: '/tokens', key: 'tokens', icon: 'key', order: 30 },
+    { to: '/rules', key: 'rules', icon: 'rule', order: 40 },
+    { to: '/templates', key: 'templates', icon: 'library_books', order: 50 },
+    { to: '/suppressions', key: 'suppressions', icon: 'block', order: 60 },
+    { to: '/certificates', key: 'certificates', icon: 'verified_user', order: 70 },
+    { to: '/history', key: 'history', icon: 'history', order: 80 },
+    { to: '/guide', key: 'guide', icon: 'menu_book', order: 110 },
 ];
 
 export function Header() {
     const { t } = useTranslation();
     const { health } = useHealth();
-    const { me, isAdmin, logout } = useAuth();
+    const { me, logout } = useAuth();
+    const { navItems } = useExtensions();
     const navigate = useNavigate();
     const { pathname } = useLocation();
     const [busy, setBusy] = useState(false);
+
+    const items: NavItem[] = [
+        ...NAV.map(n => ({ to: n.to, icon: n.icon, label: t(`nav.${n.key}`), order: n.order })),
+        ...navItems.map(n => ({ to: n.to, icon: n.icon, label: n.label(), order: n.order })),
+    ].sort((a, b) => a.order - b.order);
 
     async function handleLogout() {
         setBusy(true);
@@ -94,13 +93,13 @@ export function Header() {
             </div>
             <nav className='mx-auto max-w-7xl overflow-x-auto px-2' aria-label={t('nav.label')}>
                 <ul className='flex gap-1'>
-                    {NAV.filter(item => !item.adminOnly || isAdmin).map(item => (
+                    {items.map(item => (
                         <li key={item.to}>
                             <NavLink
                                 to={item.to}
                                 className={({ isActive: active }) => {
                                     // The agent list is also the home page.
-                                    const isActive = active || (item.key === 'agents' && pathname === '/');
+                                    const isActive = active || (item.to === '/agents' && pathname === '/');
                                     return `-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                                         isActive
                                             ? 'border-accent font-medium text-accent'
@@ -111,7 +110,7 @@ export function Header() {
                                 <span className='material-icons-outlined text-base' aria-hidden='true'>
                                     {item.icon}
                                 </span>
-                                {t(`nav.${item.key}`)}
+                                {item.label}
                             </NavLink>
                         </li>
                     ))}

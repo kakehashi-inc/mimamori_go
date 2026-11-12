@@ -1,13 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createSuppression, listAgents } from '../api/client';
-import type { AgentSummary, DetectionType, Suppression } from '../types';
-import { errorMessage } from '../utils/format';
-import { DETECTION_TYPES } from '../utils/ruleContent';
-import { Button } from './Button';
-import { checkboxClass, Field, inputClass } from './FormControls';
-import { Modal } from './Modal';
-import { Alert } from './StateViews';
+import { listAgents } from '../../api/client';
+import { createSuppression } from '../api';
+import type { AgentSummary, DetectionType, Suppression } from '../../types';
+import { errorMessage } from '../../utils/format';
+import { DETECTION_TYPES } from '../../utils/ruleContent';
+import { Button } from '../../components/Button';
+import { checkboxClass, Field, inputClass } from '../../components/FormControls';
+import { Modal } from '../../components/Modal';
+import { Alert } from '../../components/StateViews';
 
 /** Values copied from a detection when registering it as a suppression. */
 export interface SuppressionPrefill {

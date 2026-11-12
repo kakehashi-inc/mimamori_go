@@ -32,9 +32,9 @@ export function ProfilePage() {
                     <Card title={t('profile.account')}>
                         <DescriptionList
                             items={[
-                                { label: t('accounts.email'), value: me.email },
-                                { label: t('accounts.displayName'), value: me.display_name },
-                                { label: t('accounts.role'), value: <RoleBadge role={me.role} /> },
+                                { label: t('profile.email'), value: me.email },
+                                { label: t('profile.displayName'), value: me.display_name },
+                                { label: t('profile.role'), value: <RoleBadge role={me.role} /> },
                             ]}
                         />
                     </Card>
@@ -75,9 +75,9 @@ function DisplayNameCard({ me }: { me: Me }) {
         <Card title={t('profile.changeDisplayName')}>
             <form onSubmit={e => void submit(e)} className='flex flex-col gap-4'>
                 <Field
-                    label={t('accounts.displayName')}
+                    label={t('profile.displayName')}
                     htmlFor='pf-display-name'
-                    hint={t('accounts.displayNameHint', { max: MAX_DISPLAY_NAME_LENGTH })}
+                    hint={t('profile.displayNameHint', { max: MAX_DISPLAY_NAME_LENGTH })}
                     required
                 >
                     <input

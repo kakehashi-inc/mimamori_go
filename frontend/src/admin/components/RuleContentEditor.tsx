@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DetectionType, LegitLocation, RuleContent } from '../types';
-import { enabledTypes, normalizeRuleContent } from '../utils/ruleContent';
-import { Badge } from './Badge';
-import { Button } from './Button';
-import { inputClass, inputSmAutoClass, inputSmClass } from './FormControls';
+import type { DetectionType, LegitLocation, RuleContent } from '../../types';
+import { enabledTypes, normalizeRuleContent } from '../../utils/ruleContent';
+import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
+import { inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
 import { CategorySelect, CommaListInput, ElementListEditor, RemoveButton, StringListEditor } from './ListEditors';
-import { Tabs } from './Tabs';
+import { Tabs } from '../../components/Tabs';
 
 interface RuleContentEditorProps {
     value: RuleContent;

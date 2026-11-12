@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ackDetections, listAgents, listDetections } from '../api/client';
+import { listAgents, listDetections } from '../api/client';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
-import { checkboxClass, inputSmAutoClass, inputSmClass } from '../components/FormControls';
+import { inputSmAutoClass, inputSmClass } from '../components/FormControls';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { CategoryBadge } from '../components/StatusBadges';
-import { SuppressionFormModal, type SuppressionPrefill } from '../components/SuppressionFormModal';
+import { Slot } from '../components/Slot';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
-import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { AgentSummary, Detection } from '../types';
 import { formatDateTime, formatOperator, localInputToRfc3339 } from '../utils/format';
@@ -33,14 +31,13 @@ function readFilters(params: URLSearchParams): Filters {
     return f;
 }
 
-function rowKey(d: Detection): string {
+/** Key of a row in the selection passed to the slots. */
+export function rowKey(d: Detection): string {
     return `${d.agent_id}:${d.id}`;
 }
 
 export function DetectionsPage() {
     const { t } = useTranslation();
-    const { isAdmin } = useAuth();
-    const { showToast } = useToast();
     const [params, setParams] = useSearchParams();
     const applied = useMemo(() => readFilters(params), [params]);
     const limit = Number(params.get('limit')) || DEFAULT_LIMIT;
@@ -48,9 +45,6 @@ export function DetectionsPage() {
     const [draft, setDraft] = useState<Filters>(applied);
     const [agents, setAgents] = useState<AgentSummary[]>([]);
     const [selected, setSelected] = useState<Set<string>>(new Set());
-    const [acking, setAcking] = useState(false);
-    const [ackError, setAckError] = useState<unknown>(null);
-    const [prefill, setPrefill] = useState<SuppressionPrefill | null>(null);
 
     const queryKey = params.toString();
     const { data, error, loading, reload } = useApi(
@@ -103,40 +97,6 @@ export function DetectionsPage() {
         const empty = readFilters(new URLSearchParams());
         setDraft(empty);
         updateParams({ ...empty, offset: '' });
-    }
-
-    const selectable = items.filter(d => !d.acknowledged_at);
-    const allSelected = selectable.length > 0 && selectable.every(d => selected.has(rowKey(d)));
-
-    function toggle(d: Detection) {
-        setSelected(prev => {
-            const next = new Set(prev);
-            const k = rowKey(d);
-            if (next.has(k)) next.delete(k);
-            else next.add(k);
-            return next;
-        });
-    }
-
-    function toggleAll() {
-        setSelected(allSelected ? new Set() : new Set(selectable.map(rowKey)));
-    }
-
-    async function acknowledge() {
-        const targets = items.filter(d => selected.has(rowKey(d))).map(d => ({ agent_id: d.agent_id, id: d.id }));
-        if (targets.length === 0) return;
-        setAcking(true);
-        setAckError(null);
-        try {
-            const r = await ackDetections(targets);
-            showToast(t('detections.acked', { count: r.acknowledged }));
-            setSelected(new Set());
-            reload();
-        } catch (e) {
-            setAckError(e);
-        } finally {
-            setAcking(false);
-        }
     }
 
     const set = (k: FilterKey, v: string) => setDraft(d => ({ ...d, [k]: v }));
@@ -257,21 +217,15 @@ export function DetectionsPage() {
 
             <div className='flex flex-col gap-3'>
                 <ErrorAlert error={error} onRetry={reload} />
-                {ackError ? <ErrorAlert error={ackError} /> : null}
                 <div className='flex flex-wrap items-center justify-between gap-2'>
                     <div className='flex items-center gap-2'>
-                        {isAdmin && (
-                            <Button
-                                variant='primary'
-                                icon='done_all'
-                                disabled={selected.size === 0}
-                                busy={acking}
-                                onClick={() => void acknowledge()}
-                            >
-                                {t('detections.ack')}
-                                {selected.size > 0 && ` (${selected.size})`}
-                            </Button>
-                        )}
+                        <Slot
+                            name='detections.toolbar'
+                            items={items}
+                            selected={selected}
+                            setSelected={setSelected}
+                            reload={reload}
+                        />
                     </div>
                     <label className='flex items-center gap-2 text-sm text-muted'>
                         {t('pagination.perPage')}
@@ -297,18 +251,12 @@ export function DetectionsPage() {
                     data && (
                         <Table>
                             <THead>
-                                {isAdmin && (
-                                    <Th className='w-8'>
-                                        <input
-                                            type='checkbox'
-                                            className={checkboxClass}
-                                            checked={allSelected}
-                                            disabled={selectable.length === 0}
-                                            onChange={toggleAll}
-                                            aria-label={t('detections.selectAll')}
-                                        />
-                                    </Th>
-                                )}
+                                <Slot
+                                    name='detections.headStart'
+                                    items={items}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
                                 <Th>{t('detections.lastAt')}</Th>
                                 <Th>{t('detections.agent')}</Th>
                                 <Th>{t('detections.category')}</Th>
@@ -321,23 +269,17 @@ export function DetectionsPage() {
                                 <Th>{t('detections.file')}</Th>
                                 <Th>{t('detections.ackState')}</Th>
                                 <Th>{t('detections.suppressed')}</Th>
-                                {isAdmin && <Th />}
+                                <Slot name='detections.headEnd' />
                             </THead>
                             <TBody>
                                 {items.map(d => (
                                     <Tr key={rowKey(d)} selected={selected.has(rowKey(d))}>
-                                        {isAdmin && (
-                                            <Td>
-                                                <input
-                                                    type='checkbox'
-                                                    className={checkboxClass}
-                                                    checked={selected.has(rowKey(d))}
-                                                    disabled={!!d.acknowledged_at}
-                                                    onChange={() => toggle(d)}
-                                                    aria-label={t('detections.select')}
-                                                />
-                                            </Td>
-                                        )}
+                                        <Slot
+                                            name='detections.rowStart'
+                                            detection={d}
+                                            selected={selected}
+                                            setSelected={setSelected}
+                                        />
                                         <Td className='whitespace-nowrap'>{formatDateTime(d.last_at)}</Td>
                                         <Td>
                                             <Link
@@ -395,26 +337,7 @@ export function DetectionsPage() {
                                                 <span className='text-muted'>-</span>
                                             )}
                                         </Td>
-                                        {isAdmin && (
-                                            <Td>
-                                                <Button
-                                                    size='sm'
-                                                    icon='block'
-                                                    onClick={() =>
-                                                        setPrefill({
-                                                            agent_id: d.agent_id,
-                                                            agent_name: d.agent_name,
-                                                            type: d.type,
-                                                            os_user: d.os_user,
-                                                            exe: d.exe,
-                                                            target: d.target,
-                                                        })
-                                                    }
-                                                >
-                                                    {t('detections.toSuppression')}
-                                                </Button>
-                                            </Td>
-                                        )}
+                                        <Slot name='detections.rowEnd' detection={d} reload={reload} />
                                     </Tr>
                                 ))}
                             </TBody>
@@ -430,18 +353,6 @@ export function DetectionsPage() {
                     />
                 )}
             </div>
-
-            {isAdmin && (
-                <SuppressionFormModal
-                    open={prefill !== null}
-                    prefill={prefill}
-                    onClose={() => setPrefill(null)}
-                    onCreated={() => {
-                        showToast(t('suppressions.created'));
-                        reload();
-                    }}
-                />
-            )}
         </>
     );
 }

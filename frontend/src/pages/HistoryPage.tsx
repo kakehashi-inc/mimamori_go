@@ -6,15 +6,15 @@ import { Button } from '../components/Button';
 import { inputSmAutoClass } from '../components/FormControls';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
+import { Slot } from '../components/Slot';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
-import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import type { HistoryCategory } from '../types';
 import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
 
+// Categories every account can read; extensions add their own options.
 const CATEGORIES: HistoryCategory[] = [
-    'account',
     'rule',
     'token',
     'certificate',
@@ -22,7 +22,6 @@ const CATEGORIES: HistoryCategory[] = [
     'template',
     'suppression',
     'detection',
-    'config',
 ];
 
 // Rows per page.
@@ -38,9 +37,6 @@ function historyDetail(h: { category: string; detail: string }): string {
 
 export function HistoryPage() {
     const { t } = useTranslation();
-    const { isAdmin } = useAuth();
-    // Viewers do not receive the history of accounts and of the system settings.
-    const categories = isAdmin ? CATEGORIES : CATEGORIES.filter(c => c !== 'account' && c !== 'config');
     const [category, setCategory] = useState('');
     const [offset, setOffset] = useState(0);
     const { data, error, loading, reload } = useApi(
@@ -75,11 +71,13 @@ export function HistoryPage() {
                         }}
                     >
                         <option value=''>{t('common.all')}</option>
-                        {categories.map(c => (
+                        <Slot name='history.categoryOptionsStart' />
+                        {CATEGORIES.map(c => (
                             <option key={c} value={c}>
                                 {t(`historyCategory.${c}`)}
                             </option>
                         ))}
+                        <Slot name='history.categoryOptionsEnd' />
                     </select>
                 </div>
                 <ErrorAlert error={error} onRetry={reload} />

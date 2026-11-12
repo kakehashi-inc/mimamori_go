@@ -20,12 +20,10 @@
         "suppressions": "Suppressions",
         "certificates": "Certificates",
         "history": "History",
-        "accounts": "Accounts",
         "guide": "Setup guide",
         "profile": "Profile",
         "accountMenu": "Account menu",
-        "logout": "Log out",
-        "config": "System settings"
+        "logout": "Log out"
     },
     "common": {
         "loading": "Loading...",
@@ -35,14 +33,6 @@
         "close": "Close",
         "cancel": "Cancel",
         "ok": "OK",
-        "save": "Save",
-        "saved": "Saved",
-        "edit": "Edit",
-        "delete": "Delete",
-        "deleted": "Deleted",
-        "done": "Done",
-        "add": "Add",
-        "remove": "Remove",
         "copy": "Copy",
         "copied": "Copied",
         "actions": "Actions",
@@ -57,8 +47,7 @@
         "forbidden": "You do not have permission for this operation.",
         "notFound": "The item was not found.",
         "busy": "The server is busy. Please try again later.",
-        "generic": "An error occurred (HTTP {{status}}).",
-        "adminOnly": "This page is available to administrators only."
+        "generic": "An error occurred (HTTP {{status}})."
     },
     "time": {
         "never": "Never reported",
@@ -132,15 +121,13 @@
         "exec_file": "Executable file"
     },
     "historyCategory": {
-        "account": "Account",
         "rule": "Rule",
         "token": "Token",
         "certificate": "Certificate",
         "rejected": "Rejected connection",
         "template": "Template",
         "suppression": "Suppression",
-        "detection": "Detection",
-        "config": "Configuration"
+        "detection": "Detection"
     },
     "certStatus": {
         "active": "Active",
@@ -238,19 +225,7 @@
         "title": "Tokens",
         "description": "Tokens that agents use to connect to the central server.",
         "empty": "No tokens yet",
-        "issue": "Issue token",
-        "issueTitle": "Issue a token",
-        "issuedTitle": "Token {{name}} issued",
-        "reissuedTitle": "Token {{name}} reissued",
         "name": "Name",
-        "nameHint": "Letters, digits and . _ - (up to 64 characters). Must be unique.",
-        "nameInvalid": "Use up to 64 letters, digits, '.', '_' or '-' for the name.",
-        "validDays": "Valid days",
-        "validDaysHint": "Leave empty to use the default.",
-        "validDaysInvalid": "Valid days must be a whole number of 1 or more.",
-        "rule": "Rule to apply",
-        "ruleHint": "Applied when the agent connects for the first time.",
-        "noRule": "None",
         "status": "Status",
         "expiresAt": "Expires",
         "renewedAt": "Renewed {{date}}",
@@ -265,21 +240,7 @@
         "expiringUnconnectedTitle": "The token expires soon but its agent is not connecting. It may expire without being renewed.",
         "pendingRenewal": "Renewal pending",
         "pendingRenewalTitle": "A renewed value was handed to the agent but has not been used yet.",
-        "reissue": "Reissue",
-        "reissueTitle": "Reissue token {{name}}",
-        "reissueNote": "Reissuing invalidates the previous value. The agent must be re-initialized with the new value.",
-        "unbind": "Unbind",
-        "unbindTitle": "Unbind instance ID",
-        "unbindConfirm": "Unbind token {{name}} from its instance ID? It will be bound to the next agent that connects.",
-        "revoke": "Revoke",
-        "revokeTitle": "Revoke token",
-        "revokeConfirm": "Revoke token {{name}}? Agents using it will no longer be able to connect. This cannot be undone.",
-        "initCommand": "Example agent init command",
-        "initCommandHint": "Run it on the monitored host. It asks for the token without showing what you type.",
-        "initThenStart": "After initializing, start the agent with:",
-        "seeGuide": "Open the setup guide",
-        "value": "Value",
-        "fullValueNote": "The full value is shown only until you close this dialog. Copy it now, then enter it when agent init asks for the token."
+        "value": "Value"
     },
     "detections": {
         "title": "Detections",
@@ -303,31 +264,17 @@
         "target": "Target",
         "count": "Count",
         "file": "File",
-        "ackState": "Ack state",
-        "ack": "Acknowledge",
-        "acked": "Acknowledged {{count}} detection(s)",
-        "select": "Select",
-        "selectAll": "Select all",
-        "toSuppression": "Add as suppression"
+        "ackState": "Ack state"
     },
     "suppressions": {
         "title": "Suppressions",
         "description": "Detections matching these conditions are not notified and are recorded as suppressed.",
         "empty": "No suppressions",
-        "create": "Add suppression",
-        "createTitle": "Add a suppression",
-        "created": "Suppression added",
-        "formHint": "Empty fields match any value.",
         "agent": "Agent",
         "allAgents": "All agents",
-        "thisAgentOnly": "Apply only to this agent ({{name}})",
         "any": "Any",
-        "emptyIsAny": "Leave empty to match every user.",
-        "wildcardHint": "Use * to match any string. Leave empty to match everything.",
         "comment": "Comment",
-        "createdAt": "Created",
-        "deleteTitle": "Delete suppression",
-        "deleteConfirm": "Delete this suppression? Matching detections will be notified again."
+        "createdAt": "Created"
     },
     "rule": {
         "users": "OS users",
@@ -341,37 +288,15 @@
         "allowedPaths": "Allowed write paths",
         "extensions": "Extensions",
         "legit": "Legitimate locations",
-        "legitPath": "Path",
         "otherCategory": "Category elsewhere"
     },
     "ruleEditor": {
-        "tabForm": "Form",
-        "tabJson": "JSON",
         "general": "General",
-        "value": "Value",
         "ifMissing": "If missing",
-        "ifMissingIgnore": "Ignore",
         "ifMissingWarn": "Warn",
         "unspecified": "Not specified",
         "excludeTrue": "Exclude (including cron)",
-        "excludeFalse": "Include",
-        "usersHint": "Used for execution, denied operation, read and writable state monitoring.",
-        "checkIntervalHint": "Seconds. 0 means not specified (default 60).",
-        "scanIntervalHint": "Seconds between writable state scans. 0 means not specified (default 3600).",
-        "condExec": "Enabled when OS users and a category are set.",
-        "condDenied": "Enabled when OS users and a category are set.",
-        "condRead": "Enabled when OS users, directories to watch and a category are set.",
-        "condNetwork": "Enabled when executables to watch and a category are set.",
-        "condWritable": "Enabled when a scan base and a category are set.",
-        "condExecFile": "Enabled when a scan base, allowed write paths, extensions and the category elsewhere are set.",
-        "allowedPathsHint": "Directories where writes are allowed, such as upload folders. Enter directory names relative to the scan base, e.g. uploads or data/files; they match at any depth below the base.",
-        "commaHint": "Comma separated, e.g. sh, cgi.",
-        "legitHint": "Path (directory names relative to the scan base, e.g. app/cache), extensions (comma separated, at least one) and category (required).",
-        "jsonHint": "Edit the JSON directly. Changes reach the form as soon as the JSON is valid.",
-        "jsonError": "Invalid JSON: {{message}}",
-        "validate": "Validate",
-        "valid": "The content is valid.",
-        "invalid": "The content has errors"
+        "excludeFalse": "Include"
     },
     "ruleView": {
         "enabled": "Enabled",
@@ -385,8 +310,6 @@
         "title": "Rules",
         "description": "Rules define what agents monitor. Each save creates a new version.",
         "empty": "No rules yet",
-        "create": "Create rule",
-        "created": "Rule created",
         "name": "Name",
         "descriptionLabel": "Description",
         "latestVersion": "Latest version",
@@ -404,41 +327,12 @@
         "createdAt": "Created",
         "createdBy": "Created by",
         "comment": "Comment",
-        "commentHint": "Describe what changed in this version.",
         "view": "View",
         "diffPrev": "Diff with previous",
         "diffFrom": "From",
         "diffTo": "To",
         "diffEmpty": "No differences",
-        "diffSame": "The two versions have the same content",
-        "apply": "Apply",
-        "applyTitle": "Apply rule {{name}}",
-        "applyAgents": "Agents",
-        "applyNoAgents": "Select at least one agent.",
-        "applied": "Applied to {{count}} agent(s)",
-        "toTemplate": "Save as template",
-        "toTemplateTitle": "Save as template",
-        "deleteTitle": "Delete rule",
-        "deleteConfirm": "Delete rule {{name}}? All versions will be deleted.",
-        "deleteInUse": "The rule is applied to agents and cannot be deleted.",
-        "editTitle": "Edit {{name}}",
-        "editNote": "Saving creates version v{{version}}. Agents receive it only after you apply it.",
-        "saved": "Saved as version v{{version}}",
-        "newTitle": "Create a rule",
-        "newDescription": "Combine templates, or start from an empty rule.",
-        "fromTemplates": "From templates",
-        "fromEmpty": "From empty",
-        "fromEmptyNote": "Creates a rule with empty content and opens the editor.",
-        "stepTemplates": "Choose templates",
-        "templatesOrderHint": "The selection order is shown as a number. For conflicting fields the first selected template wins by default.",
-        "mergePreview": "Preview combination",
-        "conflicts": "Conflicting fields",
-        "conflictsHint": "These fields differ between templates. Choose which template's value to use.",
-        "mergedContent": "Combined content",
-        "mergedContentNote": "Conflicting fields are shown with the first template's value. The rule will use the values chosen above.",
-        "stepName": "Name and description",
-        "createAndEdit": "Create and edit",
-        "previewFirst": "Run \"Preview combination\" first."
+        "diffSame": "The two versions have the same content"
     },
     "templates": {
         "title": "Templates",
@@ -449,19 +343,7 @@
         "builtin": "Built-in",
         "custom": "Custom",
         "descriptionLabel": "Description",
-        "updatedAt": "Updated",
-        "create": "Create template",
-        "createTitle": "Create a template",
-        "created": "Template created",
-        "source": "Source",
-        "source_empty": "Empty content",
-        "source_builtin": "Copy a built-in template",
-        "source_rule": "From a rule version",
-        "chooseBuiltin": "Choose the built-in template to copy.",
-        "chooseRule": "Choose a rule and a version.",
-        "builtinReadOnly": "Built-in templates cannot be edited or deleted. Copy one into a new template instead.",
-        "deleteTitle": "Delete template",
-        "deleteConfirm": "Delete template {{name}}?"
+        "updatedAt": "Updated"
     },
     "certificates": {
         "title": "Certificates",
@@ -497,45 +379,6 @@
         "remoteAddr": "Remote address",
         "count": "Count"
     },
-    "accounts": {
-        "title": "Accounts",
-        "description": "Manage the accounts that can log in to this console.",
-        "create": "Create account",
-        "createTitle": "Create an account",
-        "created": "Account created",
-        "email": "E-mail address",
-        "emailHint": "Used as the login ID.",
-        "displayName": "Display name",
-        "displayNameHint": "Name shown on the screens, up to {{max}} characters.",
-        "role": "Role",
-        "state": "State",
-        "enabled": "Enabled",
-        "disabled": "Disabled",
-        "lockedUntil": "Locked until {{date}}",
-        "createdAt": "Created",
-        "you": "(you)",
-        "changeEmail": "Change e-mail address",
-        "changeEmailTitle": "Change e-mail address of {{name}}",
-        "changeEmailNote": "The change is applied at once, without a verification code. The account is logged out on every device and no browser stays trusted.",
-        "changeOwnEmailWarning": "This is your own account: you will be logged out and must log in again with the new address.",
-        "emailChanged": "E-mail address changed",
-        "changeDisplayName": "Change display name",
-        "changeDisplayNameTitle": "Change display name of {{name}}",
-        "changeRole": "Change role",
-        "changeRoleTitle": "Change role of {{name}}",
-        "resetPassword": "Reset password",
-        "resetPasswordTitle": "Reset password of {{name}}",
-        "passwordReset": "Password reset",
-        "disable": "Disable",
-        "enable": "Enable",
-        "disableTitle": "Disable account",
-        "enableTitle": "Enable account",
-        "disableConfirm": "Disable {{name}}? The account will no longer be able to log in.",
-        "enableConfirm": "Enable {{name}}?",
-        "deleteTitle": "Delete account",
-        "deleteConfirm": "Delete {{name}}? This cannot be undone.",
-        "language": "Display language"
-    },
     "accountErrors": {
         "emailInvalid": "Enter a single e-mail address such as name@example.com (up to 254 characters, without spaces or the characters \" < > ,).",
         "displayNameInvalid": "Enter a display name of 1 to 64 characters without control characters.",
@@ -544,7 +387,6 @@
         "emailDuplicate": "Another account already uses this e-mail address."
     },
     "password": {
-        "password": "Password",
         "current": "Current password",
         "new": "New password",
         "confirm": "New password (confirm)",
@@ -568,7 +410,11 @@
         "emailCodeExpired": "The verification code can no longer be used. Please request the change again.",
         "changePassword": "Change password",
         "passwordChanged": "Password changed",
-        "passwordNote": "Changing the password logs you out on other devices, and no browser stays trusted."
+        "passwordNote": "Changing the password logs you out on other devices, and no browser stays trusted.",
+        "email": "E-mail address",
+        "displayName": "Display name",
+        "displayNameHint": "Name shown on the screens, up to {{max}} characters.",
+        "role": "Role"
     },
     "guide": {
         "title": "Setup guide",
@@ -578,7 +424,6 @@
         "centralHostname": "Central hostname",
         "caFingerprint": "Private CA fingerprint",
         "defaultValidDays": "Default token validity",
-        "noCentralHosts": "No host name for the agents is set yet, so the commands show <host>. Add the host name or IP address that the agents use to connect to the central to \"Server certificate names\" in System settings, then use that name in place of <host>.",
         "days": "{{count}} days",
         "auditd": {
             "title": "Make sure auditd is enabled and running",
@@ -646,149 +491,5 @@
         "title": "Page not found",
         "description": "The page you are looking for does not exist or has moved.",
         "back": "Back to home"
-    },
-    "config": {
-        "title": "System settings",
-        "description": "Configuration of the central.",
-        "applyNote": "Items marked \"Immediate\" take effect as soon as they are saved. Items marked \"After restart\" take effect when the central is restarted.",
-        "restart": "After restart",
-        "restartTitle": "Takes effect when the central is restarted",
-        "immediate": "Immediate",
-        "immediateTitle": "Takes effect as soon as it is saved",
-        "pending": "Restart required",
-        "pendingTitle": "Restart the central to apply the saved values",
-        "pendingBody": "Saved but not in effect yet: {{items}}",
-        "usingDefault": "Default",
-        "reset": "Reset to default",
-        "undoReset": "Undo reset",
-        "defaultValue": "Default: {{value}}",
-        "listHint": "Separate multiple values with commas.",
-        "enabled": "Enabled",
-        "secretSet": "(set)",
-        "secretNotSet": "(not set)",
-        "secretClear": "Remove the stored password",
-        "save": "Save",
-        "discard": "Discard changes",
-        "saved": "Settings saved.",
-        "savedRestart": "Settings saved. Some changes take effect after the central restarts.",
-        "security": {
-            "starttls": "STARTTLS",
-            "tls": "TLS (from the start)",
-            "none": "None"
-        },
-        "groups": {
-            "server": "Server",
-            "agents": "Agents and tokens",
-            "sessions": "Login sessions",
-            "notify": "Notifications",
-            "smtp": "SMTP",
-            "other": "Other"
-        },
-        "items": {
-            "web_listen": {
-                "label": "Browser listen address",
-                "hint": "IP address and port of the browser screens (HTTP)."
-            },
-            "agent_listen": {
-                "label": "Agent and management listen address",
-                "hint": "IP address and port for the agents (HTTPS)."
-            },
-            "server_names": {
-                "label": "Server certificate names",
-                "hint": "Host names and IP addresses the agents use to connect. 127.0.0.1, ::1 and localhost are always included. A new server certificate is issued within a minute."
-            },
-            "workers": {
-                "label": "Workers",
-                "hint": "Requests processed at the same time (up to 64)."
-            },
-            "queue_timeout_sec": {
-                "label": "Queue timeout (seconds)",
-                "hint": "A waiting request is refused after this time."
-            },
-            "builtin_agent": {
-                "label": "Built-in agent",
-                "hint": "Monitor the central host itself."
-            },
-            "token_valid_days": {
-                "label": "Token validity (days)",
-                "hint": "Default validity of issued and renewed tokens."
-            },
-            "token_renew_before_days": {
-                "label": "Renew tokens before (days)",
-                "hint": "A token is renewed automatically when fewer days than this remain."
-            },
-            "default_check_interval_sec": {
-                "label": "Default check interval (seconds)",
-                "hint": "Check interval of agents without a monitoring rule."
-            },
-            "retention_days": {
-                "label": "Retention (days)",
-                "hint": "Detections and records of rejected connections older than this are deleted."
-            },
-            "session_remember_days": {
-                "label": "Kept login (days)",
-                "hint": "Lifetime of a login with \"Keep me logged in\" (up to 365). Applies to new logins."
-            },
-            "two_step_trust_days": {
-                "label": "Trusted browser period (days)",
-                "hint": "A browser marked as trusted at the login code step needs no code for this many days (1 to 365). Applies at once."
-            },
-            "notify_min_interval_min": {
-                "label": "Minimum interval (minutes)",
-                "hint": "Shortest interval between notification mails."
-            },
-            "notify_dedupe_hours": {
-                "label": "Duplicate suppression (hours)",
-                "hint": "The same detection of the same agent is not notified again within this time."
-            },
-            "notify_max_lines": {
-                "label": "Maximum lines",
-                "hint": "Maximum detection lines in one mail."
-            },
-            "notify_subject_prefix": {
-                "label": "Subject prefix",
-                "hint": "Added at the start of the subject."
-            },
-            "smtp_host": {
-                "label": "SMTP server",
-                "hint": "While empty, no notifications are sent and no verification codes are used (login and e-mail address changes). Notifications are sent only when the server, sender and recipients are set."
-            },
-            "smtp_port": {
-                "label": "Port",
-                "hint": "587, 465 or 25 by default depending on the security."
-            },
-            "smtp_security": {
-                "label": "Security",
-                "hint": "How the connection is encrypted."
-            },
-            "smtp_auth": {
-                "label": "Authentication",
-                "hint": "Log in to the SMTP server."
-            },
-            "smtp_username": {
-                "label": "User name",
-                "hint": "User name for authentication."
-            },
-            "smtp_password": {
-                "label": "Password",
-                "hint": "Enter a new value to change it. The stored value is never shown."
-            },
-            "smtp_from": {
-                "label": "Sender",
-                "hint": "Sender address. Required for notifications and verification codes."
-            },
-            "smtp_to": {
-                "label": "Recipients",
-                "hint": "Recipient addresses."
-            },
-            "smtp_timeout_sec": {
-                "label": "Timeout (seconds)",
-                "hint": "Timeout of the SMTP connection."
-            },
-            "smtp_helo_name": {
-                "label": "HELO name",
-                "hint": "Name sent in HELO/EHLO. localhost when empty."
-            }
-        }
     }
 }

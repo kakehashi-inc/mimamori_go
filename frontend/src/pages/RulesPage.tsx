@@ -3,17 +3,16 @@ import { Link } from 'react-router-dom';
 import { listRules } from '../api/client';
 import { AppliedAgentsList } from '../components/AppliedAgentsList';
 import { Badge } from '../components/Badge';
-import { Button, buttonClass } from '../components/Button';
+import { Button } from '../components/Button';
 import { PageHeader } from '../components/PageHeader';
+import { Slot } from '../components/Slot';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
-import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { formatDateTime } from '../utils/format';
 
 export function RulesPage() {
     const { t } = useTranslation();
-    const { isAdmin } = useAuth();
     const { data, error, loading, reload } = useApi(listRules, []);
 
     return (
@@ -26,14 +25,7 @@ export function RulesPage() {
                         <Button icon='refresh' onClick={reload} busy={loading && !!data}>
                             {t('common.reload')}
                         </Button>
-                        {isAdmin && (
-                            <Link to='/rules/new' className={buttonClass('primary')}>
-                                <span className='material-icons-outlined text-base' aria-hidden='true'>
-                                    add
-                                </span>
-                                {t('rules.create')}
-                            </Link>
-                        )}
+                        <Slot name='rules.headerActions' />
                     </>
                 }
             />

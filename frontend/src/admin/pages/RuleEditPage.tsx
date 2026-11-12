@@ -1,29 +1,21 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getRule, updateRule, validateRule } from '../api/client';
-import { Button, buttonClass } from '../components/Button';
-import { Field, inputClass } from '../components/FormControls';
-import { RequireAdmin } from '../components/Layout';
-import { PageHeader } from '../components/PageHeader';
+import { getRule } from '../../api/client';
+import { updateRule, validateRule } from '../api';
+import { Button, buttonClass } from '../../components/Button';
+import { Field, inputClass } from '../../components/FormControls';
+import { PageHeader } from '../../components/PageHeader';
 import { RuleContentEditor } from '../components/RuleContentEditor';
-import { Alert, ErrorAlert, Loading } from '../components/StateViews';
+import { Alert, ErrorAlert, Loading } from '../../components/StateViews';
 import { ValidationResult } from '../components/ValidationResult';
-import { useToast } from '../context/ToastContext';
-import { useApi } from '../hooks/useApi';
-import type { RuleContent } from '../types';
-import { errorMessage } from '../utils/format';
-import { normalizeRuleContent } from '../utils/ruleContent';
+import { useToast } from '../../context/ToastContext';
+import { useApi } from '../../hooks/useApi';
+import type { RuleContent } from '../../types';
+import { errorMessage } from '../../utils/format';
+import { normalizeRuleContent } from '../../utils/ruleContent';
 
 export function RuleEditPage() {
-    return (
-        <RequireAdmin>
-            <RuleEditor />
-        </RequireAdmin>
-    );
-}
-
-function RuleEditor() {
     const { t } = useTranslation();
     const { id = '' } = useParams();
     const navigate = useNavigate();

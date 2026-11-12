@@ -4,8 +4,8 @@ import { Link } from 'react-router-dom';
 import { getGuide } from '../api/client';
 import { CodeBlock, CopyButton } from '../components/CopyButton';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
+import { Slot } from '../components/Slot';
 import { Alert, ErrorAlert, Loading } from '../components/StateViews';
-import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { agentInitCommand, agentSetCentralCommand } from '../utils/commands';
 import { formatVersion } from '../utils/format';
@@ -54,7 +54,6 @@ function Bullets({ items }: { items: ReactNode[] }) {
 
 export function GuidePage() {
     const { t } = useTranslation();
-    const { isAdmin } = useAuth();
     const { data: guide, error, loading, reload } = useApi(getGuide, []);
 
     // Only names in the server certificate work for --central-host; without any, show a placeholder.
@@ -108,9 +107,7 @@ export function GuidePage() {
                             />
                         </Card>
                     )}
-                    {guide && isAdmin && !guide.central_hosts?.length && (
-                        <Alert tone='warning'>{t('guide.noCentralHosts')}</Alert>
-                    )}
+                    {guide && <Slot name='guide.notices' guide={guide} />}
 
                     <Step n={1} title={t('guide.auditd.title')}>
                         <p>{t('guide.auditd.body')}</p>

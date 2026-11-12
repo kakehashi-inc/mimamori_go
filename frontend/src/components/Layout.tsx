@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { getOverview } from '../api/client';
@@ -68,21 +68,4 @@ export function Layout() {
             </main>
         </div>
     );
-}
-
-/** Shows the page only to administrators. */
-export function RequireAdmin({ children }: { children: ReactNode }) {
-    const { t } = useTranslation();
-    const { isAdmin } = useAuth();
-    if (!isAdmin) {
-        return (
-            <div className='py-10 text-center text-sm text-muted'>
-                <span className='material-icons-outlined text-3xl' aria-hidden='true'>
-                    lock
-                </span>
-                <p className='mt-2'>{t('errors.adminOnly')}</p>
-            </div>
-        );
-    }
-    return <>{children}</>;
 }

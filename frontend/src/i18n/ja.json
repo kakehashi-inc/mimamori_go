@@ -20,12 +20,10 @@
         "suppressions": "抑止条件",
         "certificates": "証明書",
         "history": "履歴",
-        "accounts": "アカウント",
         "guide": "導入の案内",
         "profile": "プロファイル",
         "accountMenu": "アカウントのメニュー",
-        "logout": "ログアウト",
-        "config": "システム設定"
+        "logout": "ログアウト"
     },
     "common": {
         "loading": "読み込み中...",
@@ -35,14 +33,6 @@
         "close": "閉じる",
         "cancel": "キャンセル",
         "ok": "OK",
-        "save": "保存",
-        "saved": "保存しました",
-        "edit": "編集",
-        "delete": "削除",
-        "deleted": "削除しました",
-        "done": "完了しました",
-        "add": "追加",
-        "remove": "削除",
         "copy": "コピー",
         "copied": "コピーしました",
         "actions": "操作",
@@ -57,8 +47,7 @@
         "forbidden": "この操作を行う権限がありません。",
         "notFound": "対象が見つかりません。",
         "busy": "サーバーが混雑しています。しばらくしてから再度お試しください。",
-        "generic": "エラーが発生しました（HTTP {{status}}）。",
-        "adminOnly": "この画面は管理者だけが利用できます。"
+        "generic": "エラーが発生しました（HTTP {{status}}）。"
     },
     "time": {
         "never": "未報告",
@@ -132,15 +121,13 @@
         "exec_file": "実行されるファイル"
     },
     "historyCategory": {
-        "account": "アカウント",
         "rule": "監視ルール",
         "token": "トークン",
         "certificate": "証明書",
         "rejected": "拒否した接続",
         "template": "テンプレート",
         "suppression": "抑止条件",
-        "detection": "検知",
-        "config": "システム設定"
+        "detection": "検知"
     },
     "certStatus": {
         "active": "使用中",
@@ -238,19 +225,7 @@
         "title": "トークン",
         "description": "エージェントがセントラルに接続するためのトークンです。",
         "empty": "トークンはまだありません",
-        "issue": "トークンを発行",
-        "issueTitle": "トークンの発行",
-        "issuedTitle": "トークン {{name}} を発行しました",
-        "reissuedTitle": "トークン {{name}} を再発行しました",
         "name": "名前",
-        "nameHint": "英数字と . _ - が使えます（64文字まで）。重複はできません。",
-        "nameInvalid": "名前は英数字と . _ - の64文字以内で入力してください。",
-        "validDays": "有効日数",
-        "validDaysHint": "空欄の場合は既定の日数になります。",
-        "validDaysInvalid": "有効日数は1以上の整数で入力してください。",
-        "rule": "適用する監視ルール",
-        "ruleHint": "エージェントが初めて接続したときに適用します。",
-        "noRule": "適用しない",
         "status": "状態",
         "expiresAt": "期限",
         "renewedAt": "自動更新 {{date}}",
@@ -265,21 +240,7 @@
         "expiringUnconnectedTitle": "期限が近いのにエージェントが接続していません。自動更新されずに期限切れになるおそれがあります。",
         "pendingRenewal": "自動更新の待ち",
         "pendingRenewalTitle": "自動更新の新しい値をエージェントに渡しましたが、まだ使われていません。",
-        "reissue": "再発行",
-        "reissueTitle": "トークン {{name}} の再発行",
-        "reissueNote": "再発行すると以前の値は使えなくなります。エージェントで新しい値を使って初期化し直す必要があります。",
-        "unbind": "紐付け解除",
-        "unbindTitle": "インスタンスIDの紐付けを解除",
-        "unbindConfirm": "トークン {{name}} とインスタンスIDの紐付けを解除しますか？次に接続したエージェントに紐付けられます。",
-        "revoke": "失効",
-        "revokeTitle": "トークンの失効",
-        "revokeConfirm": "トークン {{name}} を失効させますか？このトークンを使うエージェントは接続できなくなります。元に戻せません。",
-        "initCommand": "エージェントの初期化コマンドの例",
-        "initCommandHint": "監視対象のホストで実行してください。トークンは入力しても表示されません。",
-        "initThenStart": "初期化の後、次のコマンドでエージェントを起動します:",
-        "seeGuide": "導入の案内を見る",
-        "value": "値",
-        "fullValueNote": "値の全体は、この画面を閉じるまでだけ表示します。いまコピーし、agent init がトークンを求めたら入力してください。"
+        "value": "値"
     },
     "detections": {
         "title": "検知の一覧",
@@ -303,31 +264,17 @@
         "target": "対象",
         "count": "回数",
         "file": "ファイル",
-        "ackState": "確認の状態",
-        "ack": "確認済みにする",
-        "acked": "{{count}}件を確認済みにしました",
-        "select": "選択",
-        "selectAll": "すべて選択",
-        "toSuppression": "抑止条件として登録"
+        "ackState": "確認の状態"
     },
     "suppressions": {
         "title": "抑止条件",
         "description": "条件に合う検知は通知せず、抑止中として記録します。",
         "empty": "抑止条件はありません",
-        "create": "抑止条件を登録",
-        "createTitle": "抑止条件の登録",
-        "created": "抑止条件を登録しました",
-        "formHint": "空欄の項目はどの値にも一致します。",
         "agent": "エージェント",
         "allAgents": "すべてのエージェント",
-        "thisAgentOnly": "このエージェント（{{name}}）だけに適用する",
         "any": "任意",
-        "emptyIsAny": "空欄はすべてのユーザーに一致します。",
-        "wildcardHint": "* を使うと任意の文字列に一致します。空欄はすべてに一致します。",
         "comment": "コメント",
-        "createdAt": "作成",
-        "deleteTitle": "抑止条件の削除",
-        "deleteConfirm": "この抑止条件を削除しますか？以後、条件に合う検知は通知されます。"
+        "createdAt": "作成"
     },
     "rule": {
         "users": "OSのユーザー",
@@ -341,37 +288,15 @@
         "allowedPaths": "書き込みを許可するパス",
         "extensions": "対象の拡張子",
         "legit": "正当な配置場所",
-        "legitPath": "パス",
         "otherCategory": "それ以外の場所の分類"
     },
     "ruleEditor": {
-        "tabForm": "フォーム",
-        "tabJson": "JSON",
         "general": "共通",
-        "value": "値",
         "ifMissing": "存在しない場合",
-        "ifMissingIgnore": "無視する",
         "ifMissingWarn": "警告する",
         "unspecified": "指定なし",
         "excludeTrue": "対象外にする（cron も含む）",
-        "excludeFalse": "対象にする",
-        "usersHint": "実行、拒否された操作、読み込み、書き込み可能な状態の監視で使います。",
-        "checkIntervalHint": "秒。0 は指定なし（既定 60 秒）。",
-        "scanIntervalHint": "書き込み可能な状態の走査の間隔（秒）。0 は指定なし（既定 3600 秒）。",
-        "condExec": "OSのユーザーと分類を指定すると有効になります。",
-        "condDenied": "OSのユーザーと分類を指定すると有効になります。",
-        "condRead": "OSのユーザー、監視するディレクトリ、分類を指定すると有効になります。",
-        "condNetwork": "監視する実行ファイルと分類を指定すると有効になります。",
-        "condWritable": "走査の起点と分類を指定すると有効になります。",
-        "condExecFile": "走査の起点、書き込みを許可するパス、対象の拡張子、それ以外の場所の分類を指定すると有効になります。",
-        "allowedPathsHint": "アップロード先など、書き込みを許可するディレクトリです。走査の起点からの相対のディレクトリ名で指定します（例: uploads、data/files）。起点の下のどの深さにあっても一致します。",
-        "commaHint": "カンマ区切りで入力します（例: sh, cgi）。",
-        "legitHint": "パス（走査の起点からの相対のディレクトリ名。例: app/cache）、拡張子（カンマ区切り、1 つ以上）、分類（必須）の順に指定します。",
-        "jsonHint": "JSON を直接編集できます。正しい JSON になった時点でフォームに反映されます。",
-        "jsonError": "JSON の形式が正しくありません: {{message}}",
-        "validate": "検証",
-        "valid": "内容に問題はありません。",
-        "invalid": "内容に誤りがあります"
+        "excludeFalse": "対象にする"
     },
     "ruleView": {
         "enabled": "有効",
@@ -385,8 +310,6 @@
         "title": "監視ルール",
         "description": "エージェントが何を監視するかを定めたルールです。保存するたびに版が上がります。",
         "empty": "監視ルールはまだありません",
-        "create": "監視ルールを作成",
-        "created": "監視ルールを作成しました",
         "name": "名前",
         "descriptionLabel": "説明",
         "latestVersion": "最新の版",
@@ -404,41 +327,12 @@
         "createdAt": "作成日時",
         "createdBy": "作成者",
         "comment": "コメント",
-        "commentHint": "この版で何を変えたかを記録します。",
         "view": "表示",
         "diffPrev": "前の版との差分",
         "diffFrom": "比較元",
         "diffTo": "比較先",
         "diffEmpty": "差分はありません",
-        "diffSame": "2つの版の内容は同じです",
-        "apply": "適用",
-        "applyTitle": "監視ルール {{name}} の適用",
-        "applyAgents": "適用するエージェント",
-        "applyNoAgents": "エージェントを1つ以上選んでください。",
-        "applied": "{{count}}台のエージェントに適用しました",
-        "toTemplate": "テンプレートとして定義",
-        "toTemplateTitle": "テンプレートとして定義",
-        "deleteTitle": "監視ルールの削除",
-        "deleteConfirm": "監視ルール {{name}} を削除しますか？すべての版が削除されます。",
-        "deleteInUse": "適用中のため削除できません。",
-        "editTitle": "{{name}} の編集",
-        "editNote": "保存すると版 v{{version}} になります。エージェントには「適用」するまで反映されません。",
-        "saved": "版 v{{version}} として保存しました",
-        "newTitle": "監視ルールの作成",
-        "newDescription": "テンプレートを組み合わせて作成するか、空の状態から作成します。",
-        "fromTemplates": "テンプレートから作成",
-        "fromEmpty": "空から作成",
-        "fromEmptyNote": "内容が空の監視ルールを作成し、編集画面に移ります。",
-        "stepTemplates": "テンプレートの選択",
-        "templatesOrderHint": "選んだ順番が番号で表示されます。衝突した項目は、既定では最初に選んだテンプレートの値になります。",
-        "mergePreview": "組み合わせを確認",
-        "conflicts": "衝突した項目",
-        "conflictsHint": "テンプレートごとに値が異なる項目です。採用するテンプレートを選んでください。",
-        "mergedContent": "組み合わせた内容",
-        "mergedContentNote": "衝突した項目は最初のテンプレートの値で表示しています。作成時には上で選んだ値になります。",
-        "stepName": "名前と説明",
-        "createAndEdit": "作成して編集",
-        "previewFirst": "先に「組み合わせを確認」を行ってください。"
+        "diffSame": "2つの版の内容は同じです"
     },
     "templates": {
         "title": "テンプレート",
@@ -449,19 +343,7 @@
         "builtin": "組み込み",
         "custom": "管理者が作成",
         "descriptionLabel": "説明",
-        "updatedAt": "更新日時",
-        "create": "テンプレートを作成",
-        "createTitle": "テンプレートの作成",
-        "created": "テンプレートを作成しました",
-        "source": "作成元",
-        "source_empty": "空の内容",
-        "source_builtin": "組み込みのテンプレートをコピー",
-        "source_rule": "監視ルールの版から作成",
-        "chooseBuiltin": "コピーする組み込みのテンプレートを選んでください。",
-        "chooseRule": "監視ルールと版を選んでください。",
-        "builtinReadOnly": "組み込みのテンプレートは変更や削除ができません。コピーして新しいテンプレートを作成してください。",
-        "deleteTitle": "テンプレートの削除",
-        "deleteConfirm": "テンプレート {{name}} を削除しますか？"
+        "updatedAt": "更新日時"
     },
     "certificates": {
         "title": "証明書",
@@ -497,45 +379,6 @@
         "remoteAddr": "接続元",
         "count": "回数"
     },
-    "accounts": {
-        "title": "アカウント",
-        "description": "画面にログインするアカウントを管理します。",
-        "create": "アカウントを作成",
-        "createTitle": "アカウントの作成",
-        "created": "アカウントを作成しました",
-        "email": "メールアドレス",
-        "emailHint": "ログイン ID として使います。",
-        "displayName": "表示名",
-        "displayNameHint": "画面に表示する名前です（{{max}} 文字まで）。",
-        "role": "権限",
-        "state": "状態",
-        "enabled": "有効",
-        "disabled": "無効",
-        "lockedUntil": "ロック中（{{date}}まで）",
-        "createdAt": "作成日時",
-        "you": "（自分）",
-        "changeEmail": "メールアドレスの変更",
-        "changeEmailTitle": "{{name}} のメールアドレスの変更",
-        "changeEmailNote": "確認コードなしで、すぐに変更します。このアカウントはすべての端末でログアウトし、信頼済みのブラウザも解除されます。",
-        "changeOwnEmailWarning": "自分のアカウントです。変更するとログアウトしますので、新しいアドレスでログインし直してください。",
-        "emailChanged": "メールアドレスを変更しました",
-        "changeDisplayName": "表示名の変更",
-        "changeDisplayNameTitle": "{{name}} の表示名の変更",
-        "changeRole": "権限の変更",
-        "changeRoleTitle": "{{name}} の権限の変更",
-        "resetPassword": "パスワードの再設定",
-        "resetPasswordTitle": "{{name}} のパスワードの再設定",
-        "passwordReset": "パスワードを再設定しました",
-        "disable": "無効にする",
-        "enable": "有効にする",
-        "disableTitle": "アカウントを無効にする",
-        "enableTitle": "アカウントを有効にする",
-        "disableConfirm": "{{name}} を無効にしますか？このアカウントではログインできなくなります。",
-        "enableConfirm": "{{name}} を有効にしますか？",
-        "deleteTitle": "アカウントの削除",
-        "deleteConfirm": "{{name}} を削除しますか？元に戻せません。",
-        "language": "表示言語"
-    },
     "accountErrors": {
         "emailInvalid": "name@example.com のような 1 つのメールアドレスを入力してください（254 文字まで。空白と \" < > , は使えません）。",
         "displayNameInvalid": "表示名は 1〜64 文字で入力してください（制御文字は使えません）。",
@@ -544,7 +387,6 @@
         "emailDuplicate": "このメールアドレスは、ほかのアカウントで使われています。"
     },
     "password": {
-        "password": "パスワード",
         "current": "現在のパスワード",
         "new": "新しいパスワード",
         "confirm": "新しいパスワード（確認）",
@@ -568,7 +410,11 @@
         "emailCodeExpired": "確認コードは使えなくなりました。もう一度変更を依頼してください。",
         "changePassword": "パスワードの変更",
         "passwordChanged": "パスワードを変更しました",
-        "passwordNote": "変更すると、ほかの端末でのログインは無効になり、信頼済みのブラウザも解除されます。"
+        "passwordNote": "変更すると、ほかの端末でのログインは無効になり、信頼済みのブラウザも解除されます。",
+        "email": "メールアドレス",
+        "displayName": "表示名",
+        "displayNameHint": "画面に表示する名前です（{{max}} 文字まで）。",
+        "role": "権限"
     },
     "guide": {
         "title": "導入の案内",
@@ -578,7 +424,6 @@
         "centralHostname": "セントラルの OS のホスト名",
         "caFingerprint": "独自CAのフィンガープリント",
         "defaultValidDays": "トークンの既定の有効日数",
-        "noCentralHosts": "エージェントの接続先に使うホスト名がまだ設定されていないため、コマンドには <host> と表示しています。システム設定の「サーバー証明書の名前」に、エージェントがセントラルへの接続に使うホスト名または IP アドレスを追加し、<host> の代わりにその名前を使ってください。",
         "days": "{{count}}日",
         "auditd": {
             "title": "auditd が有効で動いていることを確認する",
@@ -646,149 +491,5 @@
         "title": "ページが見つかりません",
         "description": "お探しのページは存在しないか、移動した可能性があります。",
         "back": "ホームへ戻る"
-    },
-    "config": {
-        "title": "システム設定",
-        "description": "セントラルの設定です。",
-        "applyNote": "「即時反映」の項目は保存するとすぐに反映されます。「再起動後に反映」の項目は、セントラルの再起動後に反映されます。",
-        "restart": "再起動後に反映",
-        "restartTitle": "セントラルの再起動後に反映されます",
-        "immediate": "即時反映",
-        "immediateTitle": "保存するとすぐに反映されます",
-        "pending": "再起動待ち",
-        "pendingTitle": "保存した値を反映するには、セントラルを再起動してください",
-        "pendingBody": "保存済みでまだ反映されていない項目: {{items}}",
-        "usingDefault": "既定値",
-        "reset": "既定値に戻す",
-        "undoReset": "戻すのを取り消す",
-        "defaultValue": "既定値: {{value}}",
-        "listHint": "複数の値はカンマで区切ります。",
-        "enabled": "有効",
-        "secretSet": "（設定済み）",
-        "secretNotSet": "（未設定）",
-        "secretClear": "保存したパスワードを削除する",
-        "save": "保存",
-        "discard": "変更を破棄",
-        "saved": "設定を保存しました。",
-        "savedRestart": "設定を保存しました。一部の変更はセントラルの再起動後に反映されます。",
-        "security": {
-            "starttls": "STARTTLS",
-            "tls": "TLS（接続時から）",
-            "none": "なし"
-        },
-        "groups": {
-            "server": "サーバー",
-            "agents": "エージェントとトークン",
-            "sessions": "ログインのセッション",
-            "notify": "通知",
-            "smtp": "SMTP",
-            "other": "その他"
-        },
-        "items": {
-            "web_listen": {
-                "label": "ブラウザ用の待ち受けアドレス",
-                "hint": "ブラウザ画面の IP アドレスとポート（HTTP）。"
-            },
-            "agent_listen": {
-                "label": "エージェントと管理用の待ち受けアドレス",
-                "hint": "エージェント用の IP アドレスとポート（HTTPS）。"
-            },
-            "server_names": {
-                "label": "サーバー証明書の名前",
-                "hint": "エージェントが接続に使うホスト名と IP アドレス。127.0.0.1、::1、localhost は常に含みます。1 分以内に新しいサーバー証明書を発行します。"
-            },
-            "workers": {
-                "label": "ワーカー数",
-                "hint": "同時に処理するリクエストの数（64 まで）。"
-            },
-            "queue_timeout_sec": {
-                "label": "順番待ちの上限（秒）",
-                "hint": "待たせたリクエストは、この時間を過ぎると拒否します。"
-            },
-            "builtin_agent": {
-                "label": "内蔵エージェント",
-                "hint": "セントラル自身のホストを監視します。"
-            },
-            "token_valid_days": {
-                "label": "トークンの有効期間（日）",
-                "hint": "発行と自動更新のトークンの有効期間の既定値。"
-            },
-            "token_renew_before_days": {
-                "label": "トークンを更新する残り日数",
-                "hint": "残りの有効期間がこの日数を下回ると、自動で更新します。"
-            },
-            "default_check_interval_sec": {
-                "label": "確認の間隔の既定値（秒）",
-                "hint": "監視ルールが無いエージェントの確認の間隔。"
-            },
-            "retention_days": {
-                "label": "保存期間（日）",
-                "hint": "これより古い検知と、拒否した接続の記録を削除します。"
-            },
-            "session_remember_days": {
-                "label": "ログインを保持する期間（日）",
-                "hint": "「ログインを保持する」を選んだログインの有効期間（365 まで）。新しいログインから適用します。"
-            },
-            "two_step_trust_days": {
-                "label": "ブラウザを信頼する期間（日）",
-                "hint": "ログイン時の確認コードの入力画面で「このブラウザを信頼する」を選んだブラウザには、この日数の間、コードを求めません（1〜365）。保存するとすぐに反映します。"
-            },
-            "notify_min_interval_min": {
-                "label": "最小間隔（分）",
-                "hint": "通知メールの最小の間隔。"
-            },
-            "notify_dedupe_hours": {
-                "label": "重複を抑える期間（時間）",
-                "hint": "同じエージェントの同じ検知は、この期間内は再び通知しません。"
-            },
-            "notify_max_lines": {
-                "label": "最大行数",
-                "hint": "1 通に含める検知の最大行数。"
-            },
-            "notify_subject_prefix": {
-                "label": "件名の接頭辞",
-                "hint": "件名の先頭に付けます。"
-            },
-            "smtp_host": {
-                "label": "SMTP サーバー",
-                "hint": "空の間は、通知も確認コード（ログインとメールアドレスの変更）も使いません。通知は、サーバー、送信元、宛先がそろったときだけ送ります。"
-            },
-            "smtp_port": {
-                "label": "ポート",
-                "hint": "既定は暗号化の方式により 587、465、25。"
-            },
-            "smtp_security": {
-                "label": "暗号化",
-                "hint": "接続の暗号化の方式。"
-            },
-            "smtp_auth": {
-                "label": "認証",
-                "hint": "SMTP サーバーにログインします。"
-            },
-            "smtp_username": {
-                "label": "ユーザー名",
-                "hint": "認証のユーザー名。"
-            },
-            "smtp_password": {
-                "label": "パスワード",
-                "hint": "変更する場合だけ入力します。保存した値は表示しません。"
-            },
-            "smtp_from": {
-                "label": "送信元",
-                "hint": "送信元のアドレスです。通知と確認コードの送信に必要です。"
-            },
-            "smtp_to": {
-                "label": "宛先",
-                "hint": "宛先のアドレス。"
-            },
-            "smtp_timeout_sec": {
-                "label": "タイムアウト（秒）",
-                "hint": "SMTP の接続のタイムアウト。"
-            },
-            "smtp_helo_name": {
-                "label": "HELO 名",
-                "hint": "HELO/EHLO で送る名前。空なら localhost。"
-            }
-        }
     }
 }

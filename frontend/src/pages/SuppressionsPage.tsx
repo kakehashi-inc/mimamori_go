@@ -1,25 +1,16 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { deleteSuppression, listSuppressions } from '../api/client';
+import { listSuppressions } from '../api/client';
 import { Button } from '../components/Button';
-import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PageHeader } from '../components/PageHeader';
+import { Slot } from '../components/Slot';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
-import { SuppressionFormModal } from '../components/SuppressionFormModal';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
-import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
-import type { Suppression } from '../types';
 import { formatDateTime, formatOperator } from '../utils/format';
 
 export function SuppressionsPage() {
     const { t } = useTranslation();
-    const { isAdmin } = useAuth();
-    const { showToast } = useToast();
     const { data, error, loading, reload } = useApi(listSuppressions, []);
-    const [createOpen, setCreateOpen] = useState(false);
-    const [target, setTarget] = useState<Suppression | null>(null);
 
     const any = <span className='text-muted'>{t('suppressions.any')}</span>;
 
@@ -33,11 +24,7 @@ export function SuppressionsPage() {
                         <Button icon='refresh' onClick={reload} busy={loading && !!data}>
                             {t('common.reload')}
                         </Button>
-                        {isAdmin && (
-                            <Button variant='primary' icon='add' onClick={() => setCreateOpen(true)}>
-                                {t('suppressions.create')}
-                            </Button>
-                        )}
+                        <Slot name='suppressions.headerActions' reload={reload} />
                     </>
                 }
             />
@@ -58,7 +45,7 @@ export function SuppressionsPage() {
                                 <Th>{t('detections.target')}</Th>
                                 <Th>{t('suppressions.comment')}</Th>
                                 <Th>{t('suppressions.createdAt')}</Th>
-                                {isAdmin && <Th />}
+                                <Slot name='suppressions.headEnd' />
                             </THead>
                             <TBody>
                                 {data.map(s => (
@@ -75,18 +62,7 @@ export function SuppressionsPage() {
                                             {formatDateTime(s.created_at)}
                                             <div className='text-xs text-muted'>{formatOperator(s.created_by)}</div>
                                         </Td>
-                                        {isAdmin && (
-                                            <Td className='text-right'>
-                                                <Button
-                                                    size='sm'
-                                                    variant='danger'
-                                                    icon='delete'
-                                                    onClick={() => setTarget(s)}
-                                                >
-                                                    {t('common.delete')}
-                                                </Button>
-                                            </Td>
-                                        )}
+                                        <Slot name='suppressions.rowEnd' suppression={s} reload={reload} />
                                     </Tr>
                                 ))}
                             </TBody>
@@ -94,32 +70,6 @@ export function SuppressionsPage() {
                     )
                 )}
             </div>
-            {isAdmin && (
-                <>
-                    <SuppressionFormModal
-                        open={createOpen}
-                        onClose={() => setCreateOpen(false)}
-                        onCreated={() => {
-                            showToast(t('suppressions.created'));
-                            reload();
-                        }}
-                    />
-                    <ConfirmDialog
-                        open={target !== null}
-                        title={t('suppressions.deleteTitle')}
-                        message={t('suppressions.deleteConfirm')}
-                        confirmLabel={t('common.delete')}
-                        danger
-                        onClose={() => setTarget(null)}
-                        onConfirm={async () => {
-                            if (!target) return;
-                            await deleteSuppression(target.id);
-                            showToast(t('common.deleted'));
-                            reload();
-                        }}
-                    />
-                </>
-            )}
         </>
     );
 }
