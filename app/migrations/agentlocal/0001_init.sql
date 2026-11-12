@@ -17,7 +17,8 @@ CREATE TABLE outbox (
     created_at   INTEGER NOT NULL,
     payload      TEXT    NOT NULL,
     alert_count  INTEGER NOT NULL DEFAULT 0,
-    normal_count INTEGER NOT NULL DEFAULT 0
+    normal_count INTEGER NOT NULL DEFAULT 0,
+    command_bytes INTEGER NOT NULL DEFAULT 0
 );
 -- +goose StatementEnd
 

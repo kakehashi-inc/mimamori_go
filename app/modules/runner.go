@@ -135,13 +135,16 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 	return res, nil
 }
 
-// limitedBuffer keeps at most limit bytes and discards the rest.
+// limitedBuffer keeps at most limit bytes and discards the rest; total counts
+// every byte written.
 type limitedBuffer struct {
 	buf   []byte
 	limit int64
+	total int64
 }
 
 func (b *limitedBuffer) Write(p []byte) {
+	b.total += int64(len(p))
 	if room := b.limit - int64(len(b.buf)); room > 0 {
 		if int64(len(p)) > room {
 			p = p[:room]

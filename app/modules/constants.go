@@ -195,4 +195,7 @@ const (
 	// CommandRequestExpiry is how long a manual run request waits for
 	// delivery before it expires.
 	CommandRequestExpiry = 24 * time.Hour
+	// MaxOutboxCommandBytes bounds the queued reports of command set runs on
+	// the agent (their console output is dropped first, oldest first).
+	MaxOutboxCommandBytes = 64 << 20
 )

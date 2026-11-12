@@ -2,18 +2,22 @@ package models
 
 // OutboxItem is a row of the outbox table of the agent's local database: a
 // report not yet delivered to the central (JSON of modules.ReportRequest).
+// CommandBytes is the size of the payload when it carries command set runs
+// (0 otherwise); their total is bounded.
 type OutboxItem struct {
-	ID          int64
-	CreatedAt   int64
-	Payload     string
-	AlertCount  int
-	NormalCount int
+	ID           int64
+	CreatedAt    int64
+	Payload      string
+	AlertCount   int
+	NormalCount  int
+	CommandBytes int64
 }
 
 // InsertOutbox queues a report.
 func InsertOutbox(db Execer, o *OutboxItem) error {
 	o.CreatedAt = Now()
-	res, err := db.Exec(`INSERT INTO outbox (created_at, payload, alert_count, normal_count) VALUES (?, ?, ?, ?)`, o.CreatedAt, o.Payload, o.AlertCount, o.NormalCount)
+	res, err := db.Exec(`INSERT INTO outbox (created_at, payload, alert_count, normal_count, command_bytes) VALUES (?, ?, ?, ?, ?)`,
+		o.CreatedAt, o.Payload, o.AlertCount, o.NormalCount, o.CommandBytes)
 	if err != nil {
 		return err
 	}
@@ -23,19 +27,21 @@ func InsertOutbox(db Execer, o *OutboxItem) error {
 
 // ListOutbox returns queued reports, oldest first.
 func ListOutbox(db Execer) ([]*OutboxItem, error) {
-	rows, err := db.Query(`SELECT id, created_at, payload, alert_count, normal_count FROM outbox ORDER BY id`)
+	rows, err := db.Query(`SELECT id, created_at, payload, alert_count, normal_count, command_bytes FROM outbox ORDER BY id`)
 	return collect(rows, err, func(s rowScanner) (*OutboxItem, error) {
 		o := &OutboxItem{}
-		if err := s.Scan(&o.ID, &o.CreatedAt, &o.Payload, &o.AlertCount, &o.NormalCount); err != nil {
+		if err := s.Scan(&o.ID, &o.CreatedAt, &o.Payload, &o.AlertCount, &o.NormalCount, &o.CommandBytes); err != nil {
 			return nil, err
 		}
 		return o, nil
 	})
 }
 
-// UpdateOutbox rewrites a queued report (after dropping detections).
+// UpdateOutbox rewrites a queued report (after dropping detections or
+// command output).
 func UpdateOutbox(db Execer, o *OutboxItem) error {
-	_, err := db.Exec(`UPDATE outbox SET payload = ?, alert_count = ?, normal_count = ? WHERE id = ?`, o.Payload, o.AlertCount, o.NormalCount, o.ID)
+	_, err := db.Exec(`UPDATE outbox SET payload = ?, alert_count = ?, normal_count = ?, command_bytes = ? WHERE id = ?`,
+		o.Payload, o.AlertCount, o.NormalCount, o.CommandBytes, o.ID)
 	return err
 }
 
@@ -56,5 +62,13 @@ func OutboxDetectionCount(db Execer) int {
 func CountOutbox(db Execer) int {
 	var n int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&n)
+	return n
+}
+
+// OutboxCommandBytes returns the size of the queued reports that carry
+// command set runs.
+func OutboxCommandBytes(db Execer) int64 {
+	var n int64
+	_ = db.QueryRow(`SELECT COALESCE(SUM(command_bytes), 0) FROM outbox`).Scan(&n)
 	return n
 }

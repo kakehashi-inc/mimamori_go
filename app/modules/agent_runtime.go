@@ -52,12 +52,31 @@ type AgentRuntime struct {
 	// lastOK is the result of the last successful application, restored when
 	// the central assigns the running version again after a failed one.
 	lastOK *ApplyResult
+
+	// stopping is the stop check given to Run (also used while a command
+	// runs); lastMonitor is the start of the last monitoring step.
+	stopping    func() bool
+	lastMonitor time.Time
+	// Command sets: the stored definitions, the valid sets by ID, the manual
+	// requests waiting to run (oldest first) and the requests answered in
+	// this process.
+	cmdDefs     *CommandDefinitions
+	cmdValid    map[int64]*CommandSetDef
+	cmdRequests []CommandRunRequest
+	cmdAcked    map[int64]bool
+	// clock, loc, cmdKillGrace and cmdOutboxLimit replace the time, the
+	// host's time zone, the grace before SIGKILL and MaxOutboxCommandBytes
+	// in tests.
+	clock          func() time.Time
+	loc            *time.Location
+	cmdKillGrace   time.Duration
+	cmdOutboxLimit int64
 }
 
 // NewAgentRuntime loads the stored state.
 func NewAgentRuntime(db *sql.DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
 	rt := &AgentRuntime{DB: db, Transport: tr, Logger: logger,
-		defaultInterval: DefaultCheckIntervalSec}
+		defaultInterval: DefaultCheckIntervalSec, cmdValid: map[int64]*CommandSetDef{}, cmdAcked: map[int64]bool{}}
 	if v := models.GetLocalState(db, stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
@@ -71,6 +90,7 @@ func NewAgentRuntime(db *sql.DB, tr AgentTransport, logger *log.Logger) *AgentRu
 			rt.lastApply = &a
 		}
 	}
+	rt.loadCommandDefinitions()
 	return rt
 }
 
@@ -102,29 +122,76 @@ func (rt *AgentRuntime) ReapplyStored() {
 // and returns false when a stop was requested meanwhile. The stop request is
 // checked between steps of a cycle; a running cycle always completes and
 // saves its state before returning.
+//
+// Each pass runs the monitoring step when the check interval has passed,
+// then the command sets that are due, one at a time (manual requests first,
+// then schedules by due time), and waits until the next monitoring step or
+// the next scheduled time, whichever comes first. While a command runs, its
+// wait loop runs the monitoring step when it is due; a stop ends the running
+// command (SIGTERM, grace, SIGKILL) and its run is still reported.
 func (rt *AgentRuntime) Run(wait func(time.Duration) bool, stopping func() bool) {
+	rt.stopping = stopping
 	rt.ReapplyStored()
+	rt.recoverInterruptedRuns()
 	for {
 		if stopping() {
 			return
 		}
-		start := time.Now()
-		rt.Cycle()
-		elapsed := time.Since(start)
-		next := rt.Interval() - elapsed
-		if next < time.Second {
-			next = time.Second
+		if rt.monitorDue() {
+			rt.monitorStep()
 		}
-		if !wait(next) {
+		for !stopping() {
+			job := rt.nextCommandJob()
+			if job == nil || !rt.runCommandJob(job) {
+				break
+			}
+			if rt.monitorDue() && !stopping() {
+				rt.monitorStep()
+			}
+		}
+		if stopping() {
+			return
+		}
+		if !wait(rt.nextWait()) {
 			return
 		}
 	}
 }
 
-// Cycle performs one periodic processing. A stop request does not interrupt
-// it: the cycle completes and saves its state first.
+// monitorDue reports whether the check interval has passed since the start
+// of the last monitoring step.
+func (rt *AgentRuntime) monitorDue() bool {
+	return rt.lastMonitor.IsZero() || rt.now().Sub(rt.lastMonitor) >= rt.Interval()
+}
+
+// nextWait is the time until the next monitoring step or the next scheduled
+// time of a command set, whichever comes first.
+func (rt *AgentRuntime) nextWait() time.Duration {
+	now := rt.now()
+	next := rt.lastMonitor.Add(rt.Interval()).Sub(now)
+	if next < time.Second {
+		next = time.Second
+	}
+	if due, ok := rt.nextScheduleDue(); ok {
+		if d := due.Sub(now); d < next {
+			next = max(d, commandPollMax)
+		}
+	}
+	return next
+}
+
+// Cycle performs one monitoring step.
 func (rt *AgentRuntime) Cycle() {
+	rt.monitorStep()
+}
+
+// monitorStep performs one periodic processing: sync, audit collection, file
+// scans and the report. It is also called from the wait loop of a running
+// command. A stop request does not interrupt it: the step completes and
+// saves its state first.
+func (rt *AgentRuntime) monitorStep() {
 	cycleStart := time.Now()
+	rt.lastMonitor = rt.now()
 	rt.sync()
 
 	var detections []DetectionReport
@@ -139,10 +206,11 @@ func (rt *AgentRuntime) Cycle() {
 		}
 	}
 	rt.report(detections)
+	rt.pruneCommandExecutions()
 }
 
 func (rt *AgentRuntime) sync() {
-	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.lastApply}
+	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.lastApply, CommandSig: rt.commandSignature()}
 	if rt.rule != nil {
 		req.RuleID, req.RuleVersion = rt.rule.ID, rt.rule.Version
 	}
@@ -160,6 +228,12 @@ func (rt *AgentRuntime) sync() {
 	if rt.Config != nil {
 		rt.saveConfigUpdates(resp)
 	}
+	// Definitions and requests are only stored here; they are used when no
+	// set runs (a running set keeps the definition it started with).
+	if resp.CommandSets != nil {
+		rt.storeCommandDefinitions(resp.CommandSets)
+	}
+	rt.receiveCommandRequests(resp.CommandRequests)
 	switch {
 	case resp.Rule == nil:
 	case rt.rule != nil && resp.Rule.ID == rt.rule.ID && resp.Rule.Version == rt.rule.Version:
@@ -483,8 +557,9 @@ func countCategories(ds []DetectionReport) (alerts, normals int) {
 
 // enqueue stores a report. Only the newest report needs the host
 // information, so it is removed from the queued ones, and a queued report
-// with nothing else to deliver (no detections, no dropped count and the same
-// application result as the new one) is replaced by the new report.
+// with nothing else to deliver (no detections, no dropped count, nothing
+// about command sets and the same application result as the new one) is
+// replaced by the new report.
 func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
 	b, err := json.Marshal(req)
 	if err != nil {
@@ -506,7 +581,8 @@ func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
 			continue
 		}
 		oldApply, _ := json.Marshal(old.Apply)
-		if len(old.Detections) == 0 && old.Dropped == 0 && string(oldApply) == string(apply) {
+		if len(old.Detections) == 0 && old.Dropped == 0 && string(oldApply) == string(apply) &&
+			len(old.CommandRuns) == 0 && len(old.CommandRequestAcks) == 0 && old.CommandApply == nil {
 			if err := models.DeleteOutbox(tx, it.ID); err != nil {
 				return err
 			}
@@ -519,6 +595,7 @@ func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
 				return err
 			}
 			it.Payload = string(ob)
+			it.CommandBytes = commandBytesOf(&old, len(ob))
 			if err := models.UpdateOutbox(tx, it); err != nil {
 				return err
 			}
@@ -567,6 +644,7 @@ func (rt *AgentRuntime) enforceOutboxLimit() {
 			req.Detections = kept
 			b, _ := json.Marshal(&req)
 			it.Payload = string(b)
+			it.CommandBytes = commandBytesOf(&req, len(b))
 			it.AlertCount, it.NormalCount = countCategories(kept)
 			_ = models.UpdateOutbox(rt.DB, it)
 		}
