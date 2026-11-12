@@ -97,6 +97,23 @@ func MarkDetectionSuppressed(db Execer, id, suppressionID int64) error {
 		suppressionID, NotifyPending, NotifySkipped, id)
 }
 
+// MoveDetectionSuppression records that an unacknowledged detection
+// suppressed by fromID is now suppressed by toID (another suppression that
+// matches it). It returns sql.ErrNoRows when the row changed meanwhile.
+func MoveDetectionSuppression(db Execer, id, fromID, toID int64) error {
+	return execOne(db, `UPDATE detections SET suppression_id = ? WHERE id = ? AND suppressed = 1 AND suppression_id = ? AND acknowledged_at = 0`,
+		toID, id, fromID)
+}
+
+// ReleaseDetectionSuppression makes an unacknowledged detection suppressed by
+// suppressionID not suppressed again, with the given notification state.
+// It returns sql.ErrNoRows when the row changed meanwhile.
+func ReleaseDetectionSuppression(db Execer, id, suppressionID int64, notifyState string) error {
+	return execOne(db, `UPDATE detections SET suppressed = 0, suppression_id = 0, notify_state = ?
+		WHERE id = ? AND suppressed = 1 AND suppression_id = ? AND acknowledged_at = 0`,
+		notifyState, id, suppressionID)
+}
+
 // GetDetection returns one detection.
 func GetDetection(db Execer, id int64) (*Detection, error) {
 	return scanDetection(db.QueryRow(`SELECT `+detectionCols+` FROM detections WHERE id = ?`, id))

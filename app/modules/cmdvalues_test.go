@@ -218,7 +218,6 @@ func TestCommandPatternNumbering(t *testing.T) {
 		{"scoped x option", "(?x: (?P<a>\\w) # (\n)(\\w)\\2", `abb acd`, ev(`a`, `a`)},
 		{"# without x is a character", `#(?P<a>\w)(\w)\2`, `#abb #cd`, ev(`a`, `a`)},
 		{"local x option ends with its group", "(?x:(?P<a>\\w) # (\n) #(\\w)\\2", `a #bb a #cd`, ev(`a`, `a`)},
-		{"\\Q( is Q and a group", `(?P<a>\w)\Q(\E)\1`, `zQEz zQEE`, ev(`a`, `z`)},
 		{"control character \\c[", `\c[(?P<a>\w)(\w)\2`, "\u001babb \u001bacd", ev(`a`, `a`)},
 		{"POSIX class with a parenthesis", `[[:digit:](](?P<a>\w)(\w)\2`, `1abb (cdd xabb`, ev(`a`, `a`, `a`, `c`)},
 		{"inline option off", `(?x)(?P<a>\w)(?-x)#(\w)\2`, `a#bb a#cd`, ev(`a`, `a`)},
@@ -281,6 +280,13 @@ func TestCommandPatternRefused(t *testing.T) {
 		// Python reads a backslash and the line break as one character, so
 		// that its comment goes on over the next line.
 		{"x comment that ends with a backslash", "(?x)(?P<a>a) #c\\\n(b)\\2"},
+		// The library does not implement quoting with \Q...\E and would read
+		// the letters Q and E.
+		{"quoting", `(?P<a>\Qa.b\E)`},
+		{"\\Q alone", `(?P<a>x\Q)`},
+		{"\\E alone", `(?P<a>x\E)`},
+		{"\\Q in a class", `(?P<a>[\Q])`},
+		{"\\E in a class", `(?P<a>[a-c\E])`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,6 +304,16 @@ func TestCommandPatternRefused(t *testing.T) {
 
 // TestCommandPatternMessages checks the messages of refused patterns: they
 // name the pattern as written (not the rewritten one) and the reason.
+// TestCommandPatternLiteralQE checks that Q and E after an escaped
+// backslash, or as plain letters, are not taken for quoting.
+func TestCommandPatternLiteralQE(t *testing.T) {
+	for _, p := range []string{`(?P<a>\\Q)`, `(?P<a>[\\E])`, `(?P<a>QE)`, `(?x)(?P<a>a) # \Q in a comment` + "\n"} {
+		if _, err := CompileCommandPattern(p); err != nil {
+			t.Errorf("%s refused: %v", p, err)
+		}
+	}
+}
+
 func TestCommandPatternMessages(t *testing.T) {
 	tests := []struct{ pattern, want string }{
 		{`(?P<a>(x)`, "invalid regular expression: error parsing regexp: missing closing ) in `(?P<a>(x)`"},
@@ -310,6 +326,8 @@ func TestCommandPatternMessages(t *testing.T) {
 		{`(?<1>a)(?P<b>b)`, `numbered groups such as (?<1>...) are not supported`},
 		{`(?P<a>a)(b)|(?P<a>c)\2`, `group numbers are ambiguous because the name "a" is used for more than one group`},
 		{`(\d+)%`, `must have at least one named group`},
+		{`(?P<a>\Qa.b\E)`, `\Q is not supported (quoting with \Q...\E); escape each special character with a backslash instead`},
+		{`(?P<a>[x\E])`, `\E is not supported`},
 	}
 	for _, tc := range tests {
 		_, err := CompileCommandPattern(tc.pattern)
@@ -333,7 +351,6 @@ func TestCommandPatternKeepsValuesWithoutNumbers(t *testing.T) {
 		"(?x) (?P<a>\\w)  # a ( comment (\n (\\w)",
 		"(?x:(?P<a>\\w) # (\n) #(\\w)",
 		`\c[(?P<a>\w)(\w)`,
-		`Q\((?P<a>\w)\Q(\E)\)`,
 		`(?<q>')?(?<w>\w+)(?(q)')`,
 		`(?P<w>\w+) \k<w>`,
 		`(?:(?P<w>\w)\k<w>)+`,

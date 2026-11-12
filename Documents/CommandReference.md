@@ -40,7 +40,7 @@ Commands for the central. Run them on the central host.
 | --- | --- |
 | `central start` | Start the central (browser screens, agent API, management API and the built-in agent). Stops with SIGTERM or SIGINT |
 | `central stop [--timeout DURATION]` | Stop the running central and wait until it has stopped (default 120s) |
-| `central status` | Show whether the central is running, its listen addresses and workers. Exit code 3 when it is not running |
+| `central status` | Show whether the central is running, its listen addresses and workers. While it runs, the values it started with are shown, and a saved value that differs is marked, for example `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)`. When it is not running, the saved values are shown. Exit code 3 when it is not running |
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. `ADDRESS` is the e-mail address used to log in; `NAME` is the name shown on the screens. `--language` defaults to `auto`. Only while no administrator exists. The password is read from the terminal or the first line of standard input |
 | `central reset-password --email ADDRESS` | Reset the password of the administrator with this e-mail address (case is ignored), enable the account and invalidate its sessions, trusted browsers and pending verification codes |
 | `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
@@ -59,7 +59,7 @@ Commands for the agent. Run them on each monitored host.
 | Command | Description |
 | --- | --- |
 | `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped) |
-| `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token |
+| `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token. Without `--port` the current port is kept |
 | `agent start` | Start the agent. Stops with SIGTERM or SIGINT |
 | `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has finished its cycle (default 300s) |
 | `agent status` | Show whether the agent is running, the central, the token, the applied rule and unsent reports. Exit code 3 when it is not running |
@@ -118,7 +118,7 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error. `--agent` 0 or less means all agents. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 |
 | `ctl detections show AGENT_ID ID` | Show a detection |
-| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be integers |
+| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be positive integers written with digits only, with nothing after them. When any of the given detections does not exist, nothing is acknowledged, the missing ones are named, and the exit code is 2 (as for any object that does not exist). Detections that are already acknowledged count as existing |
 
 ### suppressions
 
@@ -174,7 +174,7 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | `ctl accounts email ID ADDRESS` | Change the e-mail address at once, without a verification code. The account's sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts display-name ID NAME` | Change the display name (sessions are kept) |
 | `ctl accounts role ID admin\|viewer` | Change the role (the account's sessions are invalidated) |
-| `ctl accounts notify ID on\|off` | Choose whether the account receives notification mails (detection notifications). New accounts are `off`. A disabled account keeps its choice but receives nothing while disabled. The addresses of `smtp.to` receive the mails in addition. Sessions are kept |
+| `ctl accounts notify ID on\|off` | Choose whether the account receives notification mails (detection notifications). New accounts are `off`. A disabled account keeps its choice but receives nothing while disabled. Sessions are kept |
 | `ctl accounts password ID` | Reset the password (from standard input). The account's sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts disable ID` | Disable an account. Its sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts enable ID` | Enable an account |

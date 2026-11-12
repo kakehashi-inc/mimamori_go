@@ -40,7 +40,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `central start` | セントラルを起動する（ブラウザ画面、エージェント用の API、管理用の API、内蔵エージェント）。SIGTERM または SIGINT で終了する |
 | `central stop [--timeout DURATION]` | 起動中のセントラルを停止し、停止するまで待つ（既定 120s） |
-| `central status` | セントラルが稼働中か、待ち受けとワーカー数を表示する。停止中は終了コード 3 |
+| `central status` | セントラルが稼働中か、待ち受けとワーカー数を表示する。稼働中は起動時の値（実際に使っている値）を表示し、保存済みの値が違う場合は `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)` のように併記する。停止中は保存済みの値を表示する。停止中は終了コード 3 |
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する。`ADDRESS` はログインに使うメールアドレス、`NAME` は画面に表示する名前。`--language` の既定は `auto`。管理者が 1 人もいない場合だけ。パスワードは端末または標準入力の 1 行目から読む |
 | `central reset-password --email ADDRESS` | このメールアドレス（大文字と小文字は区別しない）の管理者のパスワードを再設定し、アカウントを有効にして、セッション、信頼済みのブラウザ、送信済みの確認コードを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |
@@ -59,7 +59,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ） |
-| `agent set-central --host HOST [--port PORT]` | 初期化済みのエージェントの接続先（セントラルのホスト名とポート）を変える。エージェントの停止中だけ使え、新しい接続先に今のトークンで接続できた場合だけ保存する |
+| `agent set-central --host HOST [--port PORT]` | 初期化済みのエージェントの接続先（セントラルのホスト名とポート）を変える。エージェントの停止中だけ使え、新しい接続先に今のトークンで接続できた場合だけ保存する。`--port` を省略すると今のポートのままにする |
 | `agent start` | エージェントを起動する。SIGTERM または SIGINT で終了する |
 | `agent stop [--timeout DURATION]` | 起動中のエージェントを停止し、その回の処理を終えるまで待つ（既定 300s） |
 | `agent status` | エージェントが稼働中か、接続先、トークン、適用中の監視ルール、未送信の報告を表示する。停止中は終了コード 3 |
@@ -118,7 +118,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
-| `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は整数 |
+| `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は数字だけで書いた正の整数で、後ろに何も付けない。指定した検知のどれかが存在しない場合は、どれも確認済みにせず、存在しないものを示して終了コード 2 で終わる（他のコマンドで対象が存在しない場合と同じ）。確認済みの検知は存在するものとして扱う |
 
 ### suppressions
 
@@ -174,7 +174,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `ctl accounts email ID ADDRESS` | メールアドレスを確認コードなしで即時に変える。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts display-name ID NAME` | 表示名を変える（セッションはそのまま） |
 | `ctl accounts role ID admin\|viewer` | 権限を変える（そのアカウントのセッションは無効になる） |
-| `ctl accounts notify ID on\|off` | そのアカウントが通知メール（検知の通知）を受け取るかどうかを選ぶ。作成時は `off`。無効にしたアカウントは選択を保ったまま、無効の間は受け取らない。`smtp.to` のアドレスにも追加で送る。セッションはそのまま |
+| `ctl accounts notify ID on\|off` | そのアカウントが通知メール（検知の通知）を受け取るかどうかを選ぶ。作成時は `off`。無効にしたアカウントは選択を保ったまま、無効の間は受け取らない。セッションはそのまま |
 | `ctl accounts password ID` | パスワードを再設定する（標準入力から）。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts disable ID` | アカウントを無効にする。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts enable ID` | アカウントを有効にする |

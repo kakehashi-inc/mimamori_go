@@ -287,10 +287,12 @@ func (c *AgentConfig) applySyncResponse(resp *SyncResponse) {
 }
 
 // AgentSetCentral changes the central host (and port) of an initialized
-// agent. The agent must be stopped. The new address is saved only after a
-// sync with it succeeded (the token and the trusted CAs are kept).
+// agent. The agent must be stopped. port 0 keeps the stored port. The new
+// address is saved only after a sync with it succeeded (the token and the
+// trusted CAs are kept).
 func AgentSetCentral(dataDir, host string, port int) error {
-	if err := ValidateCentral(host, port); err != nil {
+	// The stored port is valid already, so a kept port is checked as 1.
+	if err := ValidateCentral(host, max(port, 1)); err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
 	dbPath := filepath.Join(dataDir, AgentLocalDBFileName)
@@ -312,7 +314,10 @@ func AgentSetCentral(dataDir, host string, port int) error {
 		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}
 	prev := cfg.CentralAddress()
-	cfg.CentralHost, cfg.CentralPort = host, port
+	cfg.CentralHost = host
+	if port != 0 {
+		cfg.CentralPort = port
+	}
 	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())

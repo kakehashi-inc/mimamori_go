@@ -108,6 +108,16 @@ func startCentral() error {
 		nextTick = time.Now().Add(modules.PeriodicTick)
 		return c.periodicTasks
 	}
+	// central status shows these values while a saved change waits for a
+	// restart.
+	if err := modules.SaveRunningConfig(db, cfg); err != nil {
+		logger.Printf("recording the start values: %v", err)
+	}
+	defer func() {
+		if err := modules.ClearRunningConfig(db); err != nil {
+			logger.Printf("clearing the start values: %v", err)
+		}
+	}()
 	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, workers %d",
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen, cfg.Workers)
 	// Nothing about the built-in agent is logged while it is disabled.

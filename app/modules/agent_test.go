@@ -268,3 +268,70 @@ func TestScanFilesNewRootAndFirstScan(t *testing.T) {
 		t.Fatalf("file in a new allowed root: %+v", out)
 	}
 }
+
+// agent set-central without a port keeps the stored port; with a port it
+// uses that port.
+func TestAgentSetCentralKeepsPort(t *testing.T) {
+	ca, err := GenerateCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port := fakeCentral(t, ca, []string{ca.CertPEM}, http.StatusOK)
+	MigrationsFS = os.DirFS("../..")
+	dir := t.TempDir()
+	db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stored host does not answer; the stored port is the fake central's.
+	cfg := &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: port, Token: "tok", CAPEMs: []string{ca.CertPEM}}
+	if err := cfg.Save(db); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	load := func() *AgentConfig {
+		t.Helper()
+		db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		c, err := LoadAgentConfig(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+
+	if err := AgentSetCentral(dir, host, 0); err != nil {
+		t.Fatalf("set-central without a port: %v", err)
+	}
+	if c := load(); c.CentralHost != host || c.CentralPort != port {
+		t.Fatalf("after set-central without a port: %s:%d, want %s:%d", c.CentralHost, c.CentralPort, host, port)
+	}
+
+	// A given port is used: a port nothing listens on fails and changes
+	// nothing.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	if err := AgentSetCentral(dir, host, closed); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("set-central to a closed port: %v", err)
+	}
+	if c := load(); c.CentralPort != port {
+		t.Fatalf("port changed by a failed set-central: %d", c.CentralPort)
+	}
+	if err := AgentSetCentral(dir, host, port); err != nil {
+		t.Fatalf("set-central with the port: %v", err)
+	}
+
+	// The command line: --port omitted keeps the port, --port 0 is refused.
+	zero := 0
+	var ee *ExitError
+	if err := (&AgentSetCentralCmd{Host: host, Port: &zero}).Run(); !errors.As(err, &ee) || ee.Code != ExitArgument {
+		t.Fatalf("--port 0: %v", err)
+	}
+}

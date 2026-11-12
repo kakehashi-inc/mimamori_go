@@ -133,16 +133,15 @@ func (c *core) notify(now time.Time) {
 }
 
 // notificationRecipients returns the current recipients of notification
-// mails: the enabled accounts chosen as recipients and the additional
-// addresses of smtp.to, without duplicates. On a database error it returns
-// none, so nothing is sent until the next try.
+// mails: the addresses of the enabled accounts chosen as recipients. On a
+// database error it returns none, so nothing is sent until the next try.
 func (c *core) notificationRecipients() []string {
 	accounts, err := models.ListNotifyEmails(c.db)
 	if err != nil {
 		c.logger.Printf("notification recipients: %v", err)
 		return nil
 	}
-	return c.conf().SMTP.NotificationRecipients(accounts)
+	return accounts
 }
 
 func (c *core) composeNotification(now time.Time) {

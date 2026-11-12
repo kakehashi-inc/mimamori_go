@@ -100,7 +100,6 @@ func TestCentralConfigValidation(t *testing.T) {
 		"server_names":            {"bad_name!", "a b", "http://x", "a.example.com:9080", "*.example.com", "a\nb"},
 		"smtp.host":               {"http://x", "a b"},
 		"smtp.from":               {"not mail", "Name <a@example.com>", "a@example.com,b@example.com"},
-		"smtp.to":                 {"bad", "a b@example.com"},
 		"smtp.helo_name":          {"a\rb"},
 		"smtp.username":           {"a\x00b"},
 		"token_valid_days":        {"30"},
@@ -121,7 +120,6 @@ func TestCentralConfigValidation(t *testing.T) {
 		"retention_days": "36500",
 		"smtp.host":      "Mail.Example.com",
 		"smtp.from":      "a@example.com",
-		"smtp.to":        "a@example.com, b@example.com,,c@example.com",
 		"smtp.helo_name": "",
 		"server_names":   "2001:DB8::1, ::ffff:192.0.2.10,Central.Example.com",
 	}
@@ -136,9 +134,6 @@ func TestCentralConfigValidation(t *testing.T) {
 	}
 	if got := strings.Join(cfg.ServerNames, ","); got != "2001:db8::1,192.0.2.10,central.example.com" {
 		t.Errorf("server_names stored as %q", got)
-	}
-	if got := strings.Join(cfg.SMTP.To, ","); got != "a@example.com,b@example.com,c@example.com" {
-		t.Errorf("smtp.to stored as %q", got)
 	}
 }
 
@@ -282,11 +277,99 @@ func TestSendMailLoginWithoutEncryption(t *testing.T) {
 	}()
 	port := ln.Addr().(*net.TCPAddr).Port
 	cfg := SMTPConfig{Host: "127.0.0.1", Port: port, Security: "none", Auth: true, Username: "user", Password: "pass",
-		From: "a@example.com", To: []string{"b@example.com"}, TimeoutSec: 10}
-	if err := SendMailTo(cfg, cfg.To, "subject", "body"); err != nil {
+		From: "a@example.com", TimeoutSec: 10}
+	if err := SendMailTo(cfg, []string{"b@example.com"}, "subject", "body"); err != nil {
 		t.Fatalf("SendMailTo: %v", err)
 	}
 	if got := <-result; !strings.Contains(got, "AUTH LOGIN") {
 		t.Fatalf("LOGIN not used: %s", got)
+	}
+}
+
+// TestRemovedConfigItemIgnored checks that a value of smtp.to saved by an
+// earlier version is ignored without error and that the name is refused like
+// any unknown name.
+func TestRemovedConfigItemIgnored(t *testing.T) {
+	MigrationsFS = os.DirFS("../..")
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := models.SetSetting(db, configKeyPrefix+"smtp.to", "not a mail address"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCentralConfig(db); err != nil {
+		t.Fatalf("stored smtp.to not ignored: %v", err)
+	}
+	if _, stored, err := CentralConfigState(db); err != nil || stored["smtp.to"] {
+		t.Fatalf("state: %v %v", stored, err)
+	}
+	if _, err := ApplyCentralConfigChanges(db, map[string]string{"retention_days": "30"}, nil); err != nil {
+		t.Fatalf("change with a stored smtp.to: %v", err)
+	}
+	if _, err := ApplyCentralConfigChanges(db, map[string]string{"smtp.to": "a@example.com"}, nil); err == nil {
+		t.Fatal("smtp.to accepted")
+	}
+	if _, err := FindConfigField("smtp.to"); err == nil {
+		t.Fatal("smtp.to still defined")
+	}
+}
+
+// TestRunningConfigStatus checks the record of the start values and the
+// text central status prints from it.
+func TestRunningConfigStatus(t *testing.T) {
+	MigrationsFS = os.DirFS("../..")
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if LoadRunningConfig(db) != nil {
+		t.Fatal("record without a start")
+	}
+	if _, err := ApplyCentralConfigChanges(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "workers": "2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	started, err := LoadCentralConfig(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRunningConfig(db, started); err != nil {
+		t.Fatal(err)
+	}
+	// A change saved while running waits for a restart.
+	if _, err := ApplyCentralConfigChanges(db, map[string]string{"web_listen": "127.0.0.1:19612", "workers": "3"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadCentralConfig(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := LoadRunningConfig(db)
+	if run["web_listen"] != "127.0.0.1:19610" || run["workers"] != "2" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
+		t.Fatalf("record: %v", run)
+	}
+	for _, tc := range []struct {
+		item, prefix string
+		saved        *CentralConfig
+		run          map[string]string
+		want         string
+	}{
+		{"web_listen", "http://", saved, run, "http://127.0.0.1:19610 (saved: 127.0.0.1:19612, takes effect after restart)"},
+		{"agent_listen", "https://", saved, run, "https://127.0.0.1:19611"},
+		{"workers", "", saved, run, "2 (saved: 3, takes effect after restart)"},
+		{"workers", "", saved, nil, "3"},
+		{"workers", "", nil, run, "2"},
+	} {
+		if got, ok := statusValue(tc.item, tc.prefix, tc.saved, tc.run); !ok || got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.item, got, tc.want)
+		}
+	}
+	if _, ok := statusValue("workers", "", nil, nil); ok {
+		t.Error("value without saved or running configuration")
+	}
+	if err := ClearRunningConfig(db); err != nil || LoadRunningConfig(db) != nil {
+		t.Fatalf("clear: %v", err)
 	}
 }

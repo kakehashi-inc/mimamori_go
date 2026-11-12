@@ -31,8 +31,9 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	cfg := *e.c.conf()
-	cfg.SMTP = modules.SMTPConfig{Host: "127.0.0.1", Port: port, Security: "none", From: "a@example.com", To: []string{"b@example.com"}, TimeoutSec: 2}
+	cfg.SMTP = modules.SMTPConfig{Host: "127.0.0.1", Port: port, Security: "none", From: "a@example.com", TimeoutSec: 2}
 	e.c.cfg.Store(&cfg)
+	e.admin("PUT", "/accounts/1/notify", map[string]any{"notify": true})
 
 	b, _ := models.GetBuiltinAgent(e.c.db)
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}

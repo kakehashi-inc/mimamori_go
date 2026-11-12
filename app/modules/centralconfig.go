@@ -2,6 +2,7 @@ package modules
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -23,31 +24,8 @@ type SMTPConfig struct {
 	Username   string
 	Password   string
 	From       string
-	To         []string
 	TimeoutSec int
 	HeloName   string
-}
-
-// NotificationRecipients returns the recipients of notification mails: the
-// addresses of the accounts chosen as recipients (accounts), then the
-// additional fixed addresses of smtp.to, each address once (compared without
-// regard to case; the first spelling is kept). Notification mails are sent
-// only when this is not empty and CanSend is true.
-func (s SMTPConfig) NotificationRecipients(accounts []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, list := range [][]string{accounts, s.To} {
-		for _, addr := range list {
-			addr = strings.TrimSpace(addr)
-			key := strings.ToLower(addr)
-			if addr == "" || seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, addr)
-		}
-	}
-	return out
 }
 
 // CanSend reports whether mail can be sent to given recipients (a server and
@@ -139,21 +117,6 @@ func cfgStringField(name, help string, p func(c *CentralConfig) *string) ConfigF
 		set: func(c *CentralConfig, v string) error { *p(c) = strings.TrimSpace(v); return nil }}
 }
 
-func cfgListField(name, help string, p func(c *CentralConfig) *[]string) ConfigField {
-	return ConfigField{Name: name, Kind: "list", Help: help,
-		get: func(c *CentralConfig) string { return strings.Join(*p(c), ",") },
-		set: func(c *CentralConfig, v string) error {
-			var out []string
-			for _, s := range strings.Split(v, ",") {
-				if s = strings.TrimSpace(s); s != "" {
-					out = append(out, s)
-				}
-			}
-			*p(c) = out
-			return nil
-		}}
-}
-
 func parseBool(name, v string) (bool, error) {
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
@@ -217,7 +180,6 @@ var ConfigFields = []ConfigField{
 		get: func(c *CentralConfig) string { return c.SMTP.Password },
 		set: func(c *CentralConfig, v string) error { c.SMTP.Password = v; return nil }},
 	cfgStringField("smtp.from", "Sender address", func(c *CentralConfig) *string { return &c.SMTP.From }),
-	cfgListField("smtp.to", "Additional recipient addresses of notification mails (besides the accounts chosen as notification recipients)", func(c *CentralConfig) *[]string { return &c.SMTP.To }),
 	cfgIntField("smtp.timeout_sec", "SMTP timeout (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
 	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: localhost)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
 }
@@ -347,7 +309,7 @@ var configIntMax = map[string]int{
 // need a value: an empty one would only store their default.
 var emptyAllowed = map[string]bool{
 	"server_names": true, "smtp.host": true, "smtp.username": true, "smtp.password": true,
-	"smtp.from": true, "smtp.to": true, "smtp.helo_name": true,
+	"smtp.from": true, "smtp.helo_name": true,
 }
 
 // validHostName reports whether s is an ASCII DNS name: labels of letters,
@@ -436,11 +398,6 @@ func (c *CentralConfig) validationErrors() []string {
 	if c.SMTP.From != "" && !validMailAddress(c.SMTP.From) {
 		errs = append(errs, "smtp.from must be one mail address")
 	}
-	for _, to := range c.SMTP.To {
-		if !validMailAddress(to) {
-			errs = append(errs, fmt.Sprintf("smtp.to: %q is not a mail address", to))
-		}
-	}
 	for i := range ConfigFields {
 		f := &ConfigFields[i]
 		switch f.Kind {
@@ -463,6 +420,10 @@ func (c *CentralConfig) validationErrors() []string {
 	return errs
 }
 
+// removedConfigItems lists items that earlier versions stored and that no
+// longer exist. Their rows in an existing database are ignored.
+var removedConfigItems = map[string]bool{"smtp.to": true}
+
 // storedCentralConfig reads the stored items (without defaults) and returns
 // the configuration and the names of the stored items.
 func storedCentralConfig(db models.Execer) (*CentralConfig, map[string]bool, error) {
@@ -474,7 +435,7 @@ func storedCentralConfig(db models.Execer) (*CentralConfig, map[string]bool, err
 	stored := map[string]bool{}
 	for _, r := range rows {
 		name, ok := strings.CutPrefix(r.Key, configKeyPrefix)
-		if !ok {
+		if !ok || removedConfigItems[name] {
 			continue
 		}
 		f, err := FindConfigField(name)
@@ -615,4 +576,45 @@ func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
 	c.WebListen, c.AgentListen = running.WebListen, running.AgentListen
 	c.Workers, c.QueueTimeoutSec = running.Workers, running.QueueTimeoutSec
 	c.BuiltinAgent = running.BuiltinAgent
+}
+
+// runningConfigKey is the settings row holding the values of the items that
+// take effect at start (restartItems) as the running central uses them. The
+// central writes it when it has opened its listeners and removes it when it
+// stops, so that central status can show what runs while a saved change
+// waits for a restart.
+const runningConfigKey = "running_config"
+
+// SaveRunningConfig records the start values of the running central.
+func SaveRunningConfig(db models.Execer, c *CentralConfig) error {
+	values := map[string]string{}
+	for _, f := range ConfigFields {
+		if f.Restart {
+			values[f.Name] = f.get(c)
+		}
+	}
+	b, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	return models.SetSetting(db, runningConfigKey, string(b))
+}
+
+// ClearRunningConfig removes the record of SaveRunningConfig.
+func ClearRunningConfig(db models.Execer) error {
+	return models.DeleteSetting(db, runningConfigKey)
+}
+
+// LoadRunningConfig returns the start values recorded by the running central
+// by item name, or nil when there is no (readable) record.
+func LoadRunningConfig(db models.Execer) map[string]string {
+	v, found, err := models.GetSettingStrict(db, runningConfigKey)
+	if err != nil || !found {
+		return nil
+	}
+	values := map[string]string{}
+	if json.Unmarshal([]byte(v), &values) != nil {
+		return nil
+	}
+	return values
 }

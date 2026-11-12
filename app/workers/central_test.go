@@ -440,7 +440,7 @@ func TestConfigUpdate(t *testing.T) {
 		return nil
 	}
 	out := e.admin("PUT", "/config", map[string]any{"set": map[string]string{
-		"retention_days": "30", "agent_listen": "127.0.0.1:9443", "smtp.password": "pw", "smtp.to": "a@example.com, b@example.com",
+		"retention_days": "30", "agent_listen": "127.0.0.1:9443", "smtp.password": "pw",
 	}})
 	if e.c.conf().RetentionDays != 30 {
 		t.Fatalf("retention_days not applied while running: %d", e.c.conf().RetentionDays)
@@ -454,8 +454,15 @@ func TestConfigUpdate(t *testing.T) {
 	if it := item(out, "smtp.password"); it["value"] != "" || it["is_set"] != true {
 		t.Fatalf("password item: %v", it)
 	}
-	if it := item(out, "smtp.to"); it["value"] != "a@example.com,b@example.com" {
-		t.Fatalf("smtp.to item: %v", it)
+	for _, it := range out["items"].([]any) {
+		if it.(map[string]any)["name"] == "smtp.to" {
+			t.Fatalf("smtp.to is listed: %v", it)
+		}
+	}
+	// smtp.to no longer exists: setting it fails like any unknown name.
+	if rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"smtp.to": "a@example.com"}},
+		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("smtp.to set: status %d", rec.Code)
 	}
 	rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"web_listen": "127.0.0.1:9443"}},
 		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000")
@@ -510,5 +517,31 @@ func TestTokenValueVisibility(t *testing.T) {
 		if strings.Contains(e.do(e.web, "GET", "/api/v1/tokens", nil, hdr, "192.0.2.1:1000").Body.String(), out.Value) {
 			t.Fatalf("%s: the list must not carry the full value afterwards", req.path)
 		}
+	}
+	// Viewer: no value at all, neither full nor shortened; the key is absent.
+	createAccount(t, e, "viewer-tok@example.com", models.RoleViewer)
+	vck := login(t, e, "viewer-tok@example.com", "Some-pass-123")
+	vhdr := map[string]string{"Cookie": sessionCookie + "=" + vck, csrfHeader: "1"}
+	rec := e.do(e.web, "GET", "/api/v1/tokens", nil, vhdr, "192.0.2.1:1000")
+	vlist := decode[[]map[string]any](t, rec)
+	if rec.Code != 200 || len(vlist) == 0 {
+		t.Fatalf("viewer list: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, tok := range vlist {
+		if _, ok := tok["value"]; ok {
+			t.Fatalf("viewer list carries a value: %v", tok)
+		}
+		if _, ok := tok["name"]; !ok {
+			t.Fatalf("viewer list entry incomplete: %v", tok)
+		}
+	}
+	rec = e.do(e.web, "GET", "/api/v1/tokens/1", nil, vhdr, "192.0.2.1:1000")
+	if one := decode[map[string]any](t, rec); rec.Code != 200 || one["name"] == nil {
+		t.Fatalf("viewer detail: %d %s", rec.Code, rec.Body.String())
+	} else if _, ok := one["value"]; ok {
+		t.Fatalf("viewer detail carries a value: %v", one)
+	}
+	if strings.Contains(e.do(e.web, "GET", "/api/v1/agents", nil, vhdr, "192.0.2.1:1000").Body.String(), modules.TokenPrefix) {
+		t.Fatal("viewer agent list carries a token value")
 	}
 }

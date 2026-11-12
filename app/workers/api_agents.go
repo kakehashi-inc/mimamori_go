@@ -263,7 +263,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 type tokenJSON struct {
 	ID                  int64   `json:"id"`
 	Name                string  `json:"name"`
-	Value               string  `json:"value"` // full for the CLI, shortened for the browser
+	Value               *string `json:"value,omitempty"` // full for the CLI, shortened for administrators in the browser, absent for viewers
 	Status              string  `json:"status"`
 	ExpiresAt           *string `json:"expires_at"`
 	CreatedAt           *string `json:"created_at"`
@@ -279,7 +279,8 @@ type tokenJSON struct {
 }
 
 // tokenOut converts a token for the API. The value is given in full only to
-// the management CLI; the browser screens receive a shortened form.
+// the management CLI; administrators in the browser receive a shortened form
+// and viewers none.
 func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 	now := time.Now().Unix()
 	out := tokenJSON{ID: t.ID, Name: t.Name, Value: tokenValueFor(r, t.Value), Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
@@ -487,12 +488,18 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // tokenValueFor returns a stored token value as the caller may see it: in
-// full for the management CLI, shortened for the browser screens. The
-// responses of issuing and reissuing carry the new value in full for both, so
-// the administrator can copy it once.
-func tokenValueFor(r *http.Request, value string) string {
-	if p := principalFrom(r); p != nil && p.ViaCLI {
-		return value
+// full for the management CLI, shortened for administrators in the browser,
+// and nil (the key is left out) for viewers. The responses of issuing and
+// reissuing carry the new value in full besides, so the administrator can
+// copy it once.
+func tokenValueFor(r *http.Request, value string) *string {
+	p := principalFrom(r)
+	switch {
+	case p != nil && p.ViaCLI:
+		return &value
+	case p.isAdmin():
+		short := modules.ShortenSecret(value)
+		return &short
 	}
-	return modules.ShortenSecret(value)
+	return nil
 }

@@ -185,11 +185,18 @@ func (c *AgentInitCmd) Run() error {
 // AgentSetCentralCmd changes the central host of an initialized agent.
 type AgentSetCentralCmd struct {
 	Host string `help:"New host name or IP address of the central" required:""`
-	Port int    `help:"Port of the central for the agents" default:"${default_agent_port}"`
+	Port *int   `help:"Port of the central for the agents (default: keep the current port)"`
 }
 
 func (c *AgentSetCentralCmd) Run() error {
-	return AgentSetCentral(DataDir(), c.Host, c.Port)
+	port := 0 // keep the stored port
+	if c.Port != nil {
+		if *c.Port < 1 || *c.Port > 65535 {
+			return NewExitErrorf(ExitArgument, "central port %d must be 1-65535", *c.Port)
+		}
+		port = *c.Port
+	}
+	return AgentSetCentral(DataDir(), c.Host, port)
 }
 
 // AgentStartCmd starts the agent.

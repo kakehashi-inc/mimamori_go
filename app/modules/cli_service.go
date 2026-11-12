@@ -71,20 +71,57 @@ func (c *CentralStatusCmd) Run() error {
 	dbPath := filepath.Join(dir, CentralDBFileName)
 	if _, err := os.Stat(dbPath); err == nil {
 		if db, err := OpenSQLite(dbPath, SchemaCentral); err == nil {
-			if cfg, err := LoadCentralConfig(db); err == nil {
-				fmt.Printf("%-16s http://%s\n", "web:", cfg.WebListen)
-				fmt.Printf("%-16s https://%s\n", "agents/admin:", cfg.AgentListen)
-				fmt.Printf("%-16s %d\n", "workers:", cfg.Workers)
-			} else {
-				fmt.Printf("%-16s %v\n", "configuration:", err)
+			cfg, cfgErr := LoadCentralConfig(db)
+			// While the central runs, the values it started with are shown;
+			// a saved value that differs takes effect after a restart.
+			var runningValues map[string]string
+			if running {
+				runningValues = LoadRunningConfig(db)
 			}
 			db.Close()
+			if cfgErr != nil {
+				fmt.Printf("%-16s %v\n", "configuration:", cfgErr)
+			}
+			for _, line := range []struct{ label, item, prefix string }{
+				{"web:", "web_listen", "http://"},
+				{"agents/admin:", "agent_listen", "https://"},
+				{"workers:", "workers", ""},
+			} {
+				if text, ok := statusValue(line.item, line.prefix, cfg, runningValues); ok {
+					fmt.Printf("%-16s %s\n", line.label, text)
+				}
+			}
 		}
 	}
 	if !running {
 		return &ExitError{Code: ExitNotRunning}
 	}
 	return nil
+}
+
+// statusValue returns the text central status prints for a restart item:
+// the running value when one is recorded (runningValues), marked when the
+// saved value differs, otherwise the saved value. ok is false when neither
+// is known.
+func statusValue(item, prefix string, saved *CentralConfig, runningValues map[string]string) (string, bool) {
+	var savedValue string
+	if saved != nil {
+		f, err := FindConfigField(item)
+		if err != nil {
+			return "", false
+		}
+		savedValue = f.get(saved)
+	}
+	runValue, isRunning := runningValues[item]
+	switch {
+	case isRunning && saved != nil && runValue != savedValue:
+		return prefix + runValue + " (saved: " + savedValue + ", takes effect after restart)", true
+	case isRunning:
+		return prefix + runValue, true
+	case saved != nil:
+		return prefix + savedValue, true
+	}
+	return "", false
 }
 
 // --- agent ---

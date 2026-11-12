@@ -44,8 +44,8 @@ func createAccount(t *testing.T, e *testEnv, email, role string) int64 {
 	return int64(out["id"].(float64))
 }
 
-// Notification mails go to the enabled accounts chosen as recipients and the
-// additional addresses of smtp.to, each address once. Without any recipient
+// Notification mails go to the enabled accounts chosen as recipients and to
+// no other address. Without any recipient
 // nothing is composed or sent and nothing fails.
 func TestNotificationRecipientsFromAccounts(t *testing.T) {
 	e := newTestEnv(t)
@@ -74,44 +74,33 @@ func TestNotificationRecipientsFromAccounts(t *testing.T) {
 	}
 	// A disabled account keeps its choice but receives nothing.
 	e.admin("POST", "/accounts/"+strconv.FormatInt(bob, 10)+"/disable", nil)
-	setConfig(e, func(c *modules.CentralConfig) {
-		c.SMTP.To = []string{"ALICE@example.com", "shared@example.com", "Shared@Example.com"}
-	})
 
 	e.c.notify(time.Now())
 	if len(mb.sent) != 1 {
 		t.Fatalf("mails: %d", len(mb.sent))
 	}
-	if got := strings.Join(mb.sent[0].to, ","); got != testAdminEmail+",alice@example.com,shared@example.com" {
+	if got := strings.Join(mb.sent[0].to, ","); got != testAdminEmail+",alice@example.com" {
 		t.Fatalf("recipients: %s", got)
 	}
 	if !strings.Contains(mb.sent[0].body, "curl a") || pendingDetections(t, e) != 0 {
 		t.Fatalf("mail body %q, pending %d", mb.sent[0].body, pendingDetections(t, e))
 	}
 
-	// Only smtp.to: the fixed addresses alone receive the mail.
 	for _, id := range []int64{1, alice} {
 		e.admin("PUT", "/accounts/"+strconv.FormatInt(id, 10)+"/notify", map[string]any{"notify": false})
-	}
-	_ = models.SetSetting(e.c.db, settingLastNotifyAt, "0")
-	reportAlert(t, e, "curl b")
-	e.c.notify(time.Now())
-	if len(mb.sent) != 2 || strings.Join(mb.sent[1].to, ",") != "ALICE@example.com,shared@example.com" {
-		t.Fatalf("smtp.to only: %+v", mb.sent)
 	}
 
 	// Recipients are read when a mail is sent: an undelivered mail goes to
 	// the recipients chosen meanwhile, and waits while there are none.
-	setConfig(e, func(c *modules.CentralConfig) { c.SMTP.To = nil })
 	_ = models.SetSetting(e.c.db, settingLastNotifyAt, "0")
 	reportAlert(t, e, "curl c")
 	e.c.notify(time.Now())
-	if len(mb.sent) != 2 || pendingDetections(t, e) != 1 {
+	if len(mb.sent) != 1 || pendingDetections(t, e) != 1 {
 		t.Fatalf("no recipients: %d mails, %d pending", len(mb.sent), pendingDetections(t, e))
 	}
 	e.admin("POST", "/accounts/"+strconv.FormatInt(bob, 10)+"/enable", nil)
 	e.c.notify(time.Now())
-	if len(mb.sent) != 3 || strings.Join(mb.sent[2].to, ",") != "bob@example.com" {
+	if len(mb.sent) != 2 || strings.Join(mb.sent[1].to, ",") != "bob@example.com" {
 		t.Fatalf("re-enabled account: %+v", mb.sent)
 	}
 
@@ -120,7 +109,7 @@ func TestNotificationRecipientsFromAccounts(t *testing.T) {
 	_ = models.SetSetting(e.c.db, settingLastNotifyAt, "0")
 	reportAlert(t, e, "curl d")
 	e.c.notify(time.Now())
-	if len(mb.sent) != 3 {
+	if len(mb.sent) != 2 {
 		t.Fatalf("mail without smtp.from: %d", len(mb.sent))
 	}
 }
@@ -184,5 +173,76 @@ func TestAccountNotifyAPI(t *testing.T) {
 	}
 	if list, _ := models.ListNotifyEmails(e.c.db); len(list) != 0 {
 		t.Fatalf("disabled account listed as recipient: %v", list)
+	}
+}
+
+// Deleting a suppression releases the unacknowledged detections it
+// suppressed: they are notified like any pending detection. Acknowledged
+// ones stay as they are, and one that another suppression matches stays
+// suppressed under that suppression.
+func TestDeleteSuppressionReleases(t *testing.T) {
+	e := newTestEnv(t)
+	mb := useMailbox(e)
+	e.admin("PUT", "/accounts/1/notify", map[string]any{"notify": true})
+	b, _ := models.GetBuiltinAgent(e.c.db)
+	tdb, err := e.c.targetDB(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"curl a", "curl b", "curl c"} {
+		reportAlert(t, e, target)
+	}
+	byTarget := func() map[string]*models.Detection {
+		list, _, err := models.ListDetections(tdb, models.DetectionFilter{}, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]*models.Detection{}
+		for _, d := range list {
+			out[d.Target] = d
+		}
+		return out
+	}
+	s1 := e.admin("POST", "/suppressions", map[string]any{"type": "exec", "exe": "/usr/bin/curl"})
+	s1ID := int64(s1["id"].(float64))
+	s2 := e.admin("POST", "/suppressions", map[string]any{"target": "curl c"})
+	s2ID := int64(s2["id"].(float64))
+	ds := byTarget()
+	for _, target := range []string{"curl a", "curl b", "curl c"} {
+		if d := ds[target]; !d.Suppressed || d.SuppressionID != s1ID || d.NotifyState != models.NotifySkipped {
+			t.Fatalf("%s before: %+v", target, d)
+		}
+	}
+	e.admin("POST", "/detections/ack", map[string]any{"items": []map[string]any{{"agent_id": b.ID, "id": ds["curl b"].ID}}})
+	if pendingDetections(t, e) != 0 {
+		t.Fatal("suppressed detections pending")
+	}
+
+	e.admin("DELETE", "/suppressions/"+strconv.FormatInt(s1ID, 10), nil)
+	ds = byTarget()
+	if d := ds["curl a"]; d.Suppressed || d.SuppressionID != 0 || d.NotifyState != models.NotifyPending {
+		t.Fatalf("curl a not released: %+v", d)
+	}
+	if d := ds["curl b"]; !d.Suppressed || d.SuppressionID != s1ID || d.AcknowledgedAt == 0 {
+		t.Fatalf("acknowledged curl b changed: %+v", d)
+	}
+	if d := ds["curl c"]; !d.Suppressed || d.SuppressionID != s2ID || d.NotifyState != models.NotifySkipped {
+		t.Fatalf("curl c must stay suppressed by the other suppression: %+v", d)
+	}
+	hist, _, _ := models.ListHistory(e.c.db, models.HistSuppression, "", nil, 10, 0)
+	if len(hist) == 0 || hist[0].Action != "deleted" || !strings.Contains(hist[0].Detail, "1 detection(s) no longer suppressed") {
+		t.Fatalf("history: %+v", hist)
+	}
+	e.c.notify(time.Now())
+	if len(mb.sent) != 1 || !strings.Contains(mb.sent[0].body, "curl a") || strings.Contains(mb.sent[0].body, "curl c") {
+		t.Fatalf("mails after release: %+v", mb.sent)
+	}
+
+	// A released detection notified within the dedupe period stays skipped.
+	e.admin("POST", "/suppressions", map[string]any{"target": "curl a"})
+	s3 := e.admin("GET", "/suppressions", nil)["list"].([]any)[0].(map[string]any)
+	e.admin("DELETE", "/suppressions/"+strconv.FormatInt(int64(s3["id"].(float64)), 10), nil)
+	if d := byTarget()["curl a"]; d.Suppressed || d.NotifyState != models.NotifySent {
+		t.Fatalf("notified curl a after a second release: %+v", d)
 	}
 }

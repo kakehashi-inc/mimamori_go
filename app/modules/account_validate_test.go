@@ -83,10 +83,9 @@ func TestSMTPModes(t *testing.T) {
 		dev, canSend bool
 	}{
 		{SMTPConfig{}, true, false},
-		{SMTPConfig{From: "a@example.com", To: []string{"b@example.com"}}, true, false},
+		{SMTPConfig{From: "a@example.com"}, true, false},
 		{SMTPConfig{Host: "mail.example.com"}, false, false},
 		{SMTPConfig{Host: "mail.example.com", From: "a@example.com"}, false, true},
-		{SMTPConfig{Host: "mail.example.com", From: "a@example.com", To: []string{"b@example.com"}}, false, true},
 	} {
 		if tc.cfg.DevelopmentMode() != tc.dev || tc.cfg.CanSend() != tc.canSend {
 			t.Errorf("%+v: development %v, can send %v", tc.cfg, tc.cfg.DevelopmentMode(), tc.cfg.CanSend())
@@ -100,29 +99,8 @@ func TestSMTPModes(t *testing.T) {
 	}
 }
 
-// The notification recipients are the chosen accounts followed by the
-// additional addresses of smtp.to, each address once regardless of case.
-func TestNotificationRecipients(t *testing.T) {
-	for _, tc := range []struct {
-		accounts, to []string
-		want         string
-	}{
-		{nil, nil, ""},
-		{nil, []string{"shared@example.com"}, "shared@example.com"},
-		{[]string{"a@example.com", "b@example.com"}, nil, "a@example.com,b@example.com"},
-		{[]string{"a@example.com", "B@Example.com"}, []string{"b@example.com", "shared@example.com", "A@EXAMPLE.COM", "shared@example.com"},
-			"a@example.com,B@Example.com,shared@example.com"},
-		{[]string{"", " "}, []string{""}, ""},
-	} {
-		cfg := SMTPConfig{Host: "mail.example.com", From: "x@example.com", To: tc.to}
-		if got := strings.Join(cfg.NotificationRecipients(tc.accounts), ","); got != tc.want {
-			t.Errorf("%v + %v: %q, want %q", tc.accounts, tc.to, got, tc.want)
-		}
-	}
-}
-
 // TestSendMailToRecipients checks that SendMailTo delivers to the given
-// recipients, not to the notification recipients (smtp.to).
+// recipients, not to the notification recipients.
 func TestSendMailToRecipients(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -174,12 +152,12 @@ func TestSendMailToRecipients(t *testing.T) {
 		}
 	}()
 	cfg := SMTPConfig{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, Security: "none", From: "a@example.com",
-		To: []string{"notify@example.com"}, TimeoutSec: 10}
+		TimeoutSec: 10}
 	if err := SendMailTo(cfg, []string{"user@example.com"}, "subject", "body"); err != nil {
 		t.Fatalf("SendMailTo: %v", err)
 	}
 	got := <-result
-	if !strings.Contains(got, "RCPT TO:<user@example.com>") || !strings.Contains(got, "To: user@example.com") || strings.Contains(got, "notify@example.com") {
+	if !strings.Contains(got, "RCPT TO:<user@example.com>") || !strings.Contains(got, "To: user@example.com") || strings.Count(got, "RCPT TO:") != 1 {
 		t.Fatalf("recipients: %s", got)
 	}
 }

@@ -285,9 +285,18 @@ func (s *patternScanner) escape() {
 	case c == 'c':
 		// A control character: the character after "\c" belongs to it.
 		s.copy(3)
+	case c == 'Q' || c == 'E':
+		s.failQuote(c)
 	default:
 		s.copy(2)
 	}
+}
+
+// failQuote refuses "\Q" and "\E": the library does not implement quoting
+// with them and would read them as the letters Q and E, so the pattern would
+// silently match something else than written.
+func (s *patternScanner) failQuote(c rune) {
+	s.fail(`\%c is not supported (quoting with \Q...\E); escape each special character with a backslash instead`, c)
 }
 
 // angledRef handles "\k<...>", "\<...>" and "\'...'" whose name starts at
@@ -530,6 +539,8 @@ func (s *patternScanner) classEnd(i int) int {
 			case 'p', 'P':
 				i = propertyEnd(in, i)
 				continue
+			case 'Q', 'E':
+				s.failQuote(c)
 			}
 			i = charEscapeEnd(in, i-1)
 			translated = true

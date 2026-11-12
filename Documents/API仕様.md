@@ -348,7 +348,7 @@ interface CommandRunDetail extends CommandRun {
 type TokenStatus = 'unused' | 'active' | 'expired' | 'revoked';
 interface Token {
   id: number; name: string;
-  value: string;                     // /admin/v1（CLI）は値の全体、/api/v1（ブラウザ）は略した形 "mmr_AbCd...WxYz"（発行と再発行の応答の外側の value は除く）
+  value?: string;                    // A のみ。/admin/v1（CLI）は値の全体、/api/v1（ブラウザ）の管理者は略した形 "mmr_AbCd...WxYz"（発行と再発行の応答の外側の value は除く）。閲覧者への応答ではキーごと省く
   status: TokenStatus;
   expires_at: string; created_at: string; created_by: string;
   last_seen_at: string | null; instance_id: string; bound_at: string | null;
@@ -359,7 +359,7 @@ interface Token {
 }
 ```
 
-- 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザには略した形だけを返します。
+- 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザの管理者には略した形だけを返し、閲覧者にはトークンの値を返しません（一覧と詳細の `value` を省く。エージェントの一覧と詳細が含むトークンの参照にも値はありません）。
 - `valid_days` を省略または 0 にすると設定の既定値を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
 
 ## 6. 監視ルール
@@ -494,6 +494,8 @@ interface Suppression {
 }
 ```
 
+削除すると、その条件で抑止していた未確認の検知は抑止されていない状態に戻り、通知の対象になります（詳細は [システム仕様.md](システム仕様.md) の 12 章の抑止）。確認済みの検知は変えません。
+
 作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要で、すべて空なら 400 です。未知の `type` と存在しない `agent_id` も 400 です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
 
 ## 10. 証明書
@@ -556,7 +558,7 @@ interface Account {
 - メールアドレス（ログイン ID）は前後の空白を除いて 254 文字以下の、表示名や引用符の無い 1 つのアドレスです（空白、制御文字、`"` `<` `>` `,` は不可。ドメインのドットは不要で `user@localhost` も可）。大文字と小文字を区別せずに一意です。
 - 表示名は前後の空白を除いて 1〜64 文字で、制御文字は使えません。重複してもかまいません。
 - パスワードは 10 文字以上、256 バイトまでです。
-- 通知メール（検知の通知）の宛先は、`notify` が `true` で無効化されていないアカウントのアドレスと、設定 `smtp.to` の追加のアドレスです（重複は除く。詳細は [システム仕様.md](システム仕様.md) の 12.2）。`notify` の変更は履歴（`account`、操作 `notify_changed`、詳細 `notification mails on` / `notification mails off`）に残します。値が変わらない要求は何も記録せずに `Account` を返します。
+- 通知メール（検知の通知）の宛先は、`notify` が `true` で無効化されていないアカウントのアドレスだけです（詳細は [システム仕様.md](システム仕様.md) の 12.2）。`notify` の変更は履歴（`account`、操作 `notify_changed`、詳細 `notification mails on` / `notification mails off`）に残します。値が変わらない要求は何も記録せずに `Account` を返します。
 
 ## 12.1 システム設定
 

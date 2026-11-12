@@ -129,33 +129,54 @@ func CtlTarget(agentListen string) (string, int, error) {
 func (cl *ctlClient) call(method, path string, in any) (any, error) {
 	var out any
 	if err := cl.http.JSON(method, "/admin/v1"+path, in, &out); err != nil {
-		var he *HTTPError
-		if errors.As(err, &he) {
-			code := ExitGeneral
-			msg := he.Error()
-			switch he.Status {
-			case 400, 404, 409:
-				code = ExitArgument
-			case 403:
-				// The management API returns 403 only when a built-in
-				// template is to be changed or deleted (the CLI has full
-				// authority), so it is an invalid argument like 409.
-				code = ExitArgument
-			case 401:
-				code = ExitAuth
-				msg += " (" + CLISecretFileName + " does not match the running central; the central writes it each time it starts)"
-			}
-			return nil, NewExitError(code, msg)
-		}
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.Address+" (a changed agent_listen takes effect when the central is restarted)")
-		}
-		if IsCertificateError(err) {
-			return nil, NewExitErrorf(ExitAuth, "the certificate of the central cannot be verified with %s (it does not match the central's CA): %v", CABundleFileName, err)
-		}
-		return nil, NewExitError(ExitExec, err.Error())
+		return nil, cl.callError(err)
 	}
 	return out, nil
+}
+
+// exists reports whether a GET of path finds the object: false on 404, an
+// error (as call returns it) on any other failure.
+func (cl *ctlClient) exists(path string) (bool, error) {
+	var out any
+	err := cl.http.JSON("GET", "/admin/v1"+path, nil, &out)
+	var he *HTTPError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &he) && he.Status == 404:
+		return false, nil
+	}
+	return false, cl.callError(err)
+}
+
+// callError converts an error of a management API request to the error the
+// command ends with (exit code and message).
+func (cl *ctlClient) callError(err error) error {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		code := ExitGeneral
+		msg := he.Error()
+		switch he.Status {
+		case 400, 404, 409:
+			code = ExitArgument
+		case 403:
+			// The management API returns 403 only when a built-in
+			// template is to be changed or deleted (the CLI has full
+			// authority), so it is an invalid argument like 409.
+			code = ExitArgument
+		case 401:
+			code = ExitAuth
+			msg += " (" + CLISecretFileName + " does not match the running central; the central writes it each time it starts)"
+		}
+		return NewExitError(code, msg)
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.Address+" (a changed agent_listen takes effect when the central is restarted)")
+	}
+	if IsCertificateError(err) {
+		return NewExitErrorf(ExitAuth, "the certificate of the central cannot be verified with %s (it does not match the central's CA): %v", CABundleFileName, err)
+	}
+	return NewExitError(ExitExec, err.Error())
 }
 
 // show prints a value: a table when columns are given and --json is off.
@@ -885,30 +906,73 @@ func (c *CtlDetectionsListCmd) Run(p *CtlCmd) error {
 func (c *CtlDetectionsShowCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "GET", fmt.Sprintf("/detections/%d/%d", c.Agent, c.ID), nil)
 }
+
+// Run acknowledges the given detections. When any of them does not exist,
+// it acknowledges nothing, names the missing ones and ends with the exit
+// code of a missing object (as every ctl command on a 404).
 func (c *CtlDetectionsAckCmd) Run(p *CtlCmd) error {
 	var items []map[string]int64
 	for _, s := range c.Items {
 		a, id, ok := parseDetectionRef(s)
 		if !ok {
-			return NewExitErrorf(ExitArgument, "expected AGENT_ID:ID, got %q", s)
+			return NewExitErrorf(ExitArgument, "expected AGENT_ID:ID (two positive integers), got %q", s)
 		}
 		items = append(items, map[string]int64{"agent_id": a, "id": id})
 	}
-	return runCtl(p, "POST", "/detections/ack", map[string]any{"items": items})
+	cl, err := p.client()
+	if err != nil {
+		return err
+	}
+	return cl.ackDetections(items)
 }
 
-// parseDetectionRef reads AGENT_ID:ID; both parts must be integers.
+// ackDetections checks that every item exists and then acknowledges them
+// all; see CtlDetectionsAckCmd.Run.
+func (cl *ctlClient) ackDetections(items []map[string]int64) error {
+	var missing []string
+	for _, it := range items {
+		found, err := cl.exists(fmt.Sprintf("/detections/%d/%d", it["agent_id"], it["id"]))
+		if err != nil {
+			return err
+		}
+		if !found {
+			missing = append(missing, fmt.Sprintf("%d:%d", it["agent_id"], it["id"]))
+		}
+	}
+	if len(missing) > 0 {
+		return NewExitErrorf(ExitArgument, "detection not found: %s (nothing was acknowledged)", strings.Join(missing, ", "))
+	}
+	out, err := cl.call("POST", "/detections/ack", map[string]any{"items": items})
+	if err != nil {
+		return err
+	}
+	cl.show(out)
+	return nil
+}
+
+// parseDetectionRef reads AGENT_ID:ID; both parts must be positive decimal
+// integers and nothing else may follow.
 func parseDetectionRef(s string) (agent, id int64, ok bool) {
 	as, is, found := strings.Cut(s, ":")
 	if !found {
 		return 0, 0, false
 	}
-	agent, err1 := strconv.ParseInt(as, 10, 64)
-	id, err2 := strconv.ParseInt(is, 10, 64)
-	if err1 != nil || err2 != nil {
+	agent, ok1 := parsePositiveID(as)
+	id, ok2 := parsePositiveID(is)
+	if !ok1 || !ok2 {
 		return 0, 0, false
 	}
 	return agent, id, true
+}
+
+// parsePositiveID reads a decimal integer of digits only (no sign, no
+// spaces) that is greater than zero.
+func parsePositiveID(s string) (int64, bool) {
+	if s == "" || strings.Trim(s, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil && n > 0
 }
 
 // --- suppressions ---
