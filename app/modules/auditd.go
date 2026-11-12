@@ -268,6 +268,37 @@ func generateAuditRules(r *ResolvedRule, goarch string) []string {
 	return lines
 }
 
+// AuditGlobals are the kernel's global audit settings that ApplyAuditRules
+// changes (globalSettingLines), as "auditctl -s" reports them. The agent
+// records them before it applies rules for the first time and sets them back
+// when it removes its rules.
+type AuditGlobals struct {
+	BacklogLimit    int64 `json:"backlog_limit"`
+	BacklogWaitTime int64 `json:"backlog_wait_time"`
+	Failure         int   `json:"failure"`
+}
+
+// globalsOf returns the global settings of a status.
+func globalsOf(st *AuditdStatus) AuditGlobals {
+	return AuditGlobals{BacklogLimit: st.BacklogLimit, BacklogWaitTime: st.BacklogWaitTime, Failure: st.Failure}
+}
+
+// setGlobals sets the global settings with auditctl. Every setting is tried;
+// the error names those that failed.
+func setGlobals(g AuditGlobals) error {
+	var errs []error
+	for _, args := range [][]string{
+		{"-b", strconv.FormatInt(g.BacklogLimit, 10)},
+		{"-f", strconv.Itoa(g.Failure)},
+		{"--backlog_wait_time", strconv.FormatInt(g.BacklogWaitTime, 10)},
+	} {
+		if _, err := RunSimple("auditctl", args...); err != nil {
+			errs = append(errs, fmt.Errorf("auditctl %s: %w", strings.Join(args, " "), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // globalSettingLines override the OS defaults without editing them: never
 // make processes wait when the backlog is full and never panic on failure.
 func globalSettingLines() []string {
@@ -358,11 +389,14 @@ func neverRuleInRulesDir() bool {
 }
 
 // RemoveAuditRules removes what the agent applied: the rules file and the
-// loaded rules carrying this system's key. Other rules and the global
-// settings are not touched. When a rule file loaded at boot adds the
-// suppression rule (neverRuleLine), which ApplyAuditRules cancels, it is
-// loaded again, so the host is back in its configured state at once.
-func RemoveAuditRules() error {
+// loaded rules carrying this system's key. Other rules are not touched. When
+// a rule file loaded at boot adds the suppression rule (neverRuleLine), which
+// ApplyAuditRules cancels, it is loaded again, so the host is back in its
+// configured state at once. When restore is not nil (the global settings
+// recorded before the first application), the global settings are set back
+// to it once the rules are removed; a failure there does not undo the
+// removal and is returned with the other failures.
+func RemoveAuditRules(restore *AuditGlobals) error {
 	st, err := ReadAuditdStatus()
 	if err != nil {
 		return err
@@ -389,19 +423,31 @@ func RemoveAuditRules() error {
 			neverLoaded = true
 		}
 	}
+	var errs []error
 	if !neverLoaded && neverRuleInRulesDir() {
 		if _, err := RunSimple("auditctl", strings.Fields(neverRuleLine)...); err != nil {
-			return fmt.Errorf("loading the suppression rule of %s again (%s) failed: %w", filepath.Dir(auditRulesFile), neverRuleLine, err)
+			errs = append(errs, fmt.Errorf("loading the suppression rule of %s again (%s) failed: %w", filepath.Dir(auditRulesFile), neverRuleLine, err))
 		}
 	}
-	return nil
+	if restore != nil {
+		if err := setGlobals(*restore); err != nil {
+			errs = append(errs, fmt.Errorf("the rules were removed, but setting the global audit settings back (backlog_limit %d, backlog_wait_time %d, failure %d) failed: %w",
+				restore.BacklogLimit, restore.BacklogWaitTime, restore.Failure, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ApplyAuditRules loads the generated rules and global settings, replacing
 // only rules that carry this system's key. On any failure the previous state
 // is restored and an error is returned. The returned warnings do not prevent
 // the rules from being applied.
-func ApplyAuditRules(lines []string) ([]string, error) {
+//
+// When nothing of this system is applied (no loaded rule with its key and no
+// rules file), record is called with the global settings before anything is
+// changed, so that RemoveAuditRules can set them back; when it fails nothing
+// is changed. record may be nil.
+func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string, error) {
 	before, err := ListAuditRules()
 	if err != nil {
 		return nil, err
@@ -420,6 +466,11 @@ func ApplyAuditRules(lines []string) ([]string, error) {
 		}
 	}
 	prevFile, prevFileErr := os.ReadFile(auditRulesFile)
+	if record != nil && len(prevOwn) == 0 && errors.Is(prevFileErr, os.ErrNotExist) {
+		if err := record(globalsOf(prevStatus)); err != nil {
+			return nil, fmt.Errorf("recording the global audit settings before the change failed: %w", err)
+		}
+	}
 	// fileWritten (the rules file was written) and neverRemoved (the
 	// suppression rule was deleted) tell the rollback what this run changed.
 	fileWritten, neverRemoved := false, false

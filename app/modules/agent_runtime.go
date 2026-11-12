@@ -40,6 +40,10 @@ const (
 	stateExecPassStart = "exec_pass_start"
 	stateExecSince     = "exec_since"
 	stateRootSince     = "exec_root_since"
+	// The kernel's global audit settings before the first application of
+	// audit rules (AuditGlobals as JSON), set back when the rules are
+	// removed.
+	stateAuditGlobals = "audit_globals"
 )
 
 // AgentRuntime performs the periodic processing of an agent. Everything runs
@@ -85,7 +89,7 @@ type AgentRuntime struct {
 	// scanLimit replaces MaxScanEntries and removeAudit replaces
 	// RemoveAuditRules in tests.
 	scanLimit   int
-	removeAudit func() error
+	removeAudit func(restore *AuditGlobals) error
 }
 
 // NewAgentRuntime loads the stored state.
@@ -350,7 +354,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	}
 	res := ResolveRule(&ra.Content)
 	lines := GenerateAuditRules(res)
-	applyWarnings, err := ApplyAuditRules(lines)
+	applyWarnings, err := ApplyAuditRules(lines, func(g AuditGlobals) error { return recordAuditGlobals(rt.DB, g) })
 	if err != nil {
 		result.Status = "error"
 		result.Message = err.Error()
@@ -397,7 +401,8 @@ func holdsRule(rule *RuleAssignment, apply *ApplyResult) bool {
 // failure the rule stays in effect, the error is reported and the next
 // check tries again.
 func (rt *AgentRuntime) removeRule() {
-	if !holdsRule(rt.rule, rt.lastApply) {
+	restore := storedAuditGlobals(rt.DB)
+	if !holdsRule(rt.rule, rt.lastApply) && restore == nil {
 		return
 	}
 	remove := rt.removeAudit
@@ -405,7 +410,7 @@ func (rt *AgentRuntime) removeRule() {
 		remove = RemoveAuditRules
 	}
 	now := time.Now().Unix()
-	if err := remove(); err != nil {
+	if err := remove(restore); err != nil {
 		msg := "no rule is assigned, but removing the audit rules failed: " + err.Error()
 		if rt.lastApply == nil || rt.lastApply.Status != "error" || rt.lastApply.Message != msg {
 			rt.setApply(&ApplyResult{Status: "error", Message: msg, At: now})
@@ -413,19 +418,58 @@ func (rt *AgentRuntime) removeRule() {
 		}
 		return
 	}
-	if err := models.DeleteLocalState(rt.DB, stateRule, stateApply); err != nil {
+	if err := models.DeleteLocalState(rt.DB, stateRule, stateApply, stateAuditGlobals); err != nil {
 		rt.logf("failed to clear the stored rule: %v", err)
 	}
 	rt.rule, rt.lastOK, rt.failedRule = nil, nil, ""
 	rt.lastApply = &ApplyResult{Status: ApplyStatusNone, Message: "no rule is assigned; the audit rules were removed", At: now}
-	rt.logf("no rule is assigned: the audit rules with key %s and %s were removed", AuditKey, AuditRulesFile)
+	rt.logf("no rule is assigned: the audit rules with key %s and %s were removed%s", AuditKey, AuditRulesFile, restoredNote(restore))
+}
+
+// restoredNote describes the global audit settings set back by a removal
+// ("" when nothing was recorded), for the log line of the removal.
+func restoredNote(g *AuditGlobals) string {
+	if g == nil {
+		return ""
+	}
+	return fmt.Sprintf("; the global audit settings were set back to backlog_limit %d, backlog_wait_time %d, failure %d", g.BacklogLimit, g.BacklogWaitTime, g.Failure)
+}
+
+// recordAuditGlobals stores the global audit settings before the first
+// application of audit rules. An existing record is kept: it holds the
+// values from before this system changed them (an unreadable one is
+// replaced).
+func recordAuditGlobals(db *sql.DB, g AuditGlobals) error {
+	if storedAuditGlobals(db) != nil {
+		return nil
+	}
+	b, err := json.Marshal(g)
+	if err != nil {
+		return err
+	}
+	return models.SetLocalState(db, stateAuditGlobals, string(b))
+}
+
+// storedAuditGlobals returns the recorded global audit settings, or nil when
+// there is no (readable) record.
+func storedAuditGlobals(db *sql.DB) *AuditGlobals {
+	v := models.GetLocalState(db, stateAuditGlobals)
+	if v == "" {
+		return nil
+	}
+	var g AuditGlobals
+	if json.Unmarshal([]byte(v), &g) != nil {
+		return nil
+	}
+	return &g
 }
 
 // ClearStoredRule removes the audit rules and the rules file when the agent
-// database db records a rule or an application result, and then clears that
-// record. It reports whether anything was removed; without a record nothing
-// is touched. The central uses it for the built-in agent while it is
-// disabled.
+// database db records a rule, an application result or the global audit
+// settings before the first application, sets those settings back, and then
+// clears the records. It reports whether anything was removed; without a
+// record nothing is touched. The central uses it for the built-in agent
+// while it is disabled.
 func ClearStoredRule(db *sql.DB) (bool, error) {
 	var rule *RuleAssignment
 	if v := models.GetLocalState(db, stateRule); v != "" {
@@ -440,13 +484,14 @@ func ClearStoredRule(db *sql.DB) (bool, error) {
 			apply = &ApplyResult{}
 		}
 	}
-	if !holdsRule(rule, apply) {
+	restore := storedAuditGlobals(db)
+	if !holdsRule(rule, apply) && restore == nil {
 		return false, nil
 	}
-	if err := RemoveAuditRules(); err != nil {
+	if err := RemoveAuditRules(restore); err != nil {
 		return false, err
 	}
-	return true, models.DeleteLocalState(db, stateRule, stateApply)
+	return true, models.DeleteLocalState(db, stateRule, stateApply, stateAuditGlobals)
 }
 
 // resetStoredRule is used by "agent init --overwrite": the stored rule is

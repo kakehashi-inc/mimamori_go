@@ -13,8 +13,10 @@ import (
 
 // fakeAuditctl puts a fake auditctl first in PATH. It keeps the loaded rules
 // in a file (one rule per line, as "auditctl -l" prints them), reports
-// "enabled" as given and records every call. The rules file of this system
-// is redirected into the test directory.
+// "enabled" as given, keeps the global settings in the file fakeSettings
+// names (set with -b, -f and --backlog_wait_time; -b fails while the file
+// "fail-b" exists next to it) and records every call. The rules file of this
+// system is redirected into the test directory.
 func fakeAuditctl(t *testing.T, enabled string, loaded []string) (rulesState, calls string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -33,17 +35,28 @@ func fakeAuditctl(t *testing.T, enabled string, loaded []string) (rulesState, ca
 	if err := os.WriteFile(rulesState, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(fakeSettings(rulesState), []byte("failure 2\nbacklog_limit 64\nbacklog_wait_time 15000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	script := `#!/bin/sh
 echo "$*" >> 'CALLS'
+set_value() {
+	if [ "$1" = backlog_limit ] && [ -e 'FAILB' ]; then exit 1; fi
+	grep -v "^$1 " 'SETTINGS' > 'SETTINGS.tmp'; echo "$1 $2" >> 'SETTINGS.tmp'; mv 'SETTINGS.tmp' 'SETTINGS'
+}
 case "$1" in
--s) printf 'enabled ENABLED\nfailure 1\npid 123\nbacklog_wait_time 0\n' ;;
+-s) printf 'enabled ENABLED\npid 123\n'; cat 'SETTINGS' ;;
 -l) if grep -q . 'STATE'; then cat 'STATE'; else echo "No rules"; fi ;;
 -d) shift; line="-a $*"; grep -vxF -- "$line" 'STATE' > 'STATE.tmp'; mv 'STATE.tmp' 'STATE' ;;
 -a) echo "$*" >> 'STATE' ;;
+-b) set_value backlog_limit "$2" ;;
+-f) set_value failure "$2" ;;
+--backlog_wait_time) set_value backlog_wait_time "$2" ;;
 *) exit 1 ;;
 esac
 `
-	script = strings.NewReplacer("CALLS", calls, "STATE", rulesState, "ENABLED", enabled).Replace(script)
+	script = strings.NewReplacer("CALLS", calls, "STATE", rulesState, "ENABLED", enabled,
+		"SETTINGS", fakeSettings(rulesState), "FAILB", filepath.Join(dir, "fail-b")).Replace(script)
 	if err := os.WriteFile(filepath.Join(bin, "auditctl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +65,12 @@ esac
 	auditRulesFile = filepath.Join(dir, "rules.d", "zz-mimamori.rules")
 	t.Cleanup(func() { auditRulesFile = prev })
 	return rulesState, calls
+}
+
+// fakeSettings is the file of the fake auditctl that holds the global
+// settings, next to the loaded rules.
+func fakeSettings(rulesState string) string {
+	return filepath.Join(filepath.Dir(rulesState), "settings")
 }
 
 func readFile(t *testing.T, p string) string {
@@ -73,7 +92,7 @@ func TestRemoveAuditRules(t *testing.T) {
 	if err := os.WriteFile(auditRulesFile, []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveAuditRules(); err != nil {
+	if err := RemoveAuditRules(nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, state); got != other+"\n" {
@@ -93,7 +112,7 @@ func TestRemoveAuditRulesRestoresNeverRule(t *testing.T) {
 
 	// No distribution file with the rule: nothing is added.
 	state, calls := fakeAuditctl(t, "1", []string{own, other})
-	if err := RemoveAuditRules(); err != nil {
+	if err := RemoveAuditRules(nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, state); got != other+"\n" || strings.Contains(readFile(t, calls), "never") {
@@ -106,7 +125,7 @@ func TestRemoveAuditRulesRestoresNeverRule(t *testing.T) {
 	if err := os.WriteFile(dist, []byte("-D\n-a task,never\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveAuditRules(); err != nil {
+	if err := RemoveAuditRules(nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, state); got != other+"\n"+neverRuleLine+"\n" {
@@ -118,7 +137,7 @@ func TestRemoveAuditRulesRestoresNeverRule(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(auditRulesFile), "10-base-config.rules"), []byte("-a never,task\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveAuditRules(); err != nil {
+	if err := RemoveAuditRules(nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, state); got != neverRuleLine+"\n" || strings.Contains(readFile(t, calls), "-a never") {
@@ -133,7 +152,7 @@ func TestRemoveAuditRulesImmutable(t *testing.T) {
 	if err := os.WriteFile(auditRulesFile, []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveAuditRules(); err == nil || !strings.Contains(err.Error(), "immutable") {
+	if err := RemoveAuditRules(nil); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("immutable rules: %v", err)
 	}
 	if readFile(t, state) != own+"\n" || readFile(t, auditRulesFile) != "x\n" {
@@ -150,7 +169,7 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	rt.Transport = &fakeTransport{}
 	removed := 0
 	var fail error
-	rt.removeAudit = func() error {
+	rt.removeAudit = func(*AuditGlobals) error {
 		removed++
 		return fail
 	}
@@ -166,7 +185,7 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	_ = models.SetLocalState(rt.DB, stateRule, string(b))
 	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
-	rt.removeAudit = func() error {
+	rt.removeAudit = func(*AuditGlobals) error {
 		removed++
 		return fail
 	}
@@ -223,7 +242,7 @@ func TestResetStoredRule(t *testing.T) {
 		t.Fatalf("after reset: %+v %+v", rt.rule, rt.lastApply)
 	}
 	removed := 0
-	rt.removeAudit = func() error { removed++; return nil }
+	rt.removeAudit = func(*AuditGlobals) error { removed++; return nil }
 	rt.sync()
 	if removed != 1 || rt.lastApply.Status != ApplyStatusNone {
 		t.Fatalf("the next sync without a rule must remove the audit rules: %d %+v", removed, rt.lastApply)
