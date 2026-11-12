@@ -234,6 +234,11 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 	})
 	w.Close()
 	if err != nil {
+		// The error names the program's path; the output does not.
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
 		return failedStart(err)
 	}
 	// The raw buffer also holds the two marker lines and a little of what
