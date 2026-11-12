@@ -31,6 +31,8 @@ export function TemplateDetailPage() {
     const [validation, setValidation] = useState<string[] | null>(null);
     const [busy, setBusy] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.
+    const [jsonInvalid, setJsonInvalid] = useState(false);
     const [deleteOpen, setDeleteOpen] = useState(false);
 
     const canEdit = isAdmin && tpl !== null && !tpl.builtin;
@@ -41,11 +43,12 @@ export function TemplateDetailPage() {
         setDescription(tpl.description);
         setValidation(null);
         setSaveError(null);
+        setJsonInvalid(false);
         setEditing(true);
     }
 
     async function save() {
-        if (!content || !tpl) return;
+        if (!content || !tpl || jsonInvalid) return;
         setBusy(true);
         setSaveError(null);
         try {
@@ -77,7 +80,9 @@ export function TemplateDetailPage() {
                         {tpl?.builtin && <Badge icon='lock'>{t('templates.builtin')}</Badge>}
                     </span>
                 }
-                description={!editing ? tpl?.description : undefined}
+                description={
+                    !editing && tpl?.description ? <span className='wrap-anywhere'>{tpl.description}</span> : undefined
+                }
                 actions={
                     canEdit &&
                     !editing && (
@@ -125,6 +130,7 @@ export function TemplateDetailPage() {
                                         setValidation(null);
                                     }}
                                     disabled={busy}
+                                    onJsonInvalidChange={setJsonInvalid}
                                 />
                                 <ValidationResult errors={validation} />
                                 {saveError && <Alert tone='danger'>{saveError}</Alert>}
@@ -132,7 +138,13 @@ export function TemplateDetailPage() {
                                     <Button onClick={() => setEditing(false)} disabled={busy}>
                                         {t('common.cancel')}
                                     </Button>
-                                    <Button variant='primary' icon='save' busy={busy} onClick={() => void save()}>
+                                    <Button
+                                        variant='primary'
+                                        icon='save'
+                                        busy={busy}
+                                        disabled={jsonInvalid}
+                                        onClick={() => void save()}
+                                    >
                                         {t('common.save')}
                                     </Button>
                                 </div>

@@ -7,9 +7,12 @@ import { formatElapsed } from '../utils/format';
 // Reports older than this are highlighted as stale.
 export const STALE_REPORT_SEC = 300;
 
-/** Link to the detections list narrowed to an agent's unacknowledged alerts. */
+/**
+ * Link to the detections list narrowed to an agent's unacknowledged alerts.
+ * Suppressed ones are left out, as in the count shown next to the link.
+ */
 export function unackedAlertsLink(agentId: number): string {
-    return `/detections?agent_id=${agentId}&category=alert&acknowledged=false`;
+    return `/detections?agent_id=${agentId}&category=alert&acknowledged=false&suppressed=false`;
 }
 
 /** Elapsed time since the last report, highlighted when stale. */

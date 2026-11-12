@@ -42,9 +42,12 @@ export function TokensPage() {
     const [reissueTarget, setReissueTarget] = useState<Token | null>(null);
     const [confirm, setConfirm] = useState<Confirm>(null);
     const [issued, setIssued] = useState<TokenWithValue | null>(null);
+    // Whether the dialog shows a reissued token: the agent is then initialized again with --overwrite.
+    const [reissued, setReissued] = useState(false);
 
-    function onIssued(r: TokenWithValue) {
+    function onIssued(r: TokenWithValue, isReissue = false) {
         setIssued(r);
+        setReissued(isReissue);
         reload();
     }
 
@@ -80,7 +83,7 @@ export function TokensPage() {
                                 <Th>{t('tokens.value')}</Th>
                                 <Th>{t('tokens.status')}</Th>
                                 <Th>{t('tokens.expiresAt')}</Th>
-                                <Th>{t('tokens.machine')}</Th>
+                                <Th>{t('tokens.instanceId')}</Th>
                                 <Th>{t('tokens.lastSeen')}</Th>
                                 <Th>{t('tokens.created')}</Th>
                                 {isAdmin && <Th className='text-right'>{t('common.actions')}</Th>}
@@ -202,7 +205,7 @@ export function TokensPage() {
                     <ReissueTokenModal
                         token={reissueTarget}
                         onClose={() => setReissueTarget(null)}
-                        onIssued={onIssued}
+                        onIssued={r => onIssued(r, true)}
                     />
                     <ConfirmDialog
                         open={confirm !== null}
@@ -234,7 +237,7 @@ export function TokensPage() {
                             </Button>
                         }
                     >
-                        {issued && <IssuedTokenHelp issued={issued} />}
+                        {issued && <IssuedTokenHelp issued={issued} reissued={reissued} />}
                     </Modal>
                 </>
             )}
@@ -246,7 +249,7 @@ export function TokensPage() {
  * The new value (in full until the dialog is closed; the browser shows only a
  * shortened value afterwards) and the next steps.
  */
-function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
+function IssuedTokenHelp({ issued, reissued }: { issued: TokenWithValue; reissued: boolean }) {
     const { t } = useTranslation();
     const [guide, setGuide] = useState<Guide | null>(null);
     useEffect(() => {
@@ -254,11 +257,13 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
             .then(setGuide)
             .catch(() => setGuide(null));
     }, []);
-    const hosts = guide?.central_hosts?.length ? guide.central_hosts : [guide?.central_hostname || '<host>'];
+    // Only names in the server certificate work for --central-host; without any, show a placeholder.
+    const hosts = guide?.central_hosts?.length ? guide.central_hosts : ['<host>'];
     const port = guide?.central_port || '<port>';
     return (
         <div className='flex flex-col gap-4'>
             <Alert tone='warning'>{t('tokens.fullValueNote')}</Alert>
+            {guide && !guide.central_hosts?.length && <Alert tone='warning'>{t('guide.noCentralHosts')}</Alert>}
             <div className='flex flex-col gap-2'>
                 <p className='text-sm font-medium'>{t('tokens.value')}</p>
                 <CodeBlock code={issued.value} />
@@ -267,7 +272,7 @@ function IssuedTokenHelp({ issued }: { issued: TokenWithValue }) {
                 <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
                 <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
                 {hosts.map(host => (
-                    <CodeBlock key={host} code={agentInitCommand(host, port)} />
+                    <CodeBlock key={host} code={agentInitCommand(host, port, undefined, reissued)} />
                 ))}
                 <p className='text-xs text-muted'>
                     {t('tokens.initThenStart')} <code className='font-mono'>./mimamori agent start</code>

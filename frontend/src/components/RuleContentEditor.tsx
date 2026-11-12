@@ -12,17 +12,27 @@ interface RuleContentEditorProps {
     value: RuleContent;
     onChange: (v: RuleContent) => void;
     disabled?: boolean;
+    /**
+     * Called with true while the JSON tab holds text that does not parse, and
+     * with false once it parses again or the tab is left. While it is invalid,
+     * `value` is the last valid content, not what the tab shows.
+     */
+    onJsonInvalidChange?: (invalid: boolean) => void;
 }
 
 /** Structured form editor for RuleContent, with a raw JSON tab. */
-export function RuleContentEditor({ value, onChange, disabled }: RuleContentEditorProps) {
+export function RuleContentEditor({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<'form' | 'json'>('form');
     return (
         <div className='flex flex-col gap-4'>
             <Tabs
                 value={tab}
-                onChange={setTab}
+                onChange={v => {
+                    setTab(v);
+                    // Leaving the JSON tab drops its text; the form shows the last valid content.
+                    onJsonInvalidChange?.(false);
+                }}
                 items={[
                     { value: 'form', label: t('ruleEditor.tabForm'), icon: 'tune' },
                     { value: 'json', label: t('ruleEditor.tabJson'), icon: 'data_object' },
@@ -31,7 +41,12 @@ export function RuleContentEditor({ value, onChange, disabled }: RuleContentEdit
             {tab === 'form' ? (
                 <RuleContentForm value={value} onChange={onChange} disabled={disabled} />
             ) : (
-                <RuleContentJson value={value} onChange={onChange} disabled={disabled} />
+                <RuleContentJson
+                    value={value}
+                    onChange={onChange}
+                    disabled={disabled}
+                    onJsonInvalidChange={onJsonInvalidChange}
+                />
             )}
         </div>
     );
@@ -98,7 +113,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                     <ElementListEditor
                         value={c.users}
                         onChange={users => set({ users })}
-                        placeholder='apache'
+                        placeholder='appuser'
                         disabled={disabled}
                     />
                     <p className='mt-1 text-xs text-muted'>{t('ruleEditor.usersHint')}</p>
@@ -139,8 +154,9 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
             </EditorSection>
 
             <EditorSection title={typeTitle('exec')} hint={t('ruleEditor.condExec')} enabled={enabled.exec}>
-                <Row label={t('rule.category')}>
+                <Row label={t('rule.category')} htmlFor='re-exec-cat'>
                     <CategorySelect
+                        id='re-exec-cat'
                         value={c.exec.category}
                         onChange={category => set({ exec: { category } })}
                         disabled={disabled}
@@ -149,8 +165,9 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
             </EditorSection>
 
             <EditorSection title={typeTitle('denied')} hint={t('ruleEditor.condDenied')} enabled={enabled.denied}>
-                <Row label={t('rule.category')}>
+                <Row label={t('rule.category')} htmlFor='re-denied-cat'>
                     <CategorySelect
+                        id='re-denied-cat'
                         value={c.denied.category}
                         onChange={category => set({ denied: { category } })}
                         disabled={disabled}
@@ -167,8 +184,9 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                         disabled={disabled}
                     />
                 </Row>
-                <Row label={t('rule.category')}>
+                <Row label={t('rule.category')} htmlFor='re-read-cat'>
                     <CategorySelect
+                        id='re-read-cat'
                         value={c.read.category}
                         onChange={category => set({ read: { ...c.read, category } })}
                         disabled={disabled}
@@ -181,12 +199,13 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                     <ElementListEditor
                         value={c.network.executables}
                         onChange={executables => set({ network: { ...c.network, executables } })}
-                        placeholder='/usr/sbin/php-fpm'
+                        placeholder='/usr/local/bin/app'
                         disabled={disabled}
                     />
                 </Row>
-                <Row label={t('rule.category')}>
+                <Row label={t('rule.category')} htmlFor='re-network-cat'>
                     <CategorySelect
+                        id='re-network-cat'
                         value={c.network.category}
                         onChange={category => set({ network: { ...c.network, category } })}
                         disabled={disabled}
@@ -209,13 +228,14 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                     <StringListEditor
                         value={c.writable.allowed_paths}
                         onChange={allowed_paths => set({ writable: { ...c.writable, allowed_paths } })}
-                        placeholder='/var/www/html/uploads'
+                        placeholder='uploads'
                         disabled={disabled}
                     />
                     <p className='mt-1 text-xs text-muted'>{t('ruleEditor.allowedPathsHint')}</p>
                 </Row>
-                <Row label={t('rule.category')}>
+                <Row label={t('rule.category')} htmlFor='re-writable-cat'>
                     <CategorySelect
+                        id='re-writable-cat'
                         value={c.writable.category}
                         onChange={category => set({ writable: { ...c.writable, category } })}
                         disabled={disabled}
@@ -233,7 +253,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                         id='re-ext'
                         value={c.exec_files.extensions}
                         onChange={extensions => set({ exec_files: { ...c.exec_files, extensions } })}
-                        placeholder='php, phtml, cgi'
+                        placeholder='sh, cgi'
                         disabled={disabled}
                     />
                     <p className='mt-1 text-xs text-muted'>{t('ruleEditor.commaHint')}</p>
@@ -248,7 +268,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                                 <input
                                     className={`${inputSmClass} min-w-0 flex-[2] font-mono`}
                                     value={l.path}
-                                    placeholder='/var/www/html'
+                                    placeholder='app/cache'
                                     disabled={disabled}
                                     aria-label={t('rule.legitPath')}
                                     onChange={ev => setLegit(i, { path: ev.target.value })}
@@ -257,8 +277,9 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                                     <CommaListInput
                                         value={l.extensions}
                                         onChange={extensions => setLegit(i, { extensions })}
-                                        placeholder='php'
+                                        placeholder='sh'
                                         disabled={disabled}
+                                        aria-label={t('rule.extensions')}
                                     />
                                 </div>
                                 <div className='flex items-center gap-2'>
@@ -266,6 +287,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                                         value={l.category}
                                         onChange={category => setLegit(i, { category })}
                                         disabled={disabled}
+                                        aria-label={t('rule.category')}
                                     />
                                     <RemoveButton
                                         disabled={disabled}
@@ -301,8 +323,9 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                         <p className='text-xs text-muted'>{t('ruleEditor.legitHint')}</p>
                     </div>
                 </Row>
-                <Row label={t('rule.otherCategory')}>
+                <Row label={t('rule.otherCategory')} htmlFor='re-other-cat'>
                     <CategorySelect
+                        id='re-other-cat'
                         value={c.exec_files.other_category}
                         onChange={other_category => set({ exec_files: { ...c.exec_files, other_category } })}
                         disabled={disabled}
@@ -341,7 +364,7 @@ function NumberInput({
     );
 }
 
-function RuleContentJson({ value, onChange, disabled }: RuleContentEditorProps) {
+function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
     const { t } = useTranslation();
     const [text, setText] = useState(() => JSON.stringify(value, null, 2));
     const [parseError, setParseError] = useState<string | null>(null);
@@ -370,8 +393,10 @@ function RuleContentJson({ value, onChange, disabled }: RuleContentEditorProps) 
                     try {
                         onChange(normalizeRuleContent(JSON.parse(ev.target.value)));
                         setParseError(null);
+                        onJsonInvalidChange?.(false);
                     } catch (e) {
                         setParseError(e instanceof Error ? e.message : String(e));
+                        onJsonInvalidChange?.(true);
                     }
                 }}
                 aria-label={t('ruleEditor.tabJson')}

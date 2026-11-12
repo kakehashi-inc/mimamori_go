@@ -169,12 +169,12 @@
         "neverRule": "neverルールあり",
         "neverRuleTitle": "監査を抑制するルールが有効です",
         "haltActions": "停止する設定",
-        "enabled": "enabled",
-        "pid": "PID",
+        "enabled": "有効化の状態（enabled）",
+        "pid": "プロセスID（PID）",
         "lostLabel": "取りこぼし（lost）",
         "backlog": "backlog / 上限",
-        "backlogWaitTime": "backlog_wait_time",
-        "failure": "failure",
+        "backlogWaitTime": "backlog の待ち時間（backlog_wait_time）",
+        "failure": "失敗時の動作（failure）",
         "neverRuleLabel": "監査を抑制するルール",
         "haltActionsTitle": "ホストを停止させる設定があります",
         "haltActionsNote": "auditd.conf の次の項目が halt または single です。ディスクの残量不足などでホストが停止するおそれがあります。導入の案内を参照して変更してください。"
@@ -187,6 +187,16 @@
         "unackedLink": "{{count}}件を確認する",
         "droppedTotal": "破棄した検知の累計",
         "droppedNote": "保存量の上限を超えたため、一部の検知を破棄しました。",
+        "tokenActions": {
+            "issued": "発行",
+            "reissued": "再発行",
+            "bound": "紐付け",
+            "unbound": "紐付け解除",
+            "revoked": "失効",
+            "expired": "期限切れ",
+            "renewed": "自動更新",
+            "renewal_issued": "自動更新の値を発行"
+        },
         "ruleAndApply": "監視ルールと適用の結果",
         "assignedVersion": "割り当てた版",
         "reportedVersion": "適用を報告した版",
@@ -229,7 +239,7 @@
         "expiresAt": "期限",
         "renewedAt": "自動更新 {{date}}",
         "reissuedAt": "再発行 {{date}}",
-        "machine": "インスタンスID",
+        "instanceId": "インスタンスID",
         "boundAt": "紐付け {{date}}",
         "unbound": "未紐付け",
         "lastSeen": "最後の接続",
@@ -338,9 +348,9 @@
         "condNetwork": "監視する実行ファイルと分類を指定すると有効になります。",
         "condWritable": "走査の起点と分類を指定すると有効になります。",
         "condExecFile": "走査の起点、書き込みを許可するパス、対象の拡張子、それ以外の場所の分類を指定すると有効になります。",
-        "allowedPathsHint": "アップロード先など、書き込みを許可するディレクトリです。",
-        "commaHint": "カンマ区切りで入力します（例: php, phtml）。",
-        "legitHint": "パス、拡張子（カンマ区切り、空欄はすべて）、分類の順に指定します。",
+        "allowedPathsHint": "アップロード先など、書き込みを許可するディレクトリです。走査の起点からの相対のディレクトリ名で指定します（例: uploads、data/files）。起点の下のどの深さにあっても一致します。",
+        "commaHint": "カンマ区切りで入力します（例: sh, cgi）。",
+        "legitHint": "パス（走査の起点からの相対のディレクトリ名。例: app/cache）、拡張子（カンマ区切り、1 つ以上）、分類（必須）の順に指定します。",
         "jsonHint": "JSON を直接編集できます。正しい JSON になった時点でフォームに反映されます。",
         "jsonError": "JSON の形式が正しくありません: {{message}}",
         "validate": "検証",
@@ -522,9 +532,10 @@
         "description": "監視対象のホストにエージェントを導入する手順です。",
         "values": "このセントラルの情報",
         "version": "版",
-        "centralHostname": "セントラルのホスト名",
+        "centralHostname": "セントラルの OS のホスト名",
         "caFingerprint": "独自CAのフィンガープリント",
         "defaultValidDays": "トークンの既定の有効日数",
+        "noCentralHosts": "エージェントの接続先に使うホスト名がまだ設定されていないため、コマンドには <host> と表示しています。システム設定の「サーバー証明書の名前」に、エージェントがセントラルへの接続に使うホスト名または IP アドレスを追加し、<host> の代わりにその名前を使ってください。",
         "days": "{{count}}日",
         "auditd": {
             "title": "auditd が有効で動いていることを確認する",
@@ -586,7 +597,7 @@
             "title": "セントラルのホストについて",
             "body": "セントラルには、自身のホストを監視する内蔵エージェントがあります。セントラルのホストでも手順 1 から 3 を行い、auditd が有効で動いている状態にしてください。auditd が動いていないと内蔵エージェントは停止し、画面の上部に警告が表示されます。"
         },
-        "centralHosts": "セントラルのホスト名"
+        "centralHosts": "エージェントの接続先に使えるホスト名"
     },
     "notFound": {
         "title": "ページが見つかりません",
@@ -669,7 +680,7 @@
             },
             "retention_days": {
                 "label": "保存期間（日）",
-                "hint": "これより古い検知を削除します。"
+                "hint": "これより古い検知と、拒否した接続の記録を削除します。"
             },
             "session_hours": {
                 "label": "セッションの有効時間（時間）",
@@ -733,7 +744,7 @@
             },
             "smtp_helo_name": {
                 "label": "HELO 名",
-                "hint": "HELO/EHLO で送る名前。空ならホスト名。"
+                "hint": "HELO/EHLO で送る名前。空なら localhost。"
             }
         }
     }

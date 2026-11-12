@@ -286,6 +286,7 @@ export function ConfigPage() {
                 }
             />
             <form onSubmit={e => void submit(e)} className='flex max-w-3xl flex-col gap-4'>
+                <ErrorAlert error={error} onRetry={reload} />
                 <Alert tone='info'>{t('config.applyNote')}</Alert>
                 {pending.length > 0 && (
                     <Alert tone='warning' title={t('config.pendingTitle')}>

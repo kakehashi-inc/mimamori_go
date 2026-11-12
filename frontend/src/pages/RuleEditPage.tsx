@@ -35,6 +35,8 @@ function RuleEditor() {
     const [validation, setValidation] = useState<string[] | null>(null);
     const [busy, setBusy] = useState<'validate' | 'save' | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
+    // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.
+    const [jsonInvalid, setJsonInvalid] = useState(false);
 
     useEffect(() => {
         if (!rule) return;
@@ -48,7 +50,7 @@ function RuleEditor() {
     }
 
     async function validate() {
-        if (!content) return;
+        if (!content || jsonInvalid) return;
         setBusy('validate');
         setSaveError(null);
         try {
@@ -61,7 +63,7 @@ function RuleEditor() {
     }
 
     async function save() {
-        if (!content || !rule) return;
+        if (!content || !rule || jsonInvalid) return;
         setBusy('save');
         setSaveError(null);
         try {
@@ -116,7 +118,12 @@ function RuleEditor() {
                                 onChange={e => setDescription(e.target.value)}
                             />
                         </Field>
-                        <RuleContentEditor value={content} onChange={change} disabled={busy === 'save'} />
+                        <RuleContentEditor
+                            value={content}
+                            onChange={change}
+                            disabled={busy === 'save'}
+                            onJsonInvalidChange={setJsonInvalid}
+                        />
                         <Field label={t('rules.comment')} htmlFor='re-comment' hint={t('rules.commentHint')}>
                             <input
                                 id='re-comment'
@@ -134,7 +141,7 @@ function RuleEditor() {
                             <Button
                                 icon='fact_check'
                                 busy={busy === 'validate'}
-                                disabled={busy !== null}
+                                disabled={busy !== null || jsonInvalid}
                                 onClick={() => void validate()}
                             >
                                 {t('ruleEditor.validate')}
@@ -143,7 +150,7 @@ function RuleEditor() {
                                 variant='primary'
                                 icon='save'
                                 busy={busy === 'save'}
-                                disabled={busy !== null}
+                                disabled={busy !== null || jsonInvalid}
                                 onClick={() => void save()}
                             >
                                 {t('common.save')}

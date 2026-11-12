@@ -128,47 +128,54 @@ export function CertificatesPage() {
                         </Card>
 
                         <Card title={t('certificates.server')}>
-                            <DescriptionList
-                                items={[
-                                    { label: t('certificates.subject'), value: data.server.subject },
-                                    {
-                                        label: t('certificates.names'),
-                                        value: (
-                                            <span className='flex flex-wrap gap-1'>
-                                                {(data.server.names ?? []).map(n => (
-                                                    <code key={n} className='rounded bg-canvas px-1 font-mono text-xs'>
-                                                        {n}
-                                                    </code>
-                                                ))}
-                                            </span>
-                                        ),
-                                    },
-                                    {
-                                        label: t('certificates.fingerprint'),
-                                        value: (
-                                            <span className='font-mono text-xs break-all'>
-                                                {data.server.fingerprint}
-                                            </span>
-                                        ),
-                                    },
-                                    {
-                                        label: t('certificates.issuer'),
-                                        value: (
-                                            <span className='font-mono text-xs break-all'>
-                                                {data.server.issuer_fingerprint}
-                                            </span>
-                                        ),
-                                    },
-                                    {
-                                        label: t('certificates.notBefore'),
-                                        value: formatDateTime(data.server.not_before),
-                                    },
-                                    {
-                                        label: t('certificates.notAfter'),
-                                        value: <Expiry value={data.server.not_after} />,
-                                    },
-                                ]}
-                            />
+                            {!data.server ? (
+                                <EmptyState icon='verified_user' />
+                            ) : (
+                                <DescriptionList
+                                    items={[
+                                        { label: t('certificates.subject'), value: data.server.subject },
+                                        {
+                                            label: t('certificates.names'),
+                                            value: (
+                                                <span className='flex flex-wrap gap-1'>
+                                                    {(data.server.names ?? []).map(n => (
+                                                        <code
+                                                            key={n}
+                                                            className='rounded bg-canvas px-1 font-mono text-xs'
+                                                        >
+                                                            {n}
+                                                        </code>
+                                                    ))}
+                                                </span>
+                                            ),
+                                        },
+                                        {
+                                            label: t('certificates.fingerprint'),
+                                            value: (
+                                                <span className='font-mono text-xs break-all'>
+                                                    {data.server.fingerprint}
+                                                </span>
+                                            ),
+                                        },
+                                        {
+                                            label: t('certificates.issuer'),
+                                            value: (
+                                                <span className='font-mono text-xs break-all'>
+                                                    {data.server.issuer_fingerprint}
+                                                </span>
+                                            ),
+                                        },
+                                        {
+                                            label: t('certificates.notBefore'),
+                                            value: formatDateTime(data.server.not_before),
+                                        },
+                                        {
+                                            label: t('certificates.notAfter'),
+                                            value: <Expiry value={data.server.not_after} />,
+                                        },
+                                    ]}
+                                />
+                            )}
                         </Card>
                     </div>
                 )

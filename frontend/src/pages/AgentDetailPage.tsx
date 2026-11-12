@@ -12,6 +12,23 @@ import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo } from '../types'
 import { formatDateTime, localizeTimestamps } from '../utils/format';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
 
+// Token history actions recorded by the central (app/workers); others are shown as they are.
+const TOKEN_ACTIONS = [
+    'issued',
+    'reissued',
+    'bound',
+    'unbound',
+    'revoked',
+    'expired',
+    'renewed',
+    'renewal_issued',
+] as const;
+type TokenAction = (typeof TOKEN_ACTIONS)[number];
+
+function isTokenAction(action: string): action is TokenAction {
+    return (TOKEN_ACTIONS as readonly string[]).includes(action);
+}
+
 const linkClass =
     'text-accent hover:text-accent-hover hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
@@ -153,7 +170,9 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                                 <Tr key={h.id}>
                                     <Td className='whitespace-nowrap'>{formatDateTime(h.at)}</Td>
                                     <Td>{h.account_name}</Td>
-                                    <Td>{h.action}</Td>
+                                    <Td>
+                                        {isTokenAction(h.action) ? t(`agentDetail.tokenActions.${h.action}`) : h.action}
+                                    </Td>
                                     <Td className='text-muted'>{localizeTimestamps(h.detail)}</Td>
                                 </Tr>
                             ))}

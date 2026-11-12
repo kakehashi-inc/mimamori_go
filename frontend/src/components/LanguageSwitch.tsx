@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { LANG_SETTINGS } from '../constants';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { errorMessage } from '../utils/format';
 
 /** Globe icon button that opens a dropdown to pick the UI language. */
 export function LanguageSwitch() {
@@ -10,6 +12,7 @@ export function LanguageSwitch() {
     // Reading i18n.language subscribes this component to language changes.
     void i18n.language;
     const { langSetting: current, setLanguage } = useAuth();
+    const { showToast } = useToast();
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     useClickOutside(ref, open, () => setOpen(false));
@@ -41,7 +44,7 @@ export function LanguageSwitch() {
                             aria-checked={current === code}
                             onClick={() => {
                                 setOpen(false);
-                                void setLanguage(code);
+                                setLanguage(code).catch((e: unknown) => showToast(errorMessage(t, e), 'error'));
                             }}
                             className={`flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm hover:bg-line focus:bg-line focus:outline-none ${
                                 current === code ? 'text-ink' : 'text-muted'

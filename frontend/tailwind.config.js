@@ -10,9 +10,6 @@ export default {
   darkMode: "media",
   theme: {
     extend: {
-      fontFamily: {
-        icon: ['"Material Icons"', "sans-serif"],
-      },
       colors: {
         // Page background and raised surfaces (cards, header).
         canvas: "light-dark(#f8fafc, #0b0f17)",

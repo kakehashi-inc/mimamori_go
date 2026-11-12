@@ -66,6 +66,17 @@ export function DetectionsPage() {
     );
     const items = data?.items ?? [];
 
+    // A page past the end (e.g. after acknowledging every item of the last page
+    // while filtering by unacknowledged) moves to the last page that exists.
+    useEffect(() => {
+        if (loading || !data || offset === 0 || offset < data.total) return;
+        const last = data.total > 0 ? Math.floor((data.total - 1) / limit) * limit : 0;
+        const p = new URLSearchParams(params);
+        if (last > 0) p.set('offset', String(last));
+        else p.delete('offset');
+        setParams(p, { replace: true });
+    }, [data, loading]);
+
     useEffect(() => setDraft(applied), [applied]);
     useEffect(() => setSelected(new Set()), [queryKey]);
     useEffect(() => {

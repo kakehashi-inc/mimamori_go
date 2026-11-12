@@ -5,6 +5,7 @@ import { getGuide } from '../api/client';
 import { CodeBlock, CopyButton } from '../components/CopyButton';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
 import { Alert, ErrorAlert, Loading } from '../components/StateViews';
+import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { agentInitCommand, agentSetCentralCommand } from '../utils/commands';
 import { formatVersion } from '../utils/format';
@@ -53,9 +54,11 @@ function Bullets({ items }: { items: ReactNode[] }) {
 
 export function GuidePage() {
     const { t } = useTranslation();
+    const { isAdmin } = useAuth();
     const { data: guide, error, loading, reload } = useApi(getGuide, []);
 
-    const hosts = guide?.central_hosts?.length ? guide.central_hosts : [guide?.central_hostname || '<host>'];
+    // Only names in the server certificate work for --central-host; without any, show a placeholder.
+    const hosts = guide?.central_hosts?.length ? guide.central_hosts : ['<host>'];
     const port = guide?.central_port || '<port>';
     const fp = guide?.ca_fingerprint || '<fingerprint>';
     const host = hosts[0];
@@ -104,6 +107,9 @@ export function GuidePage() {
                                 ]}
                             />
                         </Card>
+                    )}
+                    {guide && isAdmin && !guide.central_hosts?.length && (
+                        <Alert tone='warning'>{t('guide.noCentralHosts')}</Alert>
                     )}
 
                     <Step n={1} title={t('guide.auditd.title')}>

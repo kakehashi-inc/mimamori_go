@@ -107,19 +107,22 @@ function sameList(a: string[], b: string[]): boolean {
     return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-/** A single text box holding a comma separated list, e.g. "php, phtml". */
+/** A single text box holding a comma separated list, e.g. "sh, cgi". */
 export function CommaListInput({
     value,
     onChange,
     placeholder,
     disabled,
     id,
+    'aria-label': ariaLabel,
 }: {
     value: string[];
     onChange: (v: string[]) => void;
     placeholder?: string;
     disabled?: boolean;
     id?: string;
+    /** Accessible name when no <label> points at the input. */
+    'aria-label'?: string;
 }) {
     const [text, setText] = useState(value.join(', '));
 
@@ -131,6 +134,7 @@ export function CommaListInput({
     return (
         <input
             id={id}
+            aria-label={ariaLabel}
             className={`${inputSmClass} font-mono`}
             value={text}
             placeholder={placeholder}
@@ -149,16 +153,20 @@ export function CategorySelect({
     onChange,
     disabled,
     id,
+    'aria-label': ariaLabel,
 }: {
     value: Category;
     onChange: (v: Category) => void;
     disabled?: boolean;
     id?: string;
+    /** Accessible name when no <label> points at the select. */
+    'aria-label'?: string;
 }) {
     const { t } = useTranslation();
     return (
         <select
             id={id}
+            aria-label={ariaLabel}
             className={`${inputSmAutoClass} shrink-0`}
             value={value}
             disabled={disabled}

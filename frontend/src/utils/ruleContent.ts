@@ -1,21 +1,5 @@
 import type { Category, DetectionType, LegitLocation, RuleContent, RuleElement } from '../types';
 
-/** An empty rule content: nothing is monitored. */
-export function emptyRuleContent(): RuleContent {
-    return {
-        users: [],
-        exclude_interactive: null,
-        check_interval_sec: 0,
-        scan_interval_sec: 0,
-        exec: { category: '' },
-        denied: { category: '' },
-        read: { dirs: [], category: '' },
-        network: { executables: [], category: '' },
-        writable: { base: '', allowed_paths: [], category: '' },
-        exec_files: { extensions: [], legit: [], other_category: '' },
-    };
-}
-
 function category(v: unknown): Category {
     return v === 'alert' || v === 'normal' ? v : '';
 }

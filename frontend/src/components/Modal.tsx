@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -25,6 +25,7 @@ const widths = {
 export function Modal({ open, title, onClose, children, footer, size = 'md', locked }: ModalProps) {
     const { t } = useTranslation();
     const panelRef = useRef<HTMLDivElement>(null);
+    const titleId = useId();
 
     useEffect(() => {
         if (!open) return;
@@ -57,11 +58,14 @@ export function Modal({ open, title, onClose, children, footer, size = 'md', loc
                 ref={panelRef}
                 role='dialog'
                 aria-modal='true'
+                aria-labelledby={titleId}
                 tabIndex={-1}
                 className={`relative my-8 flex w-full ${widths[size]} flex-col rounded-xl border border-line bg-surface shadow-2xl focus:outline-none`}
             >
                 <div className='flex items-center justify-between gap-4 border-b border-line px-5 py-3'>
-                    <h2 className='text-base font-semibold text-ink'>{title}</h2>
+                    <h2 id={titleId} className='text-base font-semibold text-ink'>
+                        {title}
+                    </h2>
                     <button
                         type='button'
                         onClick={onClose}

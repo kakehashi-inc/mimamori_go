@@ -187,6 +187,16 @@
         "unackedLink": "Review {{count}}",
         "droppedTotal": "Dropped detections (total)",
         "droppedNote": "Some detections were dropped because the storage limit was exceeded.",
+        "tokenActions": {
+            "issued": "issued",
+            "reissued": "reissued",
+            "bound": "bound",
+            "unbound": "unbound",
+            "revoked": "revoked",
+            "expired": "expired",
+            "renewed": "renewed",
+            "renewal_issued": "renewal_issued"
+        },
         "ruleAndApply": "Rule and apply result",
         "assignedVersion": "Assigned version",
         "reportedVersion": "Reported version",
@@ -229,7 +239,7 @@
         "expiresAt": "Expires",
         "renewedAt": "Renewed {{date}}",
         "reissuedAt": "Reissued {{date}}",
-        "machine": "Instance ID",
+        "instanceId": "Instance ID",
         "boundAt": "Bound {{date}}",
         "unbound": "Not bound",
         "lastSeen": "Last seen",
@@ -338,9 +348,9 @@
         "condNetwork": "Enabled when executables to watch and a category are set.",
         "condWritable": "Enabled when a scan base and a category are set.",
         "condExecFile": "Enabled when a scan base, allowed write paths, extensions and the category elsewhere are set.",
-        "allowedPathsHint": "Directories where writes are allowed, such as upload folders.",
-        "commaHint": "Comma separated, e.g. php, phtml.",
-        "legitHint": "Path, extensions (comma separated, empty for all) and category.",
+        "allowedPathsHint": "Directories where writes are allowed, such as upload folders. Enter directory names relative to the scan base, e.g. uploads or data/files; they match at any depth below the base.",
+        "commaHint": "Comma separated, e.g. sh, cgi.",
+        "legitHint": "Path (directory names relative to the scan base, e.g. app/cache), extensions (comma separated, at least one) and category (required).",
         "jsonHint": "Edit the JSON directly. Changes reach the form as soon as the JSON is valid.",
         "jsonError": "Invalid JSON: {{message}}",
         "validate": "Validate",
@@ -433,7 +443,7 @@
         "source_rule": "From a rule version",
         "chooseBuiltin": "Choose the built-in template to copy.",
         "chooseRule": "Choose a rule and a version.",
-        "builtinReadOnly": "Built-in templates cannot be edited or deleted. Copy it into a new template instead.",
+        "builtinReadOnly": "Built-in templates cannot be edited or deleted. Copy one into a new template instead.",
         "deleteTitle": "Delete template",
         "deleteConfirm": "Delete template {{name}}?"
     },
@@ -525,6 +535,7 @@
         "centralHostname": "Central hostname",
         "caFingerprint": "Private CA fingerprint",
         "defaultValidDays": "Default token validity",
+        "noCentralHosts": "No host name for the agents is set yet, so the commands show <host>. Add the host name or IP address that the agents use to connect to the central to \"Server certificate names\" in System settings, then use that name in place of <host>.",
         "days": "{{count}} days",
         "auditd": {
             "title": "Make sure auditd is enabled and running",
@@ -669,7 +680,7 @@
             },
             "retention_days": {
                 "label": "Retention (days)",
-                "hint": "Detections older than this are deleted."
+                "hint": "Detections and records of rejected connections older than this are deleted."
             },
             "session_hours": {
                 "label": "Session lifetime (hours)",
@@ -733,7 +744,7 @@
             },
             "smtp_helo_name": {
                 "label": "HELO name",
-                "hint": "Name sent in HELO/EHLO. The host name when empty."
+                "hint": "Name sent in HELO/EHLO. localhost when empty."
             }
         }
     }

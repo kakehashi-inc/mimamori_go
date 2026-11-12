@@ -351,7 +351,8 @@ export interface CertInfo {
 
 export interface CertStatus {
     cas: CertInfo[] | null;
-    server: CertInfo & { names: string[] | null; issuer_fingerprint: string };
+    /** Absent while there is no active server certificate. */
+    server?: CertInfo & { names: string[] | null; issuer_fingerprint: string };
     rotation: {
         state: 'none' | 'distributing' | 'switched';
         next_ca_created_at: string | null;

@@ -233,7 +233,7 @@ function VersionContent({
                 <VersionSelect id='rv-version' versions={versions} value={version} onChange={onVersionChange} />
                 {isLatest && <span className='text-xs text-success'>{t('rules.latest')}</span>}
                 {info && (
-                    <span className='text-xs text-muted'>
+                    <span className='min-w-0 text-xs wrap-anywhere text-muted'>
                         {info.created_by} / {info.comment || t('rules.noComment')}
                     </span>
                 )}

@@ -145,7 +145,7 @@ function RuleCreator() {
                                                             {tpl.name}
                                                             {tpl.builtin && <Badge>{t('templates.builtin')}</Badge>}
                                                         </span>
-                                                        <span className='block text-xs text-muted'>
+                                                        <span className='block text-xs wrap-anywhere text-muted'>
                                                             {tpl.description || '-'}
                                                         </span>
                                                     </span>
