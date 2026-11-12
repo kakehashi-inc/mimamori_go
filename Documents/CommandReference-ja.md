@@ -52,7 +52,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ） |
 | `agent set-central --host HOST [--port PORT]` | 初期化済みのエージェントの接続先（セントラルのホスト名とポート）を変える。エージェントの停止中だけ使え、新しい接続先に今のトークンで接続できた場合だけ保存する |
 | `agent start` | エージェントを起動する。SIGTERM または SIGINT で終了する |
 | `agent stop [--timeout DURATION]` | 起動中のエージェントを停止し、その回の処理を終えるまで待つ（既定 300s） |
@@ -154,7 +154,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | 0 | 正常 |
 | 1 | 一般エラー |
 | 2 | 引数エラー（不明なコマンドやフラグ、値の不足など、コマンドラインそのものの誤りを含む） |
-| 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent set-central` を含む）。`status` では停止中 |
+| 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent init` と `agent set-central` を含む）。`status` では停止中 |
 | 4 | 認証または権限のエラー |
 | 5 | 実行エラー（外部コマンドまたはセントラル） |
 | 6 | ファイル I/O エラー |

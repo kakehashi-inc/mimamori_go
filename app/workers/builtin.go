@@ -58,8 +58,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 		return none
 	}
 	logger := log.New(c.logger.Writer(), "[builtin-agent] ", log.LstdFlags)
-	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: c, agentID: agent.ID}, c.dataDir, logger)
-	rt.Builtin = true
+	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: c, agentID: agent.ID}, logger)
 	done := make(chan struct{})
 	c.setBuiltinStatus(true, "")
 	go func() {

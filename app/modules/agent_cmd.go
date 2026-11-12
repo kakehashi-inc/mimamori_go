@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -85,9 +86,13 @@ func AgentInit(o AgentInitOptions) error {
 	if err := CheckAuditd(); err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
-	// 2. existing initialization (the agent ID is kept on re-initialization)
+	// 2. existing initialization (the agent ID is kept on re-initialization;
+	// the agent must be stopped, because a running agent writes back its own
+	// copy of the configuration)
 	dbPath := filepath.Join(o.DataDir, AgentLocalDBFileName)
+	lockPath := filepath.Join(o.DataDir, AgentLockFileName)
 	agentID := ""
+	var created []string
 	if _, err := os.Stat(dbPath); err == nil {
 		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 		if err != nil {
@@ -99,26 +104,31 @@ func AgentInit(o AgentInitOptions) error {
 		if !errors.Is(cfgErr, ErrAgentNotInitialized) && !o.Overwrite {
 			return NewExitError(ExitArgument, "the agent is already initialized; use --overwrite to replace it")
 		}
+		if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
+			created = append(created, lockPath)
+		}
+		lock, err := AcquireLock(lockPath)
+		if err != nil {
+			removeCreated(created)
+			return NewExitError(ExitConfig, "the agent is running; stop it before re-initializing")
+		}
+		defer lock.Release()
 	}
 	token, err := ReadSecret("Token: ")
 	if err != nil {
+		removeCreated(created)
 		return NewExitError(ExitArgument, err.Error())
 	}
 	if agentID == "" {
 		if agentID, err = RandomHex(16); err != nil {
+			removeCreated(created)
 			return err
 		}
 	}
-	// 3. connect, receive the CA, authenticate (binds the token to this agent)
-	cfg, resp, err := initConnect(o, token, agentID)
-	if err != nil {
-		return NewExitError(ExitExec, err.Error())
-	}
-	// 4. storage: the data directory and the local database
-	var created []string
-	if _, err := os.Stat(o.DataDir); errors.Is(err, os.ErrNotExist) {
-		created = append(created, o.DataDir)
-	}
+	// 3. storage: the data directory and the local database (prepared before
+	// the token is bound to this agent instance, so a storage failure leaves
+	// the token unbound)
+	created = append(created, missingDirs(o.DataDir)...)
 	if err := EnsureDataDir(o.DataDir); err != nil {
 		removeCreated(created)
 		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
@@ -127,10 +137,24 @@ func AgentInit(o AgentInitOptions) error {
 		created = append(created, dbPath, dbPath+"-wal", dbPath+"-shm")
 	}
 	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
-	if err == nil {
-		err = cfg.Save(db)
-		db.Close()
+	if err != nil {
+		removeCreated(created)
+		return NewExitErrorf(ExitFileIO, "local database: %v", err)
 	}
+	// 4. connect, receive the CA, authenticate (binds the token to this agent)
+	cfg, resp, err := initConnect(o, token, agentID)
+	if err != nil {
+		db.Close()
+		removeCreated(created)
+		var ee *ExitError
+		if errors.As(err, &ee) {
+			return ee
+		}
+		return NewExitError(ExitExec, err.Error())
+	}
+	// 5. save the configuration
+	err = cfg.Save(db)
+	db.Close()
 	if err != nil {
 		removeCreated(created)
 		return NewExitErrorf(ExitFileIO, "local database: %v", err)
@@ -150,6 +174,24 @@ func AgentInit(o AgentInitOptions) error {
 	fmt.Printf("  CA:          %s\n", FormatFingerprint(CAFingerprintsOf(cfg.CAPEMs)[0]))
 	fmt.Printf("Start the agent with: ./%s agent start\n", AppName)
 	return nil
+}
+
+// missingDirs returns dir and those of its parent directories that do not
+// exist, outermost first, so that removeCreated removes the innermost first.
+func missingDirs(dir string) []string {
+	var out []string
+	for d := filepath.Clean(dir); ; {
+		if _, err := os.Lstat(d); !errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		out = append([]string{d}, out...)
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	return out
 }
 
 // removeCreated removes what this run created, newest first (a directory
@@ -176,19 +218,23 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 		return nil, nil, errors.New("the central returned no CA certificate")
 	}
 	fps := CAFingerprintsOf(ca.CAPEMs)
+	trusted := ca.CAPEMs
 	if want := NormalizeFingerprint(o.CAFingerprint); want != "" {
-		found := false
-		for _, fp := range fps {
-			if fp == want {
-				found = true
+		// Trust only the CA with the given fingerprint: the unverified answer
+		// may hold other certificates beside it.
+		trusted = nil
+		for _, p := range ca.CAPEMs {
+			if cert, err := ParseCertPEM(p); err == nil && Fingerprint(cert) == want {
+				trusted = []string{p}
+				break
 			}
 		}
-		if !found {
+		if trusted == nil {
 			return nil, nil, fmt.Errorf("CA fingerprint mismatch: the central offered %s", FormatFingerprint(fps[0]))
 		}
 	}
 	cfg := &AgentConfig{AgentID: agentID, CentralHost: o.CentralHost, CentralPort: o.CentralPort, Token: token, InitializedAt: time.Now().Unix()}
-	cfg.MergeCAs(ca.CAPEMs, time.Now())
+	cfg.MergeCAs(trusted, time.Now())
 	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -207,7 +253,11 @@ func syncCheck(tr *RemoteTransport, req *SyncRequest) (*SyncResponse, error) {
 	if err != nil {
 		var he *HTTPError
 		if errors.As(err, &he) && he.Status == 401 {
-			return nil, errors.New("authentication failed: the token is invalid, expired, revoked or bound to another agent instance")
+			return nil, NewExitError(ExitAuth, "authentication failed: the token is invalid, expired, revoked or bound to another agent instance")
+		}
+		var hn x509.HostnameError
+		if errors.As(err, &hn) {
+			return nil, fmt.Errorf("the central host is not one of the certificate names (server_names): %w", err)
 		}
 		var ue x509.UnknownAuthorityError
 		if errors.As(err, &ue) || IsCertificateError(err) {
@@ -311,10 +361,10 @@ func AgentStart(dataDir string) error {
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
-	rt := NewAgentRuntime(db, tr, dataDir, logger)
+	rt := NewAgentRuntime(db, tr, logger)
 	rt.Config = cfg
 	rt.OnTokenRenewed = tr.SetToken
-	prevCAs := len(cfg.CAPEMs)
+	prevCAs := slices.Clone(cfg.CAPEMs)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -329,9 +379,11 @@ func AgentStart(dataDir string) error {
 			stop = true
 		default:
 		}
-		if len(cfg.CAPEMs) != prevCAs {
+		// Compare the certificates themselves: a new CA may replace an
+		// expired one without changing the count.
+		if !slices.Equal(cfg.CAPEMs, prevCAs) {
 			tr.SetCAs(cfg.CAPEMs)
-			prevCAs = len(cfg.CAPEMs)
+			prevCAs = slices.Clone(cfg.CAPEMs)
 		}
 		return stop
 	}

@@ -16,12 +16,15 @@ import (
 	"time"
 )
 
-// HTTPSClient is a minimal HTTPS client that runs entirely in the calling
-// flow. Unlike net/http.Client it creates no goroutines: it dials, performs
-// the TLS handshake, writes one request and reads one response, all bounded
-// by a deadline on the connection.
+// HTTPSClient is a minimal HTTPS client that runs in the calling flow.
+// Unlike net/http.Client it starts no goroutines of its own: it dials,
+// performs the TLS handshake, writes one request and reads one response, all
+// bounded by a deadline on the connection. (When the host is a name rather
+// than an IP address, the standard library's name resolution may use
+// goroutines internally while the call waits for it.)
 type HTTPSClient struct {
-	BaseURL *url.URL
+	// Address is host:port of the server.
+	Address string
 	TLS     *tls.Config
 	Timeout time.Duration
 	Headers map[string]string
@@ -52,15 +55,14 @@ func NewHTTPSClient(host string, port int, tlsCfg *tls.Config, timeout time.Dura
 	if host == "" || port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid host %q or port %d", host, port)
 	}
-	u := &url.URL{Scheme: "https", Host: net.JoinHostPort(host, strconv.Itoa(port))}
-	return &HTTPSClient{BaseURL: u, TLS: tlsCfg, Timeout: timeout, Headers: map[string]string{}}, nil
+	return &HTTPSClient{Address: net.JoinHostPort(host, strconv.Itoa(port)), TLS: tlsCfg, Timeout: timeout, Headers: map[string]string{}}, nil
 }
 
 // Do sends one request and returns the status and body.
 func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) {
 	deadline := time.Now().Add(c.Timeout)
 	d := net.Dialer{Deadline: deadline, FallbackDelay: -1}
-	raw, err := d.Dial("tcp", c.BaseURL.Host)
+	raw, err := d.Dial("tcp", c.Address)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -70,16 +72,15 @@ func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) 
 	}
 	cfg := c.TLS.Clone()
 	if cfg.ServerName == "" {
-		cfg.ServerName = c.BaseURL.Hostname()
+		cfg.ServerName, _, _ = net.SplitHostPort(c.Address)
 	}
 	conn := tls.Client(raw, cfg)
 	if err := conn.Handshake(); err != nil {
 		return 0, nil, err
 	}
-	u := *c.BaseURL
-	u.Path = c.BaseURL.Path + path
+	u := url.URL{Scheme: "https", Host: c.Address, Path: path}
 	if i := strings.Index(path, "?"); i >= 0 {
-		u.Path = c.BaseURL.Path + path[:i]
+		u.Path = path[:i]
 		u.RawQuery = path[i+1:]
 	}
 	req, err := http.NewRequest(method, u.String(), bytes.NewReader(body))

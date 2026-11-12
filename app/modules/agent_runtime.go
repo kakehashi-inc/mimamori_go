@@ -23,7 +23,6 @@ type AgentTransport interface {
 const (
 	stateRule           = "rule"
 	stateApply          = "apply"
-	stateAuditApply     = "audit_apply"
 	stateExecWatermark  = "exec_watermark"
 	stateLastFullScan   = "last_full_scan"
 	stateScanSignature  = "scan_signature"
@@ -37,8 +36,6 @@ const (
 type AgentRuntime struct {
 	DB        *sql.DB
 	Transport AgentTransport
-	Builtin   bool
-	DataDir   string
 	Config    *AgentConfig // nil for the built-in agent
 	Logger    *log.Logger
 	// OnTokenRenewed is called after a renewed token was saved.
@@ -57,8 +54,8 @@ type AgentRuntime struct {
 }
 
 // NewAgentRuntime loads the stored state.
-func NewAgentRuntime(db *sql.DB, tr AgentTransport, dataDir string, logger *log.Logger) *AgentRuntime {
-	rt := &AgentRuntime{DB: db, Transport: tr, DataDir: dataDir, Logger: logger,
+func NewAgentRuntime(db *sql.DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
+	rt := &AgentRuntime{DB: db, Transport: tr, Logger: logger,
 		defaultInterval: DefaultCheckIntervalSec}
 	if v := models.GetLocalState(db, stateRule); v != "" {
 		var r RuleAssignment
@@ -254,9 +251,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	}
 	res := ResolveRule(&ra.Content)
 	lines := GenerateAuditRules(res)
-	var st AuditApplyState
-	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateAuditApply)), &st)
-	applyWarnings, err := ApplyAuditRules(lines, &st)
+	applyWarnings, err := ApplyAuditRules(lines)
 	if err != nil {
 		result.Status = "error"
 		result.Message = err.Error()
@@ -264,9 +259,6 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 		rt.setApply(result)
 		rt.logf("rule %q version %d not applied: %v", ra.Name, ra.Version, err)
 		return
-	}
-	if b, err := json.Marshal(st); err == nil {
-		_ = models.SetLocalState(rt.DB, stateAuditApply, string(b))
 	}
 	rt.failedRule = ""
 	result.Warnings = append(res.Warnings, applyWarnings...)
@@ -340,6 +332,10 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		uids[u] = true
 	}
 	lastFull, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateLastFullScan), 10, 64)
+	// Allowed roots that a full scan of this cycle found for the first time.
+	// Files created in them before they became roots are older than the
+	// watermark, so they are scanned from the previous full scan.
+	var newRoots map[string]bool
 	if now-lastFull >= int64(c.ScanInterval()) {
 		wr, err := ScanWritable(c.Writable.Base, c.Writable.AllowedPaths, uids, c.Writable.Category)
 		if err != nil {
@@ -358,6 +354,20 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 				}
 				_ = models.PruneFindings(rt.DB, TypeWritable+"|", now)
 			}
+			if lastFull > 0 {
+				if old, err := models.ListScanRoots(rt.DB); err == nil {
+					known := map[string]bool{}
+					for _, r := range old {
+						known[r] = true
+					}
+					newRoots = map[string]bool{}
+					for _, r := range wr.AllowedRoots {
+						if !known[r] {
+							newRoots[r] = true
+						}
+					}
+				}
+			}
 			_ = models.ReplaceScanRoots(rt.DB, wr.AllowedRoots)
 			_ = models.SetLocalState(rt.DB, stateLastFullScan, strconv.FormatInt(now, 10))
 		}
@@ -366,7 +376,13 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		roots, err := models.ListScanRoots(rt.DB)
 		if err == nil {
 			wm, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecWatermark), 10, 64)
-			found, err := ScanExecFiles(c.Writable.Base, roots, c, wm, wm == 0)
+			since := func(root string) int64 {
+				if newRoots[root] && lastFull < wm {
+					return lastFull
+				}
+				return wm
+			}
+			found, skipped, err := ScanExecFiles(c.Writable.Base, roots, c, since, wm == 0)
 			if err != nil {
 				rt.logf("executed-file scan failed: %v", err)
 			} else {
@@ -376,6 +392,12 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 						out = append(out, f.ToReport(users, groups, now))
 					}
 					_ = models.TouchFinding(rt.DB, fp, now)
+				}
+				// Files of the first scan that are not reported are remembered,
+				// so the next scan (which also looks at the second of this one)
+				// does not report them either.
+				for _, f := range skipped {
+					_ = models.TouchFinding(rt.DB, f.Fingerprint(), now)
 				}
 				// Files whose status changed at or after the cycle start are
 				// picked up again next time (duplicates are filtered above).
@@ -422,13 +444,54 @@ func countCategories(ds []DetectionReport) (alerts, normals int) {
 	return
 }
 
+// enqueue stores a report. Only the newest report needs the host
+// information, so it is removed from the queued ones, and a queued report
+// with nothing else to deliver (no detections, no dropped count and the same
+// application result as the new one) is replaced by the new report.
 func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
+	apply, _ := json.Marshal(req.Apply)
+	items, err := models.ListOutbox(rt.DB)
+	if err != nil {
+		return err
+	}
+	tx, err := rt.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, it := range items {
+		var old ReportRequest
+		if json.Unmarshal([]byte(it.Payload), &old) != nil {
+			continue
+		}
+		oldApply, _ := json.Marshal(old.Apply)
+		if len(old.Detections) == 0 && old.Dropped == 0 && string(oldApply) == string(apply) {
+			if err := models.DeleteOutbox(tx, it.ID); err != nil {
+				return err
+			}
+			continue
+		}
+		if old.HostInfo != nil {
+			old.HostInfo = nil
+			ob, err := json.Marshal(&old)
+			if err != nil {
+				return err
+			}
+			it.Payload = string(ob)
+			if err := models.UpdateOutbox(tx, it); err != nil {
+				return err
+			}
+		}
+	}
 	a, n := countCategories(req.Detections)
-	return models.InsertOutbox(rt.DB, &models.OutboxItem{Payload: string(b), AlertCount: a, NormalCount: n})
+	if err := models.InsertOutbox(tx, &models.OutboxItem{Payload: string(b), AlertCount: a, NormalCount: n}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // enforceOutboxLimit keeps the stored detections under the limit by dropping

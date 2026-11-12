@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // AuditdStatus is the state of auditd as reported by "auditctl -s" plus the
@@ -101,6 +100,7 @@ func HaltActions() []string {
 	keys := map[string]bool{
 		"space_left_action": true, "admin_space_left_action": true,
 		"disk_full_action": true, "disk_error_action": true,
+		"overflow_action": true,
 	}
 	var out []string
 	sc := bufio.NewScanner(f)
@@ -226,7 +226,7 @@ func GenerateAuditRules(r *ResolvedRule) []string {
 		for _, uid := range r.UIDs {
 			if c.ExecEnabled() {
 				for _, arch := range []string{"b64", "b32"} {
-					lines = append(lines, fmt.Sprintf("-a always,exit -F arch=%s -S execve -F euid=%d%s -k %s", arch, uid, auid, AuditKey))
+					lines = append(lines, fmt.Sprintf("-a always,exit -F arch=%s -S execve -S execveat -F euid=%d%s -k %s", arch, uid, auid, AuditKey))
 				}
 			}
 			if c.DeniedEnabled() {
@@ -259,11 +259,6 @@ func globalSettingLines() []string {
 	}
 }
 
-// AuditApplyState is what the agent remembers between applications.
-type AuditApplyState struct {
-	NeverRemovedAt int64 `json:"never_removed_at"`
-}
-
 // writeAuditRulesFile keeps the rules for the next boot in AuditRulesFile.
 // The directory is never created: without it nothing is kept (the agent
 // applies the rules again when it starts) and a warning is returned. An
@@ -285,7 +280,7 @@ func writeAuditRulesFile(content []byte) (string, error) {
 // only rules that carry this system's key. On any failure the previous state
 // is restored and an error is returned. The returned warnings do not prevent
 // the rules from being applied.
-func ApplyAuditRules(lines []string, st *AuditApplyState) ([]string, error) {
+func ApplyAuditRules(lines []string) ([]string, error) {
 	before, err := ListAuditRules()
 	if err != nil {
 		return nil, err
@@ -304,19 +299,30 @@ func ApplyAuditRules(lines []string, st *AuditApplyState) ([]string, error) {
 		}
 	}
 	prevFile, prevFileErr := os.ReadFile(AuditRulesFile)
+	// fileWritten (the rules file was written) and neverRemoved (the
+	// suppression rule was deleted) tell the rollback what this run changed.
+	fileWritten, neverRemoved := false, false
 
 	rollback := func(cause error) ([]string, error) {
 		_ = deleteOwnRules()
 		for _, l := range prevOwn {
 			_, _ = RunSimple("auditctl", splitRule(l)...)
 		}
+		if neverRemoved {
+			_, _ = RunSimple("auditctl", strings.Fields(neverRuleLine)...)
+		}
 		_, _ = RunSimple("auditctl", "-b", strconv.FormatInt(prevStatus.BacklogLimit, 10))
 		_, _ = RunSimple("auditctl", "-f", strconv.Itoa(prevStatus.Failure))
 		_, _ = RunSimple("auditctl", "--backlog_wait_time", strconv.FormatInt(prevStatus.BacklogWaitTime, 10))
-		if prevFileErr == nil {
+		switch {
+		case prevFileErr == nil:
 			_ = os.WriteFile(AuditRulesFile, prevFile, 0o600)
-		} else {
+		case errors.Is(prevFileErr, os.ErrNotExist):
 			_ = os.Remove(AuditRulesFile)
+		case fileWritten:
+			// The previous content is unknown, so nothing is deleted or
+			// written: the file keeps the new rules.
+			return nil, fmt.Errorf("applying audit rules failed and the previous state was restored except %s, which could not be read before the change (%v): %w", AuditRulesFile, prevFileErr, cause)
 		}
 		return nil, fmt.Errorf("applying audit rules failed and the previous state was restored: %w", cause)
 	}
@@ -340,6 +346,8 @@ func ApplyAuditRules(lines []string, st *AuditApplyState) ([]string, error) {
 		return rollback(err)
 	} else if w != "" {
 		warnings = append(warnings, w)
+	} else {
+		fileWritten = true
 	}
 
 	// Apply live.
@@ -356,7 +364,7 @@ func ApplyAuditRules(lines []string, st *AuditApplyState) ([]string, error) {
 			if _, err := RunSimple("auditctl", "-d", "never,task"); err != nil {
 				return rollback(err)
 			}
-			st.NeverRemovedAt = time.Now().Unix()
+			neverRemoved = true
 		}
 	}
 	for _, l := range lines {

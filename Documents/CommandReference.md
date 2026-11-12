@@ -52,7 +52,7 @@ Commands for the agent. Run them on each monitored host.
 
 | Command | Description |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped) |
 | `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token |
 | `agent start` | Start the agent. Stops with SIGTERM or SIGINT |
 | `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has finished its cycle (default 300s) |
@@ -154,7 +154,7 @@ Management commands. Run them on the central host while the central is running. 
 | 0 | Success |
 | 1 | Unspecified error |
 | 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value) |
-| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use) and `agent set-central` while the agent is running; for `status`, not running |
+| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use) and `agent init` or `agent set-central` while the agent is running; for `status`, not running |
 | 4 | Authentication or authorization failure |
 | 5 | Execution error (external command or the central) |
 | 6 | File or directory I/O error |

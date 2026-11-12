@@ -106,7 +106,7 @@ func (cl *ctlClient) call(method, path string, in any) (any, error) {
 			return nil, NewExitError(code, he.Error())
 		}
 		if errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.BaseURL.Host+" (a changed agent_listen takes effect when the central is restarted)")
+			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.Address+" (a changed agent_listen takes effect when the central is restarted)")
 		}
 		return nil, NewExitError(ExitExec, err.Error())
 	}

@@ -152,6 +152,9 @@ func TestGenerateAuditRules(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("read without dirs in content must be disabled: %v", lines)
 	}
+	if !strings.Contains(lines[0], "-S execve -S execveat ") || !strings.Contains(lines[1], "arch=b32 -S execve -S execveat ") {
+		t.Fatalf("execution rules must audit execve and execveat: %v", lines)
+	}
 	for _, l := range lines {
 		if !strings.HasSuffix(l, "-k "+AuditKey) || !strings.Contains(l, "auid=4294967295") {
 			t.Fatalf("rule %q", l)
@@ -192,7 +195,7 @@ func TestScans(t *testing.T) {
 	laravel, _ := FindBuiltinTemplate("laravel")
 	c := &RuleContent{Writable: WritableSpec{Base: base, AllowedPaths: []string{"storage", "bootstrap/cache"}},
 		ExecFiles: ExecFilesSpec{Extensions: []string{".php"}, Legit: laravel.Content.ExecFiles.Legit, OtherCategory: CategoryAlert}}
-	files, err := ScanExecFiles(base, res.AllowedRoots, c, 1, false)
+	files, _, err := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(1), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,10 +206,10 @@ func TestScans(t *testing.T) {
 	if cats["evil.php"] != CategoryAlert || cats["config.php"] != CategoryNormal || len(cats) != 2 {
 		t.Fatalf("exec files: %v", cats)
 	}
-	if files, _ := ScanExecFiles(base, res.AllowedRoots, c, 0, true); len(files) != 1 {
-		t.Fatalf("first scan must skip legitimate locations: %d", len(files))
+	if files, skipped, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(0), true); len(files) != 1 || len(skipped) != 1 {
+		t.Fatalf("first scan must skip legitimate locations: %d (skipped %d)", len(files), len(skipped))
 	}
-	if files, _ := ScanExecFiles(base, res.AllowedRoots, c, time.Now().Unix()+10, false); len(files) != 0 {
+	if files, _, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(time.Now().Unix()+10), false); len(files) != 0 {
 		t.Fatal("unchanged files must not be reported")
 	}
 }
@@ -239,7 +242,7 @@ func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	}
 	defer db.Close()
 	tr := &fakeTransport{fail: true}
-	rt := NewAgentRuntime(db, tr, dir, nil)
+	rt := NewAgentRuntime(db, tr, nil)
 	mkReport := func(cat string, n int) {
 		var ds []DetectionReport
 		for i := 0; i < n; i++ {

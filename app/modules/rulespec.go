@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Categories of a detection.
@@ -225,8 +226,13 @@ func ValidateAbsPath(p string) error {
 	if path.Clean(p) != p {
 		return fmt.Errorf("%q is not a clean path", p)
 	}
-	if strings.ContainsAny(p, "\x00\n\r\t \"'") {
-		return fmt.Errorf("%q contains a forbidden character", p)
+	// The path becomes one argument of an auditd rule line, which is split
+	// at white space: no white space (in any script), control character or
+	// quote is allowed.
+	for _, r := range p {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || r == '"' || r == '\'' {
+			return fmt.Errorf("%q contains a forbidden character", p)
+		}
 	}
 	if len(p) > 4096 {
 		return fmt.Errorf("%q is too long", p)

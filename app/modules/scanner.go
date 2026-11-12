@@ -141,17 +141,18 @@ func ScanWritable(base string, allowed []string, uids map[int]bool, category str
 
 // ScanExecFiles walks the allowed roots for files with one of the extensions
 // whose status change time (not the forgeable modification time) is newer
-// than since. Files inside a legitimate location get that location's
+// than since(root). Files inside a legitimate location get that location's
 // category, all others get otherCategory. When skipLegit is set (first scan)
-// files in legitimate locations are not reported.
-func ScanExecFiles(base string, roots []string, c *RuleContent, since int64, skipLegit bool) ([]FileFinding, error) {
+// files in legitimate locations are not reported; they are returned as
+// skipped instead.
+func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root string) int64, skipLegit bool) (found, skipped []FileFinding, err error) {
 	exts := map[string]bool{}
 	for _, e := range c.ExecFiles.Extensions {
 		exts[e] = true
 	}
 	baseInfo, err := os.Lstat(base)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	baseDev := statT(baseInfo).Dev
 	type legit struct {
@@ -167,9 +168,9 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since int64, ski
 		}
 		legits = append(legits, legit{seq: SplitComponents(l.Path), exts: m, cat: l.Category})
 	}
-	var out []FileFinding
 	visited := 0
 	for _, root := range roots {
+		rootSince := since(root)
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
 			if werr != nil {
 				if d != nil && d.IsDir() && p != root {
@@ -199,7 +200,7 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since int64, ski
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(p))
-			if !exts[ext] || st.Ctim.Sec <= since {
+			if !exts[ext] || st.Ctim.Sec <= rootSince {
 				return nil
 			}
 			comps := relComponents(base, filepath.Dir(p))
@@ -211,18 +212,20 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since int64, ski
 					break
 				}
 			}
-			if isLegit && skipLegit {
-				return nil
-			}
-			out = append(out, FileFinding{
+			f := FileFinding{
 				Path: p, Ctime: st.Ctim.Sec, UID: int(st.Uid), GID: int(st.Gid),
 				Mode: info.Mode(), Category: cat, Type: TypeExecFile,
-			})
+			}
+			if isLegit && skipLegit {
+				skipped = append(skipped, f)
+				return nil
+			}
+			found = append(found, f)
 			return nil
 		})
 		if errors.Is(err, errScanLimit) {
 			break
 		}
 	}
-	return out, nil
+	return found, skipped, nil
 }
