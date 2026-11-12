@@ -32,21 +32,25 @@ type Account struct {
 	Role         string
 	Language     string
 	Disabled     bool
+	// Notify marks the account as a recipient of notification mails (sent
+	// only while the account is enabled).
+	Notify       bool
 	FailedLogins int
 	LockedUntil  int64
 	CreatedAt    int64
 	UpdatedAt    int64
 }
 
-const accountCols = `id, email, display_name, password_hash, role, language, disabled, failed_logins, locked_until, created_at, updated_at`
+const accountCols = `id, email, display_name, password_hash, role, language, disabled, notify, failed_logins, locked_until, created_at, updated_at`
 
 func scanAccount(s rowScanner) (*Account, error) {
 	a := &Account{}
-	var disabled int
-	if err := s.Scan(&a.ID, &a.Email, &a.DisplayName, &a.PasswordHash, &a.Role, &a.Language, &disabled, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	var disabled, notify int
+	if err := s.Scan(&a.ID, &a.Email, &a.DisplayName, &a.PasswordHash, &a.Role, &a.Language, &disabled, &notify, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	a.Disabled = disabled != 0
+	a.Notify = notify != 0
 	return a, nil
 }
 
@@ -56,8 +60,8 @@ func InsertAccount(db Execer, a *Account) error {
 	if a.Language == "" {
 		a.Language = LangAuto
 	}
-	res, err := db.Exec(`INSERT INTO accounts (email, display_name, password_hash, role, language, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.Email, a.DisplayName, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), now, now)
+	res, err := db.Exec(`INSERT INTO accounts (email, display_name, password_hash, role, language, disabled, notify, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Email, a.DisplayName, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), boolToInt(a.Notify), now, now)
 	if err != nil {
 		return err
 	}
@@ -125,6 +129,30 @@ func UpdateAccountPassword(db Execer, id int64, hash string) error {
 // SetAccountDisabled enables or disables an account.
 func SetAccountDisabled(db Execer, id int64, disabled bool) error {
 	return execOne(db, `UPDATE accounts SET disabled = ?, updated_at = ? WHERE id = ?`, boolToInt(disabled), Now(), id)
+}
+
+// SetAccountNotify turns the receipt of notification mails on or off.
+func SetAccountNotify(db Execer, id int64, notify bool) error {
+	return execOne(db, `UPDATE accounts SET notify = ?, updated_at = ? WHERE id = ?`, boolToInt(notify), Now(), id)
+}
+
+// ListNotifyEmails returns the e-mail addresses of the enabled accounts that
+// receive notification mails, ordered by address.
+func ListNotifyEmails(db Execer) ([]string, error) {
+	rows, err := db.Query(`SELECT email FROM accounts WHERE notify = 1 AND disabled = 0 ORDER BY email`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // RecordLoginFailure counts one failed login in a single statement (no

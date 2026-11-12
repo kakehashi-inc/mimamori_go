@@ -28,10 +28,26 @@ type SMTPConfig struct {
 	HeloName   string
 }
 
-// Enabled reports whether notification mails can be sent (a server, a
-// sender and notification recipients are set).
-func (s SMTPConfig) Enabled() bool {
-	return s.CanSend() && len(s.To) > 0
+// NotificationRecipients returns the recipients of notification mails: the
+// addresses of the accounts chosen as recipients (accounts), then the
+// additional fixed addresses of smtp.to, each address once (compared without
+// regard to case; the first spelling is kept). Notification mails are sent
+// only when this is not empty and CanSend is true.
+func (s SMTPConfig) NotificationRecipients(accounts []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range [][]string{accounts, s.To} {
+		for _, addr := range list {
+			addr = strings.TrimSpace(addr)
+			key := strings.ToLower(addr)
+			if addr == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, addr)
+		}
+	}
+	return out
 }
 
 // CanSend reports whether mail can be sent to given recipients (a server and
@@ -201,7 +217,7 @@ var ConfigFields = []ConfigField{
 		get: func(c *CentralConfig) string { return c.SMTP.Password },
 		set: func(c *CentralConfig, v string) error { c.SMTP.Password = v; return nil }},
 	cfgStringField("smtp.from", "Sender address", func(c *CentralConfig) *string { return &c.SMTP.From }),
-	cfgListField("smtp.to", "Recipient addresses", func(c *CentralConfig) *[]string { return &c.SMTP.To }),
+	cfgListField("smtp.to", "Additional recipient addresses of notification mails (besides the accounts chosen as notification recipients)", func(c *CentralConfig) *[]string { return &c.SMTP.To }),
 	cfgIntField("smtp.timeout_sec", "SMTP timeout (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
 	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: localhost)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
 }

@@ -538,6 +538,7 @@ interface HistoryItem {
 | PUT | `/accounts/{id}/email` | A | `{"email"}` | `Account`（確認コードなしで即時に変更。対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる。重複は 409） |
 | PUT | `/accounts/{id}/display-name` | A | `{"display_name"}` | `Account`（セッションはそのまま） |
 | PUT | `/accounts/{id}/role` | A | `{"role"}` | `Account`（対象のセッションは無効になる） |
+| PUT | `/accounts/{id}/notify` | A | `{"notify": boolean}` | `Account`（通知メールの宛先にするかどうか。セッションはそのまま。`notify` が無い、真偽値でない場合は 400） |
 | PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
 | POST | `/accounts/{id}/disable` | A | - | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
 | POST | `/accounts/{id}/enable` | A | - | `Account` |
@@ -546,6 +547,7 @@ interface HistoryItem {
 ```ts
 interface Account {
   id: number; email: string; display_name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja'; disabled: boolean;
+  notify: boolean;                    // 通知メールを受け取る（作成時は false）。無効化の間は選択を保ったまま送らない
   locked_until: string | null; created_at: string;
 }
 ```
@@ -554,6 +556,7 @@ interface Account {
 - メールアドレス（ログイン ID）は前後の空白を除いて 254 文字以下の、表示名や引用符の無い 1 つのアドレスです（空白、制御文字、`"` `<` `>` `,` は不可。ドメインのドットは不要で `user@localhost` も可）。大文字と小文字を区別せずに一意です。
 - 表示名は前後の空白を除いて 1〜64 文字で、制御文字は使えません。重複してもかまいません。
 - パスワードは 10 文字以上、256 バイトまでです。
+- 通知メール（検知の通知）の宛先は、`notify` が `true` で無効化されていないアカウントのアドレスと、設定 `smtp.to` の追加のアドレスです（重複は除く。詳細は [システム仕様.md](システム仕様.md) の 12.2）。`notify` の変更は履歴（`account`、操作 `notify_changed`、詳細 `notification mails on` / `notification mails off`）に残します。値が変わらない要求は何も記録せずに `Account` を返します。
 
 ## 12.1 システム設定
 

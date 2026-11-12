@@ -283,8 +283,8 @@ func TestSendMailLoginWithoutEncryption(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	cfg := SMTPConfig{Host: "127.0.0.1", Port: port, Security: "none", Auth: true, Username: "user", Password: "pass",
 		From: "a@example.com", To: []string{"b@example.com"}, TimeoutSec: 10}
-	if err := SendMail(cfg, "subject", "body"); err != nil {
-		t.Fatalf("SendMail: %v", err)
+	if err := SendMailTo(cfg, cfg.To, "subject", "body"); err != nil {
+		t.Fatalf("SendMailTo: %v", err)
 	}
 	if got := <-result; !strings.Contains(got, "AUTH LOGIN") {
 		t.Fatalf("LOGIN not used: %s", got)

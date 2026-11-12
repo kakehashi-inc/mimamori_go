@@ -13,6 +13,7 @@ CREATE TABLE accounts (
     role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer')),
     language      TEXT    NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ja')),
     disabled      INTEGER NOT NULL DEFAULT 0,
+    notify        INTEGER NOT NULL DEFAULT 0,
     failed_logins INTEGER NOT NULL DEFAULT 0,
     locked_until  INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,

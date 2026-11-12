@@ -106,6 +106,7 @@ func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool
 	a("PUT /accounts/{id}/email", c.handleAccountEmail)
 	a("PUT /accounts/{id}/display-name", c.handleAccountDisplayName)
 	a("PUT /accounts/{id}/role", c.handleAccountRole)
+	a("PUT /accounts/{id}/notify", c.handleAccountNotify)
 	a("PUT /accounts/{id}/password", c.handleAccountPassword)
 	a("POST /accounts/{id}/disable", c.handleAccountDisable)
 	a("POST /accounts/{id}/enable", c.handleAccountEnable)

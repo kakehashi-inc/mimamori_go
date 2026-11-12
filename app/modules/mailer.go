@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-// SendMail delivers one plain-text notification to the configured
-// recipients (smtp.to).
-func SendMail(cfg SMTPConfig, subject, body string) error {
-	if !cfg.Enabled() {
-		return fmt.Errorf("SMTP is not configured")
-	}
-	return SendMailTo(cfg, cfg.To, subject, body)
-}
-
 // SendMailTo delivers one plain-text message to the given recipients
 // synchronously in the calling flow. The whole exchange is bounded by
 // cfg.TimeoutSec through a deadline on the connection.

@@ -169,11 +169,12 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 
 | Command | Description |
 | --- | --- |
-| `ctl accounts list` | List accounts (id, email, display_name, role, language, disabled, locked_until, created_at) |
+| `ctl accounts list` | List accounts (id, email, display_name, role, language, disabled, notify, locked_until, created_at) |
 | `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account. `EMAIL` is the e-mail address used to log in (unique, case is ignored); `NAME` is the name shown on the screens (need not be unique). `--language` defaults to `auto`; password from standard input |
 | `ctl accounts email ID ADDRESS` | Change the e-mail address at once, without a verification code. The account's sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts display-name ID NAME` | Change the display name (sessions are kept) |
 | `ctl accounts role ID admin\|viewer` | Change the role (the account's sessions are invalidated) |
+| `ctl accounts notify ID on\|off` | Choose whether the account receives notification mails (detection notifications). New accounts are `off`. A disabled account keeps its choice but receives nothing while disabled. The addresses of `smtp.to` receive the mails in addition. Sessions are kept |
 | `ctl accounts password ID` | Reset the password (from standard input). The account's sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts disable ID` | Disable an account. Its sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts enable ID` | Enable an account |

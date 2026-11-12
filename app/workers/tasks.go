@@ -92,9 +92,13 @@ type pendingGroup struct {
 // detections when none is left and the minimum interval has passed since the
 // last delivered mail. While a mail is undelivered, new detections stay
 // pending and go into the next mail, so at most one mail is sent per minimum
-// interval even after a delivery outage.
+// interval even after a delivery outage. Nothing is composed or sent while
+// SMTP cannot send or there is no recipient (detections stay pending).
 func (c *core) notify(now time.Time) {
-	if !c.conf().SMTP.Enabled() {
+	if !c.conf().SMTP.CanSend() {
+		return
+	}
+	if len(c.notificationRecipients()) == 0 {
 		return
 	}
 	unsent, err := models.ListUnsentNotifications(c.db)
@@ -112,7 +116,11 @@ func (c *core) notify(now time.Time) {
 		}
 	}
 	for _, n := range unsent {
-		err := modules.SendMail(c.conf().SMTP, n.Subject, n.Body)
+		to := c.notificationRecipients()
+		if len(to) == 0 {
+			return
+		}
+		err := c.sendMail(c.conf().SMTP, to, n.Subject, n.Body)
 		if err != nil {
 			_ = models.MarkNotificationAttempt(c.db, n.ID, 0, err.Error())
 			c.logger.Printf("notification %d: send failed (will retry): %v", n.ID, err)
@@ -122,6 +130,19 @@ func (c *core) notify(now time.Time) {
 		_ = models.MarkNotificationAttempt(c.db, n.ID, sent, "")
 		_ = models.SetSetting(c.db, settingLastNotifyAt, strconv.FormatInt(sent, 10))
 	}
+}
+
+// notificationRecipients returns the current recipients of notification
+// mails: the enabled accounts chosen as recipients and the additional
+// addresses of smtp.to, without duplicates. On a database error it returns
+// none, so nothing is sent until the next try.
+func (c *core) notificationRecipients() []string {
+	accounts, err := models.ListNotifyEmails(c.db)
+	if err != nil {
+		c.logger.Printf("notification recipients: %v", err)
+		return nil
+	}
+	return c.conf().SMTP.NotificationRecipients(accounts)
 }
 
 func (c *core) composeNotification(now time.Time) {

@@ -40,8 +40,8 @@ type core struct {
 	hostname  string
 	// cliSecret authenticates the management CLI (see writeCLISecret).
 	cliSecret string
-	// sendMail delivers one mail synchronously (verification codes). It is
-	// modules.SendMailTo; tests replace it.
+	// sendMail delivers one mail synchronously (verification codes and
+	// notifications). It is modules.SendMailTo; tests replace it.
 	sendMail func(cfg modules.SMTPConfig, to []string, subject, body string) error
 
 	targetsMu sync.Mutex

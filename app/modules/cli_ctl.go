@@ -925,6 +925,7 @@ type CtlAccountsCmd struct {
 	Email       CtlAccountsEmailCmd       `cmd:"" help:"Change the e-mail address (login ID) at once, without a verification code; ends the account's sessions"`
 	DisplayName CtlAccountsDisplayNameCmd `cmd:"" name:"display-name" help:"Change the display name"`
 	Role        CtlAccountsRoleCmd        `cmd:"" help:"Change the role"`
+	Notify      CtlAccountsNotifyCmd      `cmd:"" help:"Choose whether the account receives notification mails"`
 	Password    CtlAccountsPasswordCmd    `cmd:"" help:"Reset the password (from standard input)"`
 	Disable     CtlAccountsIDCmd          `cmd:"" help:"Disable an account"`
 	Enable      CtlAccountsEnableCmd      `cmd:"" help:"Enable an account"`
@@ -949,6 +950,10 @@ type CtlAccountsRoleCmd struct {
 	ID   int64  `arg:""`
 	Role string `arg:"" enum:"admin,viewer"`
 }
+type CtlAccountsNotifyCmd struct {
+	ID    int64  `arg:""`
+	State string `arg:"" enum:"on,off" help:"on: the account receives notification mails (while enabled); off: it does not"`
+}
 type CtlAccountsPasswordCmd struct {
 	ID int64 `arg:""`
 }
@@ -963,7 +968,7 @@ type CtlAccountsDeleteCmd struct {
 }
 
 func (c *CtlAccountsListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/accounts", nil, "id", "email", "display_name", "role", "language", "disabled", "locked_until", "created_at")
+	return runCtl(p, "GET", "/accounts", nil, "id", "email", "display_name", "role", "language", "disabled", "notify", "locked_until", "created_at")
 }
 func (c *CtlAccountsCreateCmd) Run(p *CtlCmd) error {
 	email, err := ValidateEmail(c.Email)
@@ -996,6 +1001,9 @@ func (c *CtlAccountsDisplayNameCmd) Run(p *CtlCmd) error {
 }
 func (c *CtlAccountsRoleCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/role", c.ID), map[string]any{"role": c.Role})
+}
+func (c *CtlAccountsNotifyCmd) Run(p *CtlCmd) error {
+	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/notify", c.ID), map[string]any{"notify": c.State == "on"})
 }
 func (c *CtlAccountsPasswordCmd) Run(p *CtlCmd) error {
 	pw, err := readNewPassword()

@@ -230,6 +230,7 @@ func TestViewerAdminRoutesDoNotExist(t *testing.T) {
 		"/api/v1/accounts/2/email":          "/api/v1/nothing/2/email",
 		"/api/v1/accounts/2/display-name":   "/api/v1/nothing/2/display-name",
 		"/api/v1/accounts/2/role":           "/api/v1/nothing/2/role",
+		"/api/v1/accounts/2/notify":         "/api/v1/nothing/2/notify",
 		"/api/v1/accounts/2/password":       "/api/v1/nothing/2/password",
 		"/api/v1/accounts/2/disable":        "/api/v1/nothing/2/disable",
 		"/api/v1/accounts/2/enable":         "/api/v1/nothing/2/enable",
@@ -276,7 +277,7 @@ func TestViewerAdminRoutesDoNotExist(t *testing.T) {
 		t.Fatalf("anonymous accounts: %d", rec.Code)
 	}
 	// Administrators still have every route.
-	for _, r := range [][2]string{{"GET", "/api/v1/accounts"}, {"GET", "/api/v1/config"}, {"PUT", "/api/v1/accounts/2/role"}, {"POST", "/api/v1/rules/validate"},
+	for _, r := range [][2]string{{"GET", "/api/v1/accounts"}, {"GET", "/api/v1/config"}, {"PUT", "/api/v1/accounts/2/role"}, {"PUT", "/api/v1/accounts/2/notify"}, {"POST", "/api/v1/rules/validate"},
 		{"GET", "/api/v1/agents/1/command-sets"}, {"POST", "/api/v1/agents/1/command-sets/validate"}, {"POST", "/api/v1/agents/1/command-sets/import"}} {
 		if rec := call(r[0], r[1], adminCk); rec.Code == 404 || rec.Code == 405 {
 			t.Fatalf("admin %s %s: %d", r[0], r[1], rec.Code)

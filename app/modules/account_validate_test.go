@@ -79,17 +79,17 @@ func TestValidateDisplayName(t *testing.T) {
 
 func TestSMTPModes(t *testing.T) {
 	for _, tc := range []struct {
-		cfg                   SMTPConfig
-		dev, canSend, enabled bool
+		cfg          SMTPConfig
+		dev, canSend bool
 	}{
-		{SMTPConfig{}, true, false, false},
-		{SMTPConfig{From: "a@example.com", To: []string{"b@example.com"}}, true, false, false},
-		{SMTPConfig{Host: "mail.example.com"}, false, false, false},
-		{SMTPConfig{Host: "mail.example.com", From: "a@example.com"}, false, true, false},
-		{SMTPConfig{Host: "mail.example.com", From: "a@example.com", To: []string{"b@example.com"}}, false, true, true},
+		{SMTPConfig{}, true, false},
+		{SMTPConfig{From: "a@example.com", To: []string{"b@example.com"}}, true, false},
+		{SMTPConfig{Host: "mail.example.com"}, false, false},
+		{SMTPConfig{Host: "mail.example.com", From: "a@example.com"}, false, true},
+		{SMTPConfig{Host: "mail.example.com", From: "a@example.com", To: []string{"b@example.com"}}, false, true},
 	} {
-		if tc.cfg.DevelopmentMode() != tc.dev || tc.cfg.CanSend() != tc.canSend || tc.cfg.Enabled() != tc.enabled {
-			t.Errorf("%+v: development %v, can send %v, enabled %v", tc.cfg, tc.cfg.DevelopmentMode(), tc.cfg.CanSend(), tc.cfg.Enabled())
+		if tc.cfg.DevelopmentMode() != tc.dev || tc.cfg.CanSend() != tc.canSend {
+			t.Errorf("%+v: development %v, can send %v", tc.cfg, tc.cfg.DevelopmentMode(), tc.cfg.CanSend())
 		}
 	}
 	if err := SendMailTo(SMTPConfig{Host: "127.0.0.1", Port: 1}, []string{"b@example.com"}, "s", "b"); err == nil {
@@ -97,6 +97,27 @@ func TestSMTPModes(t *testing.T) {
 	}
 	if err := SendMailTo(SMTPConfig{Host: "127.0.0.1", Port: 1, From: "a@example.com"}, nil, "s", "b"); err == nil {
 		t.Fatal("SendMailTo without recipients must fail")
+	}
+}
+
+// The notification recipients are the chosen accounts followed by the
+// additional addresses of smtp.to, each address once regardless of case.
+func TestNotificationRecipients(t *testing.T) {
+	for _, tc := range []struct {
+		accounts, to []string
+		want         string
+	}{
+		{nil, nil, ""},
+		{nil, []string{"shared@example.com"}, "shared@example.com"},
+		{[]string{"a@example.com", "b@example.com"}, nil, "a@example.com,b@example.com"},
+		{[]string{"a@example.com", "B@Example.com"}, []string{"b@example.com", "shared@example.com", "A@EXAMPLE.COM", "shared@example.com"},
+			"a@example.com,B@Example.com,shared@example.com"},
+		{[]string{"", " "}, []string{""}, ""},
+	} {
+		cfg := SMTPConfig{Host: "mail.example.com", From: "x@example.com", To: tc.to}
+		if got := strings.Join(cfg.NotificationRecipients(tc.accounts), ","); got != tc.want {
+			t.Errorf("%v + %v: %q, want %q", tc.accounts, tc.to, got, tc.want)
+		}
 	}
 }
 

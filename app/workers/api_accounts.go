@@ -26,6 +26,7 @@ type accountJSON struct {
 	Role        string  `json:"role"`
 	Language    string  `json:"language"`
 	Disabled    bool    `json:"disabled"`
+	Notify      bool    `json:"notify"`
 	LockedUntil *string `json:"locked_until"`
 	CreatedAt   *string `json:"created_at"`
 }
@@ -35,7 +36,7 @@ func (c *core) accountOut(a *models.Account) accountJSON {
 	if locked < time.Now().Unix() {
 		locked = 0
 	}
-	return accountJSON{ID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, Disabled: a.Disabled, LockedUntil: ts(locked),
+	return accountJSON{ID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, Disabled: a.Disabled, Notify: a.Notify, LockedUntil: ts(locked),
 		CreatedAt: ts(a.CreatedAt)}
 }
 
@@ -451,6 +452,46 @@ func (c *core) handleAccountDisplayName(w http.ResponseWriter, r *http.Request) 
 	}
 	c.history(principalFrom(r), models.HistAccount, "display_name_changed", a.Email, a.DisplayName+" -> "+display)
 	a.DisplayName = display
+	writeJSON(w, http.StatusOK, c.accountOut(a))
+}
+
+// handleAccountNotify chooses whether an account receives notification mails
+// (administrators and the CLI). A disabled account keeps its choice but
+// receives nothing while it is disabled.
+func (c *core) handleAccountNotify(w http.ResponseWriter, r *http.Request) {
+	a := c.loadAccount(w, r)
+	if a == nil {
+		return
+	}
+	var in struct {
+		Notify *bool `json:"notify"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Notify == nil {
+		writeError(w, http.StatusBadRequest, "notify must be true or false")
+		return
+	}
+	if *in.Notify == a.Notify {
+		writeJSON(w, http.StatusOK, c.accountOut(a))
+		return
+	}
+	if err := models.SetAccountNotify(c.db, a.ID, *in.Notify); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "account not found")
+			return
+		}
+		c.internalError(w, r, err)
+		return
+	}
+	detail := "notification mails off"
+	if *in.Notify {
+		detail = "notification mails on"
+	}
+	c.history(principalFrom(r), models.HistAccount, "notify_changed", a.Email, detail)
+	a.Notify = *in.Notify
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
 

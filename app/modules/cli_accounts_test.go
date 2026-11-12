@@ -34,6 +34,20 @@ func TestAccountCommandArguments(t *testing.T) {
 	if c := cli.Ctl.Accounts.DisplayName; c.ID != 3 || c.Name != "Bob B" {
 		t.Errorf("display-name: %+v", c)
 	}
+	for _, v := range []string{"on", "off"} {
+		ctx, err := parser.Parse([]string{"ctl", "accounts", "notify", "4", v})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := cli.Ctl.Accounts.Notify; ctx.Command() != "ctl accounts notify <id> <state>" || c.ID != 4 || c.State != v {
+			t.Errorf("notify %s: %q %+v", v, ctx.Command(), c)
+		}
+	}
+	for _, args := range [][]string{{"ctl", "accounts", "notify", "4", "yes"}, {"ctl", "accounts", "notify", "4"}} {
+		if _, err := parser.Parse(args); err == nil {
+			t.Errorf("%v must be rejected", args)
+		}
+	}
 	if _, err := parser.Parse([]string{"central", "init-admin", "--email", "root@localhost", "--display-name", "Root"}); err != nil {
 		t.Fatal(err)
 	}

@@ -169,11 +169,12 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl accounts list` | アカウントの一覧（id、email、display_name、role、language、disabled、locked_until、created_at） |
+| `ctl accounts list` | アカウントの一覧（id、email、display_name、role、language、disabled、notify、locked_until、created_at） |
 | `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する。`EMAIL` はログインに使うメールアドレス（一意。大文字と小文字は区別しない）、`NAME` は画面に表示する名前（重複してもよい）。`--language` の既定は `auto`。パスワードは標準入力から |
 | `ctl accounts email ID ADDRESS` | メールアドレスを確認コードなしで即時に変える。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts display-name ID NAME` | 表示名を変える（セッションはそのまま） |
 | `ctl accounts role ID admin\|viewer` | 権限を変える（そのアカウントのセッションは無効になる） |
+| `ctl accounts notify ID on\|off` | そのアカウントが通知メール（検知の通知）を受け取るかどうかを選ぶ。作成時は `off`。無効にしたアカウントは選択を保ったまま、無効の間は受け取らない。`smtp.to` のアドレスにも追加で送る。セッションはそのまま |
 | `ctl accounts password ID` | パスワードを再設定する（標準入力から）。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts disable ID` | アカウントを無効にする。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts enable ID` | アカウントを有効にする |
