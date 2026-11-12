@@ -25,6 +25,7 @@ func (c *core) webHandler() http.Handler {
 	adminAPI := http.NewServeMux()
 	viewerAPI := http.NewServeMux()
 	c.registerAPI(adminAPI, viewerAPI, "/api/v1", false)
+	c.webAdminRoutes, c.webViewerRoutes = adminAPI, viewerAPI // for admitWebBody
 	mux := http.NewServeMux()
 	mux.Handle("/api/", c.sessionAuth(adminAPI, viewerAPI))
 	mux.HandleFunc("/", c.serveSPA)

@@ -29,6 +29,12 @@ type listenerSpec struct {
 	ln      *net.TCPListener
 	tls     *tls.Config // nil for plain HTTP
 	handler http.Handler
+	// admit reports, before a body larger than MaxHeadBytes is read, whether
+	// the request is authenticated for its route (nil: always). A request it
+	// refuses goes to the handler without its body, so the handler gives its
+	// usual answer to an unauthenticated request. It runs in the accepting
+	// flow, next to the workers, and must change nothing.
+	admit func(*http.Request) bool
 	// fd is the descriptor of ln (for ppoll) and pausedUntil the end of a
 	// short pause after an accept error (used by the accepting flow only).
 	fd          int
@@ -46,16 +52,19 @@ type listenerSpec struct {
 // requests are read into memory and responses written from memory as the
 // sockets allow. A handler gets a request only when it is complete in
 // memory, and its response is queued on the connection. The only wait on a
-// peer is the TLS handshake (TLSHandshakeTimeout; a source whose handshake
-// runs into it is refused for HandshakePenalty). See conn for the states.
+// peer is the TLS handshake (TLSHandshakeTimeout). A source whose handshake
+// runs into it is taken last for HandshakePenalty, and refused during that
+// time unless it is this host (see handshakes). See conn for the states.
 type connServer struct {
 	specs        []*listenerSpec
 	workers      int
 	queueTimeout time.Duration
 	logger       *log.Logger
-	// exempt reports whether a peer is never penalised (isLocalPeer; tests
-	// replace it).
-	exempt func(remoteAddr string, local net.Addr) bool
+	// exempt reports whether a source address (remoteHost form) is never
+	// refused after a stalled handshake: loopback and this host's addresses
+	// (isOwnSource; tests replace it).
+	exempt func(host string) bool
+	own    hostAddrs
 
 	conns []*conn // open connections, in the order they were accepted
 	ready []job   // complete requests and periodic tasks waiting for a worker
@@ -66,13 +75,18 @@ type connServer struct {
 	// bufferedTotal is the number of bytes all connections buffer
 	// (recomputed every pass, increased by reads).
 	bufferedTotal int
-	penalty       map[string]time.Time // source address -> refused until
+	// stalled maps a source address whose TLS handshake ran into the limit
+	// to the end of its penalty period.
+	stalled  map[string]time.Time
+	stopping bool
 
 	// waitingSince is the earliest time a connection accepted in this pass
 	// may have been waiting in the kernel; lastReturn is when the previous
 	// ppoll returned.
 	waitingSince time.Time
 	lastReturn   time.Time
+	// quiet is set when the last ppoll reported nothing ready.
+	quiet bool
 
 	pollFds    []pollFd
 	pollOwners []pollOwner
@@ -113,11 +127,13 @@ func newConnServer(specs []*listenerSpec, workers int, queueTimeout time.Duratio
 	if workers < 1 {
 		workers = 1
 	}
-	return &connServer{
+	s := &connServer{
 		specs: specs, workers: workers, queueTimeout: queueTimeout, logger: logger,
-		exempt: isLocalPeer, penalty: map[string]time.Time{},
-		scratch: make([]byte, 16<<10), wakeR: -1, wakeW: -1,
+		stalled: map[string]time.Time{},
+		scratch: make([]byte, readChunk), wakeR: -1, wakeW: -1,
 	}
+	s.exempt = s.isOwnSource
+	return s
 }
 
 // connState is where a connection is in its life (one request per
@@ -126,8 +142,11 @@ type connState int
 
 const (
 	// stateHello (TLS only): reading the first record (the ClientHello).
-	// When it is complete, the handshake runs (blocking, bounded).
 	stateHello connState = iota
+	// stateHandshake (TLS only): the ClientHello is complete; the handshake
+	// runs (blocking, bounded) when it is this connection's turn (see
+	// handshakes).
+	stateHandshake
 	// stateRequest: reading the request (the head, then Content-Length
 	// bytes of body). For TLS, raw bytes are decrypted as they arrive.
 	stateRequest
@@ -137,6 +156,11 @@ const (
 	stateWorking
 	// stateWriting: the response is written as the socket accepts it.
 	stateWriting
+	// stateDraining: the response is written, but the request was not read
+	// completely; what still arrives is read and discarded for a short time
+	// so that closing does not reset the connection before the client has
+	// read the response (see startDrain).
+	stateDraining
 	stateClosed
 )
 
@@ -148,7 +172,10 @@ type conn struct {
 	raw   syscall.RawConn
 	fd    int
 	spec  *listenerSpec
+	host  string // source address (remoteHost form)
 	state connState
+	// stateAt is when the connection entered its state.
+	stateAt time.Time
 	// deadline is when the current state runs out: the connection is then
 	// rejected (reading, queued) or closed (writing).
 	deadline time.Time
@@ -164,7 +191,15 @@ type conn struct {
 	headLen  int    // length of the head with its blank line; 0 until parsed
 	bodyLen  int    // body bytes to wait for (Content-Length)
 	tooLarge bool   // Content-Length above MaxRequestBody: no body is read
-	request  *http.Request
+	// admitted is set once spec.admit was asked about a large body;
+	// refused when it refused it (the body is not read).
+	admitted bool
+	refused  bool
+	// unread is set when the request was not read completely: after the
+	// answer, the input is drained (drainLeft bytes at most).
+	unread    bool
+	drainLeft int
+	request   *http.Request
 
 	tlsConn *tls.Conn
 	tlsIO   *tlsBuffer // nil for plain HTTP
@@ -216,6 +251,14 @@ const (
 	// an accept error (for example too many open files), so that the error
 	// does not make the loop spin.
 	acceptPause = 100 * time.Millisecond
+	// minStalledHandshake is the least time a handshake of a stalled source
+	// gets (see stalledHandshakeLimit).
+	minStalledHandshake = 250 * time.Millisecond
+	// stalledQuiet is how long nothing must happen before a handshake of a
+	// stalled source runs (see handshakes).
+	stalledQuiet = 50 * time.Millisecond
+	// drainPerPass is the most a draining connection reads in one pass.
+	drainPerPass = 1 << 20
 )
 
 // Answers the connection server writes itself.
@@ -293,7 +336,8 @@ func (s *connServer) workerLoop() {
 }
 
 // pass is one round of the accepting flow: wait for readiness, then do the
-// I/O that is possible without waiting, expire deadlines and start jobs.
+// I/O that is possible without waiting, expire deadlines, run the TLS
+// handshakes that are due and start jobs.
 func (s *connServer) pass(tick func() func(), stopping bool) {
 	s.bufferedTotal = 0
 	for _, c := range s.conns {
@@ -311,10 +355,11 @@ func (s *connServer) pass(tick func() func(), stopping bool) {
 		case o.c != nil:
 			s.onReady(o.c)
 		case o.sp != nil:
-			s.accept(o.sp, now)
+			s.acceptAll(o.sp, now)
 		}
 	}
 	s.expire(time.Now())
+	s.handshakes()
 	if !stopping {
 		if t := tick(); t != nil && !s.taskBusy {
 			s.taskBusy = true
@@ -326,8 +371,10 @@ func (s *connServer) pass(tick func() func(), stopping bool) {
 }
 
 // buildPollSet lists what the next ppoll waits for: the wake pipe, the
-// listeners (not while stopping), connections reading (unless the memory
-// bound holds them back) and connections writing.
+// listeners (not while stopping, and not while the table is full and no
+// connection may be evicted: new connections then wait in the kernel's
+// backlog), connections reading (unless the memory bound holds them back)
+// and connections writing or draining.
 func (s *connServer) buildPollSet(stopping bool, now time.Time) {
 	s.pollFds = s.pollFds[:0]
 	s.pollOwners = s.pollOwners[:0]
@@ -338,7 +385,7 @@ func (s *connServer) buildPollSet(stopping bool, now time.Time) {
 	if s.wakeR >= 0 {
 		add(s.wakeR, pollIn, pollOwner{})
 	}
-	if !stopping {
+	if !stopping && s.hasRoom(now) {
 		for _, sp := range s.specs {
 			if sp.fd >= 0 && !now.Before(sp.pausedUntil) {
 				add(sp.fd, pollIn, pollOwner{sp: sp})
@@ -347,7 +394,7 @@ func (s *connServer) buildPollSet(stopping bool, now time.Time) {
 	}
 	for _, c := range s.conns {
 		switch {
-		case c.state == stateHello,
+		case c.state == stateHello, c.state == stateDraining,
 			c.state == stateRequest && s.room(c, c.wantMore()) > 0:
 			add(c.fd, pollIn, pollOwner{c: c})
 		case c.state == stateWriting:
@@ -356,23 +403,31 @@ func (s *connServer) buildPollSet(stopping bool, now time.Time) {
 	}
 }
 
-// pollTimeout is 0 when a job can be started now; otherwise the time until
-// the earliest deadline, at most LoopWakeInterval (so that the stop signal
-// and the periodic tasks are looked at regularly).
+// pollTimeout is 0 when a job can be started or a handshake run now;
+// otherwise the time until the earliest deadline (or until a connection of
+// a full table may be evicted), at most LoopWakeInterval (so that the stop
+// signal and the periodic tasks are looked at regularly).
 func (s *connServer) pollTimeout(now time.Time) time.Duration {
-	if len(s.ready) > 0 && s.busy < s.workers {
+	if len(s.ready) > 0 && s.busy < s.workers || s.handshakeDue(now) {
 		return 0
 	}
 	d := modules.LoopWakeInterval
 	if s.busy > 0 && s.wakeR < 0 {
 		d = 10 * time.Millisecond
 	}
+	if s.stalledWaiting() && s.idleForStalled() {
+		d = stalledQuiet
+	}
+	full := len(s.conns) >= modules.MaxPendingConns
 	for _, c := range s.conns {
 		if c.state == stateWorking || c.state == stateClosed {
 			continue
 		}
 		if until := c.deadline.Sub(now) + time.Millisecond; until < d {
 			d = until
+		}
+		if at, ok := c.evictableAt(); full && ok {
+			d = min(d, at.Sub(now)+time.Millisecond)
 		}
 	}
 	return max(d, 0)
@@ -381,8 +436,8 @@ func (s *connServer) pollTimeout(now time.Time) time.Duration {
 // wait runs ppoll and records since when a connection accepted in this
 // pass may have been waiting: if ppoll waited, nothing was pending when it
 // began; otherwise the connection may have arrived while the previous pass
-// was busy (for example running a handler), so its wait counts from the
-// end of the previous ppoll.
+// was busy (for example running a handler or a handshake), so its wait
+// counts from the end of the previous ppoll.
 func (s *connServer) wait(timeout time.Duration) {
 	entered := time.Now()
 	if len(s.pollFds) == 0 {
@@ -390,6 +445,12 @@ func (s *connServer) wait(timeout time.Duration) {
 	} else if err := ppoll(s.pollFds, timeout); err != nil {
 		s.logger.Printf("ppoll: %v", err)
 		time.Sleep(10 * time.Millisecond)
+	}
+	s.quiet = true
+	for _, f := range s.pollFds {
+		if f.revents != 0 {
+			s.quiet = false
+		}
 	}
 	returned := time.Now()
 	if returned.Sub(entered) > time.Millisecond || s.lastReturn.IsZero() {
@@ -421,26 +482,39 @@ func (s *connServer) collect() {
 	}
 }
 
-// accept takes one connection from a listener that ppoll reported ready.
-func (s *connServer) accept(sp *listenerSpec, now time.Time) {
+// acceptAll takes every connection waiting on a listener that ppoll
+// reported ready, so that the time a connection waits is counted from its
+// arrival. It stops when the table is full and no connection may be
+// evicted; the rest wait in the kernel's backlog until there is room.
+func (s *connServer) acceptAll(sp *listenerSpec, now time.Time) {
+	for first := true; first || pollReady(sp.fd); first = false {
+		if !s.makeRoom(now) || !s.accept(sp, now) {
+			return
+		}
+	}
+}
+
+// accept takes one connection from a listener that has one waiting. It
+// reports whether one was taken.
+func (s *connServer) accept(sp *listenerSpec, now time.Time) bool {
 	_ = sp.ln.SetDeadline(now.Add(acceptGuard))
 	nc, err := sp.ln.Accept()
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			return
+			return false
 		}
 		if !errors.Is(err, net.ErrClosed) {
 			s.logger.Printf("%s: accept: %v", sp.name, err)
 		}
 		sp.pausedUntil = now.Add(acceptPause)
-		return
+		return false
 	}
-	if sp.tls != nil && s.penalised(nc, now) {
+	c := &conn{nc: nc, spec: sp, fd: -1, host: remoteHost(nc.RemoteAddr().String())}
+	if sp.tls != nil && s.refused(c.host, now) {
 		_ = nc.Close()
-		return
+		return true
 	}
-	c := &conn{nc: nc, spec: sp, fd: -1}
 	if sc, ok := nc.(syscall.Conn); ok {
 		if raw, err := sc.SyscallConn(); err == nil {
 			c.raw = raw
@@ -449,56 +523,105 @@ func (s *connServer) accept(sp *listenerSpec, now time.Time) {
 	}
 	if c.fd < 0 {
 		_ = nc.Close()
-		return
+		return true
 	}
 	c.queueDeadline = s.waitingSince.Add(s.queueTimeout)
 	c.deadline = c.queueDeadline
-	c.state = stateRequest
+	c.enter(stateRequest)
 	if sp.tls != nil {
 		c.tlsIO = &tlsBuffer{Conn: nc}
 		c.tlsConn = tls.Server(c.tlsIO, sp.tls)
-		c.state = stateHello
-	}
-	if len(s.conns) >= modules.MaxPendingConns {
-		s.compact()
-	}
-	if len(s.conns) >= modules.MaxPendingConns && !s.evictWaiting() {
-		s.reject(c)
-		return
+		c.enter(stateHello)
 	}
 	s.conns = append(s.conns, c)
 	// The request often follows the connection at once.
 	s.onReady(c)
+	return true
 }
 
-// evictWaiting makes room in a full table by rejecting the oldest
-// connection that has not delivered a complete request head, so that
-// connections which send nothing cannot keep new clients out. When there is
-// none, the oldest connection that waits for its peer otherwise (a large
-// body that has not arrived, or a response the client does not read) is
-// dropped, so that such connections cannot keep new clients out either. It
-// reports whether one was dropped.
-func (s *connServer) evictWaiting() bool {
-	for _, c := range s.conns {
-		if c.state == stateHello || (c.state == stateRequest && c.headLen == 0) {
-			s.reject(c)
-			s.compact()
-			return true
-		}
-	}
-	for _, c := range s.conns {
-		switch c.state {
-		case stateRequest:
-			s.reject(c)
-		case stateWriting:
-			s.closeConn(c) // part of the response may be written already
-		default:
-			continue
-		}
-		s.compact()
+// hasRoom reports whether a new connection can be taken now: the table has
+// room, or a connection in it may be evicted.
+func (s *connServer) hasRoom(now time.Time) bool {
+	if len(s.conns) < modules.MaxPendingConns {
 		return true
 	}
-	return false
+	return s.victim(now) != nil
+}
+
+// makeRoom makes room for a new connection, evicting one if the table is
+// full. It reports false when the table is full and no connection may be
+// evicted (every one is a complete request waiting for a worker or in work,
+// or waits on its peer for less than EvictGrace).
+func (s *connServer) makeRoom(now time.Time) bool {
+	if len(s.conns) >= modules.MaxPendingConns {
+		s.compact()
+	}
+	if len(s.conns) < modules.MaxPendingConns {
+		return true
+	}
+	c := s.victim(now)
+	if c == nil {
+		return false
+	}
+	switch c.state {
+	case stateRequest:
+		s.reject(c)
+	default:
+		s.closeConn(c) // a response may be written in part already
+	}
+	s.compact()
+	return true
+}
+
+// victim chooses the connection a full table drops for a new one, so that
+// connections which wait on their peer cannot keep new clients out: a
+// connection that has its answer and is drained, else the oldest that has
+// not delivered a complete request head, else the oldest that waits for its
+// peer otherwise (a large body that has not arrived, or a response the
+// client does not read). Only a connection that has waited in its state for
+// EvictGrace is chosen, so that a burst of new clients does not evict
+// clients whose request is still on its way. nil when there is none.
+func (s *connServer) victim(now time.Time) *conn {
+	var head, other *conn
+	for _, c := range s.conns {
+		at, ok := c.evictableAt()
+		if !ok || now.Before(at) {
+			continue
+		}
+		switch {
+		case c.state == stateDraining:
+			return c
+		case c.state == stateHello || c.state == stateHandshake || (c.state == stateRequest && c.headLen == 0):
+			if head == nil {
+				head = c
+			}
+		case other == nil:
+			other = c
+		}
+	}
+	if head != nil {
+		return head
+	}
+	return other
+}
+
+// evictableAt returns when a connection may be evicted from a full table
+// (see victim); ok is false when it never may (its request waits for a
+// worker or is in work).
+func (c *conn) evictableAt() (at time.Time, ok bool) {
+	switch c.state {
+	case stateDraining:
+		return c.stateAt, true
+	case stateHello, stateHandshake, stateRequest, stateWriting:
+		return c.stateAt.Add(modules.EvictGrace), true
+	}
+	return time.Time{}, false
+}
+
+// enter puts the connection in a state.
+func (c *conn) enter(st connState) {
+	c.state = st
+	c.stateAt = time.Now()
 }
 
 // onReady does the I/O a ready connection allows in its state.
@@ -510,11 +633,13 @@ func (s *connServer) onReady(c *conn) {
 		s.readRequest(c)
 	case stateWriting:
 		s.flush(c)
+	case stateDraining:
+		s.drain(c)
 	}
 }
 
-// readHello buffers the first TLS record and runs the handshake once it is
-// complete.
+// readHello buffers the first TLS record. Once it is complete, the
+// connection waits for its handshake (see handshakes).
 func (s *connServer) readHello(c *conn) {
 	for {
 		want := helloLength(c.tlsIO.in)
@@ -530,11 +655,7 @@ func (s *connServer) readHello(c *conn) {
 			return
 		}
 	}
-	if time.Now().After(c.deadline) {
-		s.reject(c) // waited too long already (behind a busy flow)
-		return
-	}
-	s.handshake(c)
+	c.enter(stateHandshake)
 }
 
 // helloLength returns the length of the first TLS record that b starts:
@@ -551,11 +672,94 @@ func helloLength(b []byte) int {
 	return 5 + (int(b[3])<<8 | int(b[4]))
 }
 
-// handshake runs the TLS handshake. The client's first record is buffered,
-// so only its next flight is waited for, at most TLSHandshakeTimeout. A
-// source whose handshake runs into the limit is penalised.
-func (s *connServer) handshake(c *conn) {
-	_ = c.nc.SetDeadline(time.Now().Add(modules.TLSHandshakeTimeout))
+// handshakes runs the TLS handshakes of the connections whose ClientHello
+// is complete, oldest first, each before its queue deadline. A source whose
+// handshake ran into the limit within HandshakePenalty ("stalled") comes
+// last: one of its connections is taken only in a pass in which no
+// connection of another source waits for its handshake, no request waits
+// for a worker or is in work (its response would wait behind the
+// handshake) and nothing at all happened during the last ppoll, which
+// waits stalledQuiet for it (a client that has just finished its handshake
+// sends its request then), and only until the earliest queue deadline of the waiting
+// connections (at least minStalledHandshake). So a source that stalls
+// delays the connections of other sources by one handshake limit at most,
+// and its own connections are answered or rejected at their queue timeout.
+func (s *connServer) handshakes() {
+	ran := false
+	for _, c := range s.conns {
+		if c.state == stateHandshake && !s.isStalled(c.host, time.Now()) {
+			s.handshake(c, modules.TLSHandshakeTimeout)
+			ran = true
+		}
+	}
+	if ran || !s.quiet || !s.idleForStalled() {
+		return
+	}
+	for _, c := range s.conns {
+		if c.state != stateHandshake {
+			continue
+		}
+		now := time.Now()
+		if s.refused(c.host, now) {
+			s.closeConn(c)
+			continue
+		}
+		s.handshake(c, s.stalledHandshakeLimit(now))
+		return
+	}
+}
+
+// idleForStalled reports whether a handshake of a stalled source may run:
+// no request waits for a worker or is in work.
+func (s *connServer) idleForStalled() bool {
+	return s.busy == 0 && len(s.ready) == 0
+}
+
+// handshakeDue reports whether a connection of a source that is not
+// stalled waits for its handshake.
+func (s *connServer) handshakeDue(now time.Time) bool {
+	for _, c := range s.conns {
+		if c.state == stateHandshake && !s.isStalled(c.host, now) {
+			return true
+		}
+	}
+	return false
+}
+
+// stalledWaiting reports whether a connection waits for its handshake (all
+// of them of stalled sources once handshakeDue is false).
+func (s *connServer) stalledWaiting() bool {
+	for _, c := range s.conns {
+		if c.state == stateHandshake {
+			return true
+		}
+	}
+	return false
+}
+
+// stalledHandshakeLimit bounds a handshake of a stalled source: until the
+// earliest queue deadline of the connections waiting for their handshake,
+// at least minStalledHandshake, at most TLSHandshakeTimeout.
+func (s *connServer) stalledHandshakeLimit(now time.Time) time.Duration {
+	limit := modules.TLSHandshakeTimeout
+	for _, c := range s.conns {
+		if c.state == stateHandshake {
+			limit = min(limit, c.deadline.Sub(now))
+		}
+	}
+	return max(limit, minStalledHandshake)
+}
+
+// handshake runs the TLS handshake of a connection, bounded by limit. The
+// client's first record is buffered, so only its next flight is waited
+// for. A handshake that runs into the limit marks its source as stalled.
+func (s *connServer) handshake(c *conn, limit time.Duration) {
+	start := time.Now()
+	if start.After(c.deadline) {
+		s.closeConn(c) // waited too long already
+		return
+	}
+	_ = c.nc.SetDeadline(start.Add(limit))
 	c.tlsIO.blocking = true
 	err := c.tlsConn.Handshake()
 	c.tlsIO.blocking = false
@@ -563,47 +767,56 @@ func (s *connServer) handshake(c *conn) {
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			s.penalise(c.nc, time.Now())
+			s.markStalled(c.host, limit, time.Now())
 		}
 		s.closeConn(c)
 		return
 	}
-	c.state = stateRequest
+	c.enter(stateRequest)
 	// The request may have arrived with the client's last handshake record.
 	s.readRequest(c)
 }
 
-// penalise refuses the source of a connection whose handshake ran into the
-// limit for HandshakePenalty (never this host itself). Each entry costs
-// the accepting flow TLSHandshakeTimeout, so the list stays short; expired
-// entries are dropped here and when they are looked up.
-func (s *connServer) penalise(nc net.Conn, now time.Time) {
-	if s.exempt(nc.RemoteAddr().String(), nc.LocalAddr()) {
-		return
-	}
-	for k, until := range s.penalty {
+// markStalled records that a handshake of host ran into its limit. For
+// HandshakePenalty its connections are taken last, and refused at once
+// unless host is exempt. Each entry costs the accepting flow one handshake
+// limit, so the table stays short; expired entries are dropped here and
+// when they are looked up.
+func (s *connServer) markStalled(host string, limit time.Duration, now time.Time) {
+	for k, until := range s.stalled {
 		if !now.Before(until) {
-			delete(s.penalty, k)
+			delete(s.stalled, k)
 		}
 	}
-	host := remoteHost(nc.RemoteAddr().String())
-	s.penalty[host] = now.Add(modules.HandshakePenalty)
+	s.stalled[host] = now.Add(modules.HandshakePenalty)
+	if s.exempt(host) {
+		s.logger.Printf("TLS handshake of %s did not finish within %v; its connections are taken after those of other sources for %v",
+			host, limit.Round(time.Millisecond), modules.HandshakePenalty)
+		return
+	}
 	s.logger.Printf("TLS handshake of %s did not finish within %v; its connections are refused for %v",
-		host, modules.TLSHandshakeTimeout, modules.HandshakePenalty)
+		host, limit.Round(time.Millisecond), modules.HandshakePenalty)
 }
 
-// penalised reports whether the source of a new TLS connection is refused.
-func (s *connServer) penalised(nc net.Conn, now time.Time) bool {
-	host := remoteHost(nc.RemoteAddr().String())
-	until, ok := s.penalty[host]
+// isStalled reports whether a handshake of host ran into the limit within
+// the penalty period.
+func (s *connServer) isStalled(host string, now time.Time) bool {
+	until, ok := s.stalled[host]
 	if !ok {
 		return false
 	}
 	if now.Before(until) {
 		return true
 	}
-	delete(s.penalty, host)
+	delete(s.stalled, host)
 	return false
+}
+
+// refused reports whether the TLS connections of host are refused: it
+// stalled within the penalty period and is not exempt (loopback and this
+// host's own addresses never are).
+func (s *connServer) refused(host string, now time.Time) bool {
+	return s.isStalled(host, now) && !s.exempt(host)
 }
 
 // readRequest moves the request bytes the socket has into memory and
@@ -631,6 +844,11 @@ func (s *connServer) readRequest(c *conn) {
 			return
 		}
 		complete, resp := c.progress(time.Now())
+		if resp == nil && c.needsAdmission() && !s.admitBody(c) {
+			// Not authenticated for a large body: the handler answers
+			// without it, and the body is never read.
+			c.refused, c.unread, complete = true, true, true
+		}
 		switch {
 		case resp != nil:
 			s.fail(c, resp)
@@ -722,7 +940,7 @@ func (c *conn) progress(now time.Time) (complete bool, resp []byte) {
 		c.total = now.Add(modules.ConnTotalTimeout)
 		switch {
 		case req.ContentLength > modules.MaxRequestBody:
-			c.tooLarge = true
+			c.tooLarge, c.unread = true, true
 		case req.ContentLength > 0:
 			c.bodyLen = int(req.ContentLength)
 		}
@@ -732,6 +950,29 @@ func (c *conn) progress(now time.Time) (complete bool, resp []byte) {
 		}
 	}
 	return len(c.buf) >= c.headLen+c.bodyLen, nil
+}
+
+// needsAdmission reports whether the request head announces a body larger
+// than MaxHeadBytes that the listener's admit check has not seen yet.
+func (c *conn) needsAdmission() bool {
+	return c.headLen > 0 && c.bodyLen > modules.MaxHeadBytes && !c.admitted
+}
+
+// admitBody asks the listener's admit check whether the body of a request
+// may be read (see listenerSpec.admit). A panic of the check counts as
+// admitted: the handler then authenticates as usual.
+func (s *connServer) admitBody(c *conn) (ok bool) {
+	c.admitted = true
+	if c.spec.admit == nil {
+		return true
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Printf("%s %s: body check panic: %v\n%s", c.request.Method, c.request.URL.Path, r, debug.Stack())
+			ok = true
+		}
+	}()
+	return c.spec.admit(s.requestFor(c))
 }
 
 // headEnd returns the length of the request head in b, up to and including
@@ -758,7 +999,7 @@ func (s *connServer) enqueue(c *conn) {
 	if c.bodyLen > modules.MaxHeadBytes {
 		c.queueDeadline = c.queueDeadline.Add(time.Since(c.headDoneAt))
 	}
-	c.state = stateQueued
+	c.enter(stateQueued)
 	c.deadline = c.queueDeadline
 	s.ready = append(s.ready, job{conn: c})
 }
@@ -776,7 +1017,7 @@ func (s *connServer) dispatch() {
 				continue // rejected while it waited
 			}
 			j = s.jobFor(c)
-			c.state = stateWorking
+			c.enter(stateWorking)
 		}
 		if s.workers == 1 {
 			s.finish(s.runJob(j))
@@ -793,15 +1034,28 @@ func (s *connServer) dispatch() {
 // jobFor builds the request a worker gets: the parsed head, the body from
 // memory and what the handlers learn about the connection.
 func (s *connServer) jobFor(c *conn) job {
-	req := c.request
+	req := s.requestFor(c)
 	switch {
 	case c.tooLarge:
 		req.Body = io.NopCloser(errReader{&http.MaxBytesError{Limit: modules.MaxRequestBody}})
+	case c.refused:
+		req.Body = io.NopCloser(errReader{errBodyRefused})
 	case c.bodyLen == 0:
 		req.Body = http.NoBody
 	default:
 		req.Body = io.NopCloser(bytes.NewReader(c.buf[c.headLen : c.headLen+c.bodyLen]))
 	}
+	return job{conn: c, req: req, handler: c.spec.handler}
+}
+
+// errBodyRefused is what the body of a request reads whose large body was
+// not read because the request is not authenticated for its route.
+var errBodyRefused = errors.New("request body not read: a body this large needs an authenticated request")
+
+// requestFor returns the parsed request head with what the handlers learn
+// about the connection (no body).
+func (s *connServer) requestFor(c *conn) *http.Request {
+	req := c.request
 	req.RemoteAddr = c.nc.RemoteAddr().String()
 	if c.tlsConn != nil {
 		st := c.tlsConn.ConnectionState()
@@ -810,8 +1064,7 @@ func (s *connServer) jobFor(c *conn) job {
 	// The local address of the connection (never a header) tells the
 	// management API whether a client of this host connected to one of the
 	// host's own addresses.
-	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, c.nc.LocalAddr()))
-	return job{conn: c, req: req, handler: c.spec.handler}
+	return req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, c.nc.LocalAddr()))
 }
 
 // runJob runs a periodic task or a handler. It touches no connection, so
@@ -841,7 +1094,7 @@ func (s *connServer) finish(r jobResult) {
 		return // closed while the handler ran (stop)
 	}
 	c.out = s.encode(c, r.resp)
-	c.state = stateWriting
+	c.enter(stateWriting)
 	c.deadline = c.total
 	s.flush(c)
 }
@@ -860,26 +1113,87 @@ func (s *connServer) encode(c *conn, resp []byte) []byte {
 	return out
 }
 
-// flush writes the pending response bytes as far as the socket takes them
-// and closes the connection when all are written or the socket failed.
+// flush writes the pending response bytes as far as the socket takes them.
+// When all are written, the connection is closed, or drained first when its
+// request was not read completely; it is closed when the socket failed.
 func (s *connServer) flush(c *conn) {
-	if done, err := c.writeOut(); done || err != nil {
+	done, err := c.writeOut()
+	switch {
+	case err != nil:
 		s.closeConn(c)
+	case done && c.unread && !s.stopping:
+		s.startDrain(c)
+	case done:
+		s.closeConn(c)
+	}
+}
+
+// startDrain begins draining a connection whose response is written but
+// whose request was not read completely (an early error, a body that was
+// not read, a rejection while the request arrived). Closing it with unread
+// input would reset the connection, and the client, still sending, could
+// lose the response. So the sending side is shut down (the client sees the
+// end of the response), and what still arrives is read and discarded until
+// the client closes, at most DrainMaxBytes and DrainTimeout.
+func (s *connServer) startDrain(c *conn) {
+	_ = c.raw.Control(func(fd uintptr) { _ = syscall.Shutdown(int(fd), syscall.SHUT_WR) })
+	c.enter(stateDraining)
+	c.deadline = c.stateAt.Add(modules.DrainTimeout)
+	c.drainLeft = modules.DrainMaxBytes
+	c.buf, c.request = nil, nil
+	if c.tlsIO != nil {
+		c.tlsIO.in = nil
+	}
+	s.drain(c)
+}
+
+// drain reads and discards what the socket has, at most drainPerPass bytes
+// per pass, and closes the connection when the client closed its side or
+// the limit is used up.
+func (s *connServer) drain(c *conn) {
+	for read := 0; read < drainPerPass; {
+		var n int
+		var rerr error
+		if err := c.raw.Read(func(fd uintptr) bool {
+			n, rerr = syscall.Read(int(fd), s.scratch)
+			return true // never wait for the descriptor
+		}); err != nil {
+			s.closeConn(c)
+			return
+		}
+		switch {
+		case errors.Is(rerr, syscall.EAGAIN):
+			return
+		case errors.Is(rerr, syscall.EINTR):
+			continue
+		case rerr != nil, n == 0:
+			s.closeConn(c)
+			return
+		}
+		read += n
+		c.drainLeft -= n
+		if c.drainLeft <= 0 {
+			s.closeConn(c)
+			return
+		}
 	}
 }
 
 // expire rejects connections whose request did not arrive, or did not get
 // a worker, in time, and closes those whose response could not be written
-// within the total limit.
+// within the total limit and those drained long enough. A plain HTTP
+// request that was arriving gets its 503 and is drained.
 func (s *connServer) expire(now time.Time) {
 	for _, c := range s.conns {
 		if !now.After(c.deadline) {
 			continue
 		}
-		switch c.state {
-		case stateHello, stateRequest, stateQueued:
+		switch {
+		case c.state == stateRequest && c.tlsIO == nil:
+			s.answer(c, busyResponse)
+		case c.state == stateHello, c.state == stateHandshake, c.state == stateRequest, c.state == stateQueued:
 			s.reject(c)
-		case stateWriting:
+		case c.state == stateWriting, c.state == stateDraining:
 			s.closeConn(c)
 		}
 	}
@@ -897,9 +1211,9 @@ func (s *connServer) compact() {
 	s.conns = kept
 }
 
-// reject closes a connection that could not be served. A plain HTTP client
-// gets a 503 (written without waiting; it fits the socket's buffer); a TLS
-// client is simply disconnected.
+// reject closes a connection that could not be served, at once. A plain
+// HTTP client gets a 503 (written without waiting; it fits the socket's
+// buffer); a TLS client is simply disconnected.
 func (s *connServer) reject(c *conn) {
 	if c.tlsIO == nil {
 		c.out = busyResponse
@@ -909,12 +1223,20 @@ func (s *connServer) reject(c *conn) {
 }
 
 // fail answers a request that cannot be served (malformed or too large
-// head) and closes the connection. The answer is small, so it is written
-// without waiting.
+// head, a body without Content-Length).
 func (s *connServer) fail(c *conn, resp []byte) {
+	s.answer(c, resp)
+}
+
+// answer writes resp on a connection whose request was not read completely
+// and drains the connection afterwards (see startDrain). The answer is
+// small; it must be written within DrainTimeout.
+func (s *connServer) answer(c *conn, resp []byte) {
+	c.unread = true
 	c.out = s.encode(c, resp)
-	_, _ = c.writeOut()
-	s.closeConn(c)
+	c.enter(stateWriting)
+	c.deadline = c.stateAt.Add(modules.DrainTimeout)
+	s.flush(c)
 }
 
 // closeConn closes a connection. Unread input is read away first, so that
@@ -944,10 +1266,13 @@ func (s *connServer) closeConn(c *conn) {
 // beginStop rejects every connection whose request is not in work and
 // drops the jobs that have not started.
 func (s *connServer) beginStop() {
+	s.stopping = true
 	for _, c := range s.conns {
 		switch c.state {
-		case stateHello, stateRequest, stateQueued:
+		case stateHello, stateHandshake, stateRequest, stateQueued:
 			s.reject(c)
+		case stateDraining:
+			s.closeConn(c)
 		}
 	}
 	s.ready = nil
@@ -1120,6 +1445,13 @@ func ppoll(fds []pollFd, timeout time.Duration) error {
 	return nil
 }
 
+// pollReady reports whether fd is readable now (a listener: a connection
+// is waiting), without waiting.
+func pollReady(fd int) bool {
+	fds := []pollFd{{fd: int32(fd), events: pollIn}}
+	return ppoll(fds, 0) == nil && fds[0].revents&pollIn != 0
+}
+
 // respWriter buffers a response so it can be written with a Content-Length.
 type respWriter struct {
 	header http.Header
@@ -1277,4 +1609,64 @@ func isLocalPeer(remoteAddr string, local net.Addr) bool {
 	}
 	ta, ok := local.(*net.TCPAddr)
 	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip) && (zone == "" || ta.Zone == "" || zone == ta.Zone)
+}
+
+// hostAddrs caches the addresses of this host's interfaces. They come from
+// net.InterfaceAddrs (asked from the kernel over netlink; nothing is read
+// from /proc) and are read again when the cache is older than
+// hostAddrsMaxAge, so an address added later is noticed within that time.
+// Only the accepting flow uses it, and only for sources that stalled a
+// handshake.
+type hostAddrs struct {
+	ips []net.IP
+	at  time.Time
+}
+
+const hostAddrsMaxAge = time.Second
+
+func (h *hostAddrs) get(now time.Time) []net.IP {
+	if h.at.IsZero() || now.Sub(h.at) >= hostAddrsMaxAge {
+		h.ips = h.ips[:0]
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, a := range addrs {
+				if ipn, ok := a.(*net.IPNet); ok {
+					h.ips = append(h.ips, ipn.IP)
+				}
+			}
+		}
+		h.at = now
+	}
+	return h.ips
+}
+
+// isOwnSource reports whether a source address is loopback or one of this
+// host's addresses: such a source is never refused after a stalled
+// handshake (an agent or ctl of this host may connect from any of them, to
+// any of them).
+func (s *connServer) isOwnSource(host string) bool {
+	if exemptSource(host, nil) {
+		return true
+	}
+	return exemptSource(host, s.own.get(time.Now()))
+}
+
+// exemptSource reports whether host (an IP address, optionally with a
+// zone) is a loopback address or one of own.
+func exemptSource(host string, own []net.IP) bool {
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, o := range own {
+		if o.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

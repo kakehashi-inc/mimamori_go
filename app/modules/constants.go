@@ -99,9 +99,22 @@ const (
 	// first record (the ClientHello) is complete, so only the client's next
 	// flight is waited for: one round trip and its key exchange.
 	TLSHandshakeTimeout = 2 * time.Second
-	// HandshakePenalty is how long the TLS listener refuses a source address
-	// (never this host) whose handshake ran into TLSHandshakeTimeout.
+	// HandshakePenalty is how long the TLS listener takes the connections of
+	// a source address whose handshake ran into TLSHandshakeTimeout after
+	// those of other sources, and refuses them unless the source is this
+	// host (loopback or one of its addresses).
 	HandshakePenalty = 60 * time.Second
+	// EvictGrace is how long a connection must wait on its peer before a
+	// full table (MaxPendingConns) drops it for a new one; until then new
+	// connections wait in the kernel's backlog.
+	EvictGrace = time.Second
+	// DrainTimeout and DrainMaxBytes bound how long and how much the central
+	// reads and discards after answering a request it did not read
+	// completely (an early error or a body it refused), so that the client
+	// gets the answer instead of a reset. DrainTimeout also bounds writing
+	// such an answer.
+	DrainTimeout  = 5 * time.Second
+	DrainMaxBytes = 2 * MaxRequestBody
 	// MaxHeadBytes bounds a request head (larger: 431). Every connection may
 	// always buffer this much; bodies beyond it are read only while all
 	// connections together buffer less than MaxBufferedBytes.

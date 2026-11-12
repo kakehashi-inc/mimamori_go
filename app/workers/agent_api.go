@@ -21,13 +21,21 @@ import (
 func (c *core) agentHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /agent/v1/ca", c.handleAgentCA)
-	mux.HandleFunc("POST /agent/v1/sync", c.handleAgentSync)
-	mux.HandleFunc("POST /agent/v1/report", c.handleAgentReport)
+	mux.HandleFunc(agentSyncRoute, c.handleAgentSync)
+	mux.HandleFunc(agentReportRoute, c.handleAgentReport)
 	admin := http.NewServeMux()
 	c.registerAPI(admin, admin, "/admin/v1", true)
-	mux.Handle("/admin/", c.adminAPIAuth(admin))
+	mux.Handle(adminRoutePrefix, c.adminAPIAuth(admin))
+	c.agentRoutes, c.adminRoutes = mux, admin // for admitAgentBody
 	return mux
 }
+
+// Routes of the agent listener that admitAgentBody tells apart.
+const (
+	agentSyncRoute   = "POST /agent/v1/sync"
+	agentReportRoute = "POST /agent/v1/report"
+	adminRoutePrefix = "/admin/"
+)
 
 func (c *core) handleAgentCA(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, modules.CAResponse{CAPEMs: c.currentCAPEMs()})

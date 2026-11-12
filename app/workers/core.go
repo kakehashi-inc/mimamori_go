@@ -49,6 +49,11 @@ type core struct {
 
 	serverCert atomic.Pointer[tls.Certificate]
 
+	// Route tables the large-body checks (admitWebBody, admitAgentBody) look
+	// requests up in; set when the handlers are built, read-only afterwards.
+	webAdminRoutes, webViewerRoutes *http.ServeMux
+	agentRoutes, adminRoutes        *http.ServeMux
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage string

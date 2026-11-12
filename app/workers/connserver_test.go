@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"mimamori/app/models"
 	"mimamori/app/modules"
 )
 
@@ -99,24 +100,32 @@ type connTestServer struct {
 
 func startConnTestServer(t *testing.T, workers int, queueTimeout time.Duration) *connTestServer {
 	t.Helper()
+	ts := startConnTestServerOn(t, workers, queueTimeout, "127.0.0.1:0")
+	ts.srv.exempt = func(host string) bool {
+		return !foreignSources[host] && ts.srv.isOwnSource(host)
+	}
+	return ts
+}
+
+// startConnTestServerOn starts the test server with both listeners on the
+// IP address of listen and the central's own exemption rule.
+func startConnTestServerOn(t *testing.T, workers int, queueTimeout time.Duration, listen string) *connTestServer {
+	t.Helper()
 	e := newTestEnv(t)
-	webLn, err := listenTCP("127.0.0.1:0")
+	webLn, err := listenTCP(listen)
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentLn, err := listenTCP("127.0.0.1:0")
+	agentLn, err := listenTCP(listen)
 	if err != nil {
 		t.Fatal(err)
 	}
 	specs := []*listenerSpec{
-		{name: "web", ln: webLn, handler: testRoutes(e.web)},
-		{name: "agent", ln: agentLn, tls: e.c.tlsConfig(), handler: testRoutes(e.agent)},
+		{name: "web", ln: webLn, handler: testRoutes(e.web), admit: testAdmit(e.c.admitWebBody)},
+		{name: "agent", ln: agentLn, tls: e.c.tlsConfig(), handler: testRoutes(e.agent), admit: testAdmit(e.c.admitAgentBody)},
 	}
 	ts := &connTestServer{e: e, web: webLn.Addr().String(), agnt: agentLn.Addr().String(), done: make(chan struct{})}
 	ts.srv = newConnServer(specs, workers, queueTimeout, log.New(io.Discard, "", 0))
-	ts.srv.exempt = func(remote string, local net.Addr) bool {
-		return !foreignSources[remoteHost(remote)] && isLocalPeer(remote, local)
-	}
 	// The test runs the accepting flow on a goroutine of its own; with one
 	// worker the server itself starts none.
 	go func() {
@@ -160,6 +169,14 @@ func testRoutes(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}
 	})
+}
+
+// testAdmit admits the large bodies of the test routes and asks the
+// central's check for every other route.
+func testAdmit(next func(*http.Request) bool) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/test/") || next(r)
+	}
 }
 
 // dial connects to addr, from the loopback address src when it is set.
@@ -334,13 +351,14 @@ func TestConnServerSilentConnections(t *testing.T) {
 }
 
 // A full table makes room by dropping the oldest connection that sent
-// nothing, so silent connections cannot keep a normal client out.
+// nothing (once it has waited EvictGrace), so silent connections cannot
+// keep a normal client out.
 func TestConnServerFullQueue(t *testing.T) {
 	ts := startConnTestServer(t, 1, 30*time.Second)
 	dialSilent(t, ts.web, modules.MaxPendingConns+10)
 	time.Sleep(200 * time.Millisecond)
 	line, d := ts.webRaw(t, healthRequest)
-	if !strings.Contains(line, " 200 ") || d > time.Second {
+	if !strings.Contains(line, " 200 ") || d > modules.EvictGrace+time.Second {
 		t.Fatalf("request with a full table: %q after %v", line, d)
 	}
 }
@@ -877,4 +895,395 @@ func TestHeadEnd(t *testing.T) {
 			t.Errorf("%q from %d: %d, want %d", tc.in, tc.from, got, tc.want)
 		}
 	}
+}
+
+// A source is exempt from the handshake penalty when it is loopback or one
+// of this host's addresses, whatever address it connected to; any other
+// source is not.
+func TestExemptSource(t *testing.T) {
+	own := []net.IP{net.ParseIP("192.0.2.7"), net.ParseIP("2001:db8::7"), net.ParseIP("fe80::7")}
+	for _, c := range []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},        // loopback (to loopback or to an own address)
+		{"127.0.0.9", true},        // loopback
+		{"::1", true},              // loopback
+		{"::ffff:127.0.0.1", true}, // loopback, IPv4-mapped
+		{"192.0.2.7", true},        // own address (to loopback or to itself)
+		{"::ffff:192.0.2.7", true}, // own address, IPv4-mapped
+		{"2001:db8::7", true},      // own IPv6 address
+		{"fe80::7%eth0", true},     // own link-local address with its zone
+		{"192.0.2.8", false},       // foreign (to anything)
+		{"2001:db8::8", false},     // foreign
+		{"0.0.0.0", false},
+		{"garbage", false},
+	} {
+		if got := exemptSource(c.host, own); got != c.want {
+			t.Errorf("exemptSource(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+	if exemptSource("192.0.2.7", nil) {
+		t.Error("an address is exempt without being one of the host's")
+	}
+}
+
+// ownIPv4 returns a non-loopback IPv4 address of this host, or skips.
+func ownIPv4(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			return ipn.IP.String()
+		}
+	}
+	t.Skip("this host has no non-loopback IPv4 address")
+	return ""
+}
+
+// A stalled handshake from one of this host's own addresses to loopback
+// does not get that address refused: its connections to loopback and to
+// itself are served. The same holds for loopback to loopback.
+func TestConnServerOwnAddressNotRefused(t *testing.T) {
+	own := ownIPv4(t)
+	if probe := newConnServer(nil, 1, time.Second, nil); !probe.isOwnSource(own) || !probe.isOwnSource("127.0.0.1") || probe.isOwnSource("198.51.100.1") {
+		t.Fatalf("isOwnSource: own %s %v, loopback %v, foreign %v", own, probe.isOwnSource(own), probe.isOwnSource("127.0.0.1"), probe.isOwnSource("198.51.100.1"))
+	}
+	ts := startConnTestServerOn(t, 1, 10*time.Second, "0.0.0.0:0")
+	_, port, _ := net.SplitHostPort(ts.agnt)
+	toLoopback, toOwn := net.JoinHostPort("127.0.0.1", port), net.JoinHostPort(own, port)
+	get := func(src, dst string) error {
+		code, _, _, err := ts.agentDoTo(dst, src, "GET", "/agent/v1/ca", nil, nil)
+		if err == nil && code != http.StatusOK {
+			err = fmt.Errorf("status %d", code)
+		}
+		return err
+	}
+	hello := clientHello(t)
+	for _, pair := range [][2]string{{own, toLoopback}, {own, toOwn}, {"127.0.0.1", toLoopback}} {
+		staller := dial(t, pair[1], pair[0])
+		start := time.Now()
+		if _, err := staller.Write(hello); err != nil {
+			t.Fatal(err)
+		}
+		expectClosed(t, staller, 5*time.Second, "stalled handshake")
+		if d := time.Since(start); d < modules.TLSHandshakeTimeout-100*time.Millisecond {
+			t.Fatalf("%s -> %s: closed after %v, before the handshake limit", pair[0], pair[1], d)
+		}
+		for _, dst := range []string{toLoopback, toOwn} {
+			if err := get(pair[0], dst); err != nil {
+				t.Fatalf("after a stall %s -> %s: request %s -> %s: %v", pair[0], pair[1], pair[0], dst, err)
+			}
+		}
+	}
+}
+
+// agentDoTo is agentDo to another address of the agent listener.
+func (ts *connTestServer) agentDoTo(addr, src, method, path string, body []byte, hdr map[string]string) (int, []byte, time.Duration, error) {
+	saved := ts.agnt
+	defer func() { ts.agnt = saved }()
+	ts.agnt = addr
+	return ts.agentDo(src, method, path, body, hdr)
+}
+
+// Twenty stalled ClientHellos from one (exempt) source delay a TLS request
+// of another source by one handshake limit at most; a request of the same
+// source is answered or rejected at its queue timeout, never later.
+func TestConnServerStalledHellosOfOneSource(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		const queueTimeout = 4 * time.Second
+		const margin = 700 * time.Millisecond
+		ts := startConnTestServer(t, workers, queueTimeout)
+		hello := clientHello(t)
+		for i := 0; i < 20; i++ {
+			c := dial(t, ts.agnt, "127.0.0.5")
+			if _, err := c.Write(hello); err != nil {
+				t.Fatal(err)
+			}
+		}
+		type outcome struct {
+			what string
+			d    time.Duration
+			err  error
+		}
+		results := make(chan outcome, 4)
+		request := func(what, src string, after time.Duration) {
+			time.Sleep(after)
+			code, _, d, err := ts.agentDo(src, "GET", "/agent/v1/ca", nil, nil)
+			if err == nil && code != http.StatusOK {
+				err = fmt.Errorf("status %d", code)
+			}
+			results <- outcome{what, d, err}
+		}
+		go request("other source", "127.0.0.1", 300*time.Millisecond)
+		go request("other source later", "127.0.0.1", 2500*time.Millisecond)
+		go request("other source last", "127.0.0.6", 5*time.Second)
+		start := time.Now()
+		go request("same source", "127.0.0.5", 300*time.Millisecond)
+		for i := 0; i < 4; i++ {
+			r := <-results
+			if r.what == "same source" {
+				if d := time.Since(start) - 300*time.Millisecond; d > queueTimeout+margin {
+					t.Fatalf("request of the stalling source: %v after %v, want at most the queue timeout", r.err, d)
+				}
+				continue
+			}
+			if r.err != nil || r.d > modules.TLSHandshakeTimeout+margin {
+				t.Fatalf("%s: %v after %v, want an answer within the handshake limit", r.what, r.err, r.d)
+			}
+		}
+		ts.checkFast(t, 100*time.Millisecond, "after the stalled ClientHellos")
+	})
+}
+
+// A burst of 500 simultaneous requests is answered completely: when the
+// table is full of requests that wait for a worker, new connections wait
+// in the kernel's backlog instead of being refused.
+func TestConnServerBurst(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		var wg sync.WaitGroup
+		var failed atomic.Int32
+		var firstErr atomic.Value
+		for i := 0; i < 500; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				c, err := net.DialTimeout("tcp", ts.web, 10*time.Second)
+				if err != nil {
+					failed.Add(1)
+					firstErr.CompareAndSwap(nil, err.Error())
+					return
+				}
+				defer c.Close()
+				_, _ = io.WriteString(c, "GET /test/slow?ms=2 HTTP/1.1\r\nHost: x\r\n\r\n")
+				if line := statusLine(c, 20*time.Second); !strings.Contains(line, " 200 ") {
+					failed.Add(1)
+					firstErr.CompareAndSwap(nil, line)
+				}
+			}()
+		}
+		wg.Wait()
+		if n := failed.Load(); n > 0 {
+			t.Fatalf("%d of 500 simultaneous requests failed, first: %v", n, firstErr.Load())
+		}
+	})
+}
+
+// sendAllThenRead writes raw (a head and its whole body) completely before
+// it reads the answer, like a client that does not look at the answer
+// while it sends, and returns the answer's status line and body.
+func sendAllThenRead(t *testing.T, c net.Conn, raw []byte) (int, string) {
+	t.Helper()
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	if _, err := c.Write(raw); err != nil {
+		t.Fatalf("sending the whole request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("reading the answer: %v", err)
+	}
+	defer resp.Body.Close()
+	msg, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(msg)
+}
+
+// tlsDial connects to the agent listener with TLS.
+func (ts *connTestServer) tlsDial(t *testing.T) net.Conn {
+	t.Helper()
+	raw := dial(t, ts.agnt, "")
+	pool, _ := modules.CertPoolFromPEMs(ts.e.c.currentCAPEMs(), time.Now())
+	c := tls.Client(raw, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12})
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := c.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// A client that sends a whole body the central answers without reading it
+// (over the size limit, or not authenticated) and only then reads gets the
+// answer, not a reset.
+func TestConnServerEarlyAnswerAfterWholeBody(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		withBody := func(head string, n int) []byte {
+			return append([]byte(fmt.Sprintf(head, n)), bytes.Repeat([]byte("x"), n)...)
+		}
+		over := modules.MaxRequestBody + 1
+		code, msg := sendAllThenRead(t, dial(t, ts.web, ""),
+			withBody("POST /test/echo HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", over))
+		if code != http.StatusBadRequest || !strings.Contains(msg, "too large") {
+			t.Fatalf("web, body over the limit: %d %s", code, msg)
+		}
+		code, msg = sendAllThenRead(t, dial(t, ts.web, ""),
+			withBody("POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Length: %d\r\n\r\n", 20<<20))
+		if code != http.StatusUnauthorized {
+			t.Fatalf("web, unauthenticated large body: %d %s", code, msg)
+		}
+		code, msg = sendAllThenRead(t, ts.tlsDial(t),
+			withBody("POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer mmt_wrong\r\nContent-Length: %d\r\n\r\n", over))
+		if code != http.StatusUnauthorized {
+			t.Fatalf("agent, body over the limit without a token: %d %s", code, msg)
+		}
+		code, msg = sendAllThenRead(t, ts.tlsDial(t),
+			withBody("POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer mmt_wrong\r\nContent-Length: %d\r\n\r\n", 20<<20))
+		if code != http.StatusUnauthorized {
+			t.Fatalf("agent, unauthenticated large body: %d %s", code, msg)
+		}
+		ts.checkFast(t, 100*time.Millisecond, "after the early answers")
+	})
+}
+
+// paddedReport is an agent report of about n bytes (the agent API ignores
+// unknown fields).
+func paddedReport(n int) []byte {
+	return []byte(`{"created_at":1,"detections":[],"dropped":0,"padding":"` + strings.Repeat("p", n) + `"}`)
+}
+
+// A large body is read only from a peer authenticated for its route: an
+// unauthenticated one is answered at once without its body being sent, on
+// every listener; an authenticated one works on every route that takes one.
+func TestConnServerLargeBodyNeedsAuthentication(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		e := ts.e
+		tok, a, _ := commandAgent(t, e, "big-host")
+		instance := "m-big"
+		adminCk := login(t, e, testAdminEmail, "Admin-pass-123")
+		const n = 20 << 20
+
+		// Unauthenticated: only the head is sent; the answer comes at once.
+		headOnly := func(c net.Conn, head string) (string, time.Duration) {
+			start := time.Now()
+			if _, err := io.WriteString(c, fmt.Sprintf(head, n)); err != nil {
+				t.Fatal(err)
+			}
+			line := statusLine(c, 5*time.Second)
+			return line, time.Since(start)
+		}
+		for _, tc := range []struct{ what, head, want string }{
+			{"no session", "POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Length: %d\r\n\r\n", " 401 "},
+			{"unknown session", "POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nCookie: " + sessionCookie + "=" + modules.SessionPrefix + "nothing\r\nContent-Length: %d\r\n\r\n", " 401 "},
+			{"no CSRF header", "POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nCookie: " + sessionCookie + "=" + adminCk + "\r\nContent-Length: %d\r\n\r\n", " 403 "},
+			{"login", "POST /api/v1/auth/login HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Length: %d\r\n\r\n", " 400 "},
+			{"no route", "POST /api/v1/nothing HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nCookie: " + sessionCookie + "=" + adminCk + "\r\nContent-Length: %d\r\n\r\n", " 40"},
+		} {
+			line, d := headOnly(dial(t, ts.web, ""), tc.head)
+			if !strings.Contains(line, tc.want) || d > time.Second {
+				t.Fatalf("web, %s: %q after %v, want%s at once", tc.what, line, d, tc.want)
+			}
+		}
+		for _, tc := range []struct{ what, head string }{
+			{"bad token", "POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer mmt_wrong\r\nX-Mimamori-Instance-Id: m\r\nContent-Length: %d\r\n\r\n"},
+			{"other instance", "POST /agent/v1/sync HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer " + tok + "\r\nContent-Length: %d\r\n\r\n"},
+			{"bad CLI secret", "POST /admin/v1/rules HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer mmc_wrong\r\nContent-Length: %d\r\n\r\n"},
+		} {
+			line, d := headOnly(ts.tlsDial(t), tc.head)
+			if !strings.Contains(line, " 401 ") || d > time.Second {
+				t.Fatalf("agent listener, %s: %q after %v, want 401 at once", tc.what, line, d)
+			}
+		}
+		// The checks changed nothing: the token is still unused and unbound.
+		if tk, err := models.GetToken(e.c.db, a.TokenID.Int64); err != nil || tk.UsedAt != 0 || tk.InstanceID != "" {
+			t.Fatalf("token after refused requests: %+v %v", tk, err)
+		}
+
+		// Authenticated: the body is read and the handler answers on it.
+		code, _, _, err := ts.agentDo("", "POST", "/agent/v1/report", paddedReport(n),
+			map[string]string{"Authorization": "Bearer " + tok, modules.HeaderInstanceID: instance})
+		if err != nil || code != http.StatusOK {
+			t.Fatalf("authenticated 20 MiB report: %d %v", code, err)
+		}
+		big := []byte(`{"name":"r","templates":[],"padding":"` + strings.Repeat("p", n) + `"}`)
+		code, body, _, err := ts.agentDo("", "POST", "/admin/v1/rules", big, map[string]string{"Authorization": "Bearer " + e.cliKey})
+		if err != nil || code != http.StatusBadRequest || !strings.Contains(string(body), "padding") {
+			t.Fatalf("authenticated large management request: %d %s %v, want the handler's 400 on the unknown field", code, body, err)
+		}
+		req, _ := http.NewRequest("POST", "http://"+ts.web+"/api/v1/rules", bytes.NewReader(big))
+		for k, v := range browserHeaders(adminCk) {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(msg), "padding") {
+			t.Fatalf("authenticated large browser request: %d %s, want the handler's 400 on the unknown field", resp.StatusCode, msg)
+		}
+	})
+}
+
+// The large-body checks change nothing: no token use, no binding, no
+// session extension.
+func TestAdmitBodyHasNoSideEffects(t *testing.T) {
+	e := newTestEnv(t)
+	tok, a, _ := commandAgent(t, e, "quiet-host")
+	ck := login(t, e, testAdminEmail, "Admin-pass-123")
+	sess, err := models.GetSession(e.c.db, modules.HashSecret(ck))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := models.TouchSession(e.c.db, sess.ID, sess.LastSeenAt-3600, sess.ExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/agent/v1/report", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(modules.HeaderInstanceID, "m-quiet")
+	if !e.c.admitAgentBody(req) {
+		t.Fatal("valid token refused")
+	}
+	if tk, _ := models.GetToken(e.c.db, a.TokenID.Int64); tk.UsedAt != 0 || tk.InstanceID != "" || tk.LastSeenAt != 0 {
+		t.Fatalf("the check recorded a token use: %+v", tk)
+	}
+	web := httptest.NewRequest("POST", "/api/v1/rules", nil)
+	for k, v := range browserHeaders(ck) {
+		web.Header.Set(k, v)
+	}
+	if !e.c.admitWebBody(web) {
+		t.Fatal("valid session refused")
+	}
+	if after, _ := models.GetSession(e.c.db, sess.ID); after.LastSeenAt != sess.LastSeenAt-3600 || after.ExpiresAt != sess.ExpiresAt {
+		t.Fatalf("the check extended the session: %+v", after)
+	}
+	cli := httptest.NewRequest("POST", "/admin/v1/rules", nil)
+	cli.RemoteAddr = "192.0.2.9:4000"
+	cli.Header.Set("Authorization", "Bearer "+e.cliKey)
+	if e.c.admitAgentBody(cli) {
+		t.Fatal("management request of another host admitted")
+	}
+}
+
+// 256 unauthenticated connections that announce and send large bodies do
+// not delay an authenticated 20 MiB report: their bodies are never
+// buffered.
+func TestConnServerUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		tok, _, _ := commandAgent(t, ts.e, "busy-host")
+		chunk := bytes.Repeat([]byte("x"), 1<<20)
+		var wg sync.WaitGroup
+		for i := 0; i < modules.MaxPendingConns; i++ {
+			c := dial(t, ts.web, "")
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = c.SetWriteDeadline(time.Now().Add(20 * time.Second))
+				_, _ = fmt.Fprintf(c, "POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Length: %d\r\n\r\n", 30<<20)
+				_, _ = c.Write(chunk)
+			}()
+		}
+		time.Sleep(500 * time.Millisecond)
+		code, _, d, err := ts.agentDo("", "POST", "/agent/v1/report", paddedReport(20<<20),
+			map[string]string{"Authorization": "Bearer " + tok, modules.HeaderInstanceID: "m-busy"})
+		if err != nil || code != http.StatusOK || d > 10*time.Second {
+			t.Fatalf("authenticated 20 MiB report behind 256 unauthenticated bodies: %d %v after %v", code, err, d)
+		}
+		wg.Wait()
+	})
 }

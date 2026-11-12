@@ -92,8 +92,8 @@ func startCentral() error {
 		return modules.NewExitErrorf(modules.ExitConfig, "agent listener %s: %v", cfg.AgentListen, err)
 	}
 	specs := []*listenerSpec{
-		{name: "web", ln: webLn, handler: c.webHandler()},
-		{name: "agent", ln: agentLn, tls: c.tlsConfig(), handler: c.agentHandler()},
+		{name: "web", ln: webLn, handler: c.webHandler(), admit: c.admitWebBody},
+		{name: "agent", ln: agentLn, tls: c.tlsConfig(), handler: c.agentHandler(), admit: c.admitAgentBody},
 	}
 	srv := newConnServer(specs, cfg.Workers, time.Duration(cfg.QueueTimeoutSec)*time.Second, logger)
 

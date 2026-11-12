@@ -38,21 +38,40 @@ func bearer(r *http.Request) string {
 // session: the API middleware (sessionAuth) does that for operations, and
 // the static file handler uses it only to decide what it may serve.
 func (c *core) sessionPrincipal(r *http.Request) (*principal, *models.Session) {
+	s, a := c.findSession(r)
+	if s == nil {
+		return nil, nil
+	}
+	if a == nil || a.Disabled {
+		_ = models.DeleteSession(c.db, s.ID)
+		return nil, nil
+	}
+	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: s.ID, StepUpAt: s.StepUpAt}, s
+}
+
+// findSession returns the unexpired session of the request's session
+// cookie and its account (nil when it cannot be read), or nil, nil. It
+// changes nothing.
+func (c *core) findSession(r *http.Request) (*models.Session, *models.Account) {
 	ck, err := r.Cookie(sessionCookie)
 	if err != nil || !strings.HasPrefix(ck.Value, modules.SessionPrefix) {
 		return nil, nil
 	}
-	id := modules.HashSecret(ck.Value)
-	s, err := models.GetSession(c.db, id)
+	s, err := models.GetSession(c.db, modules.HashSecret(ck.Value))
 	if err != nil || s.ExpiresAt < time.Now().Unix() {
 		return nil, nil
 	}
 	a, err := models.GetAccount(c.db, s.AccountID)
-	if err != nil || a.Disabled {
-		_ = models.DeleteSession(c.db, id)
-		return nil, nil
+	if err != nil {
+		return s, nil
 	}
-	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id, StepUpAt: s.StepUpAt}, s
+	return s, a
+}
+
+// publicAPIRoute reports whether a browser API request needs no session.
+func publicAPIRoute(r *http.Request) bool {
+	return (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
+		(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 }
 
 // sessionAuth authenticates browser requests by the session cookie and
@@ -67,9 +86,7 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "missing request header")
 			return
 		}
-		public := (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
-			(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
-		if public {
+		if publicAPIRoute(r) {
 			viewer.ServeHTTP(w, r)
 			return
 		}
@@ -105,18 +122,29 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 // tied to an account and has full authority.
 func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-		if !isLocalPeer(r.RemoteAddr, local) {
+		if !managementPeer(r) {
 			http.NotFound(w, r)
 			return
 		}
-		v := bearer(r)
-		if c.cliSecret == "" || subtle.ConstantTimeCompare([]byte(v), []byte(c.cliSecret)) != 1 {
+		if !c.cliCredential(r) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, withPrincipal(r, &principal{DisplayName: cliOperator, Role: models.RoleAdmin, ViaCLI: true}))
 	})
+}
+
+// managementPeer reports whether a request may use the management API: it
+// comes from this host (isLocalPeer).
+func managementPeer(r *http.Request) bool {
+	local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	return isLocalPeer(r.RemoteAddr, local)
+}
+
+// cliCredential reports whether a request carries the CLI secret.
+func (c *core) cliCredential(r *http.Request) bool {
+	v := bearer(r)
+	return c.cliSecret != "" && subtle.ConstantTimeCompare([]byte(v), []byte(c.cliSecret)) == 1
 }
 
 // requireAdmin wraps a handler that only administrators may use. Browser
@@ -199,27 +227,16 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		if err != nil {
 			return nil, nil, err
 		}
-		if t.RevokedAt > 0 {
-			return reject("revoked token", t.Name)
-		}
-		if instance == "" || len(instance) > 128 {
-			return reject("missing instance id", t.Name)
-		}
-		if t.InstanceID != "" && t.InstanceID != instance {
-			return reject("instance id mismatch", t.Name)
+		var reason string
+		if reason, usedPending = tokenProblem(t, h, instance, now); reason != "" {
+			return reject(reason, t.Name)
 		}
 		prev := *t
-		usedPending = t.PendingHash != "" && h == t.PendingHash
 		if usedPending {
-			if t.PendingExpiresAt <= now {
-				return reject("expired token", t.Name)
-			}
 			// First connection with the renewed value: the old value stops working.
 			t.Hash, t.Value, t.ExpiresAt = t.PendingHash, v, t.PendingExpiresAt
 			t.PendingHash, t.PendingExpiresAt = "", 0
 			t.RenewedAt = now
-		} else if t.ExpiresAt <= now {
-			return reject("expired token", t.Name)
 		}
 		bound = t.InstanceID == ""
 		if bound {
@@ -254,6 +271,99 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		return nil, nil, err
 	}
 	return t, a, nil
+}
+
+// tokenProblem checks the token row t for a request that presents the
+// value whose hash is h from the agent instance instance. It returns why the
+// request is rejected ("" when it is not) and whether it presents the
+// pending (renewed) value. It changes nothing.
+func tokenProblem(t *models.Token, h, instance string, now int64) (reason string, usedPending bool) {
+	switch {
+	case t.RevokedAt > 0:
+		return "revoked token", false
+	case instance == "" || len(instance) > 128:
+		return "missing instance id", false
+	case t.InstanceID != "" && t.InstanceID != instance:
+		return "instance id mismatch", false
+	}
+	if t.PendingHash != "" && h == t.PendingHash {
+		if t.PendingExpiresAt <= now {
+			return "expired token", true
+		}
+		return "", true
+	}
+	if t.ExpiresAt <= now {
+		return "expired token", false
+	}
+	return "", false
+}
+
+// --- large bodies ---
+
+// The connection server asks these, in its accepting flow, before it reads
+// a body larger than modules.MaxHeadBytes (see listenerSpec.admit). They
+// answer whether the request is authenticated for its route, with the same
+// checks as the handlers, but only read: no token use is recorded, no
+// instance bound, no session extended or deleted, nothing written to the
+// history. A request they refuse goes to the handler without its body, and
+// the handler answers it as usual (with those effects, once). They read the
+// route tables (fixed once the handlers are built), the CLI secret (fixed at
+// start) and the database (safe next to the workers).
+
+// admitWebBody is the check of the browser listener: an API route of the
+// session's account with the CSRF header. Routes without a session (login)
+// never take a large body.
+func (c *core) admitWebBody(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") || r.Header.Get(csrfHeader) != "1" || publicAPIRoute(r) {
+		return false
+	}
+	s, a := c.findSession(r)
+	if s == nil || a == nil || a.Disabled {
+		return false
+	}
+	routes := c.webViewerRoutes
+	if a.Role == models.RoleAdmin {
+		routes = c.webAdminRoutes
+	}
+	return hasRoute(routes, r)
+}
+
+// admitAgentBody is the check of the agent listener: an agent route with a
+// valid token, or a management route from this host with the CLI secret.
+func (c *core) admitAgentBody(r *http.Request) bool {
+	_, pattern := c.agentRoutes.Handler(r)
+	switch pattern {
+	case agentSyncRoute, agentReportRoute:
+		return c.agentTokenValid(r)
+	case adminRoutePrefix:
+		return managementPeer(r) && c.cliCredential(r) && hasRoute(c.adminRoutes, r)
+	}
+	return false
+}
+
+// hasRoute reports whether a route table has a route for the request.
+func hasRoute(routes *http.ServeMux, r *http.Request) bool {
+	if routes == nil {
+		return false
+	}
+	_, pattern := routes.Handler(r)
+	return pattern != ""
+}
+
+// agentTokenValid reports whether authenticateAgent would accept the
+// request's token and instance, without recording anything.
+func (c *core) agentTokenValid(r *http.Request) bool {
+	v := bearer(r)
+	if !strings.HasPrefix(v, modules.TokenPrefix) {
+		return false
+	}
+	h := modules.HashSecret(v)
+	t, err := models.FindTokenByHash(c.db, h)
+	if err != nil {
+		return false
+	}
+	reason, _ := tokenProblem(t, h, strings.TrimSpace(r.Header.Get(modules.HeaderInstanceID)), time.Now().Unix())
+	return reason == ""
 }
 
 func remoteHost(addr string) string {
