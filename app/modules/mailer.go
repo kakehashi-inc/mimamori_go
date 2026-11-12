@@ -12,12 +12,24 @@ import (
 	"time"
 )
 
-// SendMail delivers one plain-text message synchronously in the calling flow.
-// The whole exchange is bounded by the configured timeout through a deadline
-// on the connection.
+// SendMail delivers one plain-text notification to the configured
+// recipients (smtp.to).
 func SendMail(cfg SMTPConfig, subject, body string) error {
 	if !cfg.Enabled() {
 		return fmt.Errorf("SMTP is not configured")
+	}
+	return SendMailTo(cfg, cfg.To, subject, body)
+}
+
+// SendMailTo delivers one plain-text message to the given recipients
+// synchronously in the calling flow. The whole exchange is bounded by
+// cfg.TimeoutSec through a deadline on the connection.
+func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
+	if !cfg.CanSend() {
+		return fmt.Errorf("SMTP is not configured (smtp.host and smtp.from are required)")
+	}
+	if len(to) == 0 {
+		return fmt.Errorf("no recipient")
 	}
 	timeout := time.Duration(cfg.TimeoutSec) * time.Second
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
@@ -69,8 +81,8 @@ func SendMail(cfg SMTPConfig, subject, body string) error {
 	if err := c.Mail(cfg.From); err != nil {
 		return err
 	}
-	for _, to := range cfg.To {
-		if err := c.Rcpt(to); err != nil {
+	for _, rcpt := range to {
+		if err := c.Rcpt(rcpt); err != nil {
 			return err
 		}
 	}
@@ -78,7 +90,7 @@ func SendMail(cfg SMTPConfig, subject, body string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.Write([]byte(buildMessage(cfg, subject, body))); err != nil {
+	if _, err := w.Write([]byte(buildMessage(cfg, to, subject, body))); err != nil {
 		return err
 	}
 	if err := w.Close(); err != nil {
@@ -87,10 +99,10 @@ func SendMail(cfg SMTPConfig, subject, body string) error {
 	return c.Quit()
 }
 
-func buildMessage(cfg SMTPConfig, subject, body string) string {
+func buildMessage(cfg SMTPConfig, to []string, subject, body string) string {
 	var b strings.Builder
 	b.WriteString("From: " + cfg.From + "\r\n")
-	b.WriteString("To: " + strings.Join(cfg.To, ", ") + "\r\n")
+	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
 	b.WriteString("Subject: " + mime.BEncoding.Encode("UTF-8", subject) + "\r\n")
 	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")

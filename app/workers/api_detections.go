@@ -47,10 +47,12 @@ type detectionJSON struct {
 	lastAt         int64
 }
 
-func (c *core) detectionOut(a *models.Agent, name string, d *models.Detection) detectionJSON {
+// detectionOut converts a detection for the API; show converts the recorded
+// operator (see operatorShown).
+func (c *core) detectionOut(a *models.Agent, name string, d *models.Detection, show func(string) string) detectionJSON {
 	out := detectionJSON{ID: d.ID, AgentID: a.ID, AgentName: name, Hostname: a.Hostname, Type: d.Type, Category: d.Category,
 		OSUser: d.OSUser, Exe: d.Exe, Target: d.Target, Count: d.Count, FirstAt: ts(d.FirstAt), LastAt: ts(d.LastAt),
-		Suppressed: d.Suppressed, AcknowledgedAt: ts(d.AcknowledgedAt), AcknowledgedBy: d.AcknowledgedBy,
+		Suppressed: d.Suppressed, AcknowledgedAt: ts(d.AcknowledgedAt), AcknowledgedBy: show(d.AcknowledgedBy),
 		NotifyState: d.NotifyState, lastAt: d.LastAt}
 	if a.Kind == models.AgentBuiltin && out.Hostname == "" {
 		out.Hostname = c.hostname
@@ -116,6 +118,7 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	}
 	var items []detectionJSON
 	total := 0
+	show := c.operatorShown(r)
 	for _, a := range agents {
 		tdb, err := c.targetDB(a)
 		if err != nil {
@@ -130,7 +133,7 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 		total += n
 		name := c.agentDisplayName(a)
 		for _, d := range list {
-			items = append(items, c.detectionOut(a, name, d))
+			items = append(items, c.detectionOut(a, name, d, show))
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].lastAt > items[j].lastAt })
@@ -166,7 +169,7 @@ func (c *core) handleGetDetection(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, c.detectionOut(a, c.agentDisplayName(a), d))
+	writeJSON(w, http.StatusOK, c.detectionOut(a, c.agentDisplayName(a), d, c.operatorShown(r)))
 }
 
 func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +196,7 @@ func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		ok, err := models.AcknowledgeDetection(tdb, it.ID, p.Name, now)
+		ok, err := models.AcknowledgeDetection(tdb, it.ID, p.operator(), now)
 		if err != nil {
 			c.internalError(w, r, err)
 			return
@@ -224,9 +227,11 @@ type suppressionJSON struct {
 	CreatedBy string  `json:"created_by"`
 }
 
-func (c *core) suppressionOut(s *models.Suppression) suppressionJSON {
+// suppressionOut converts a suppression condition for the API; show converts
+// the recorded operator (see operatorShown).
+func (c *core) suppressionOut(s *models.Suppression, show func(string) string) suppressionJSON {
 	out := suppressionJSON{ID: s.ID, Type: s.Type, OSUser: s.OSUser, Exe: s.Exe, Target: s.Target, Comment: s.Comment,
-		CreatedAt: ts(s.CreatedAt), CreatedBy: s.CreatedBy}
+		CreatedAt: ts(s.CreatedAt), CreatedBy: show(s.CreatedBy)}
 	if s.AgentID.Valid {
 		id := s.AgentID.Int64
 		out.AgentID = &id
@@ -244,8 +249,9 @@ func (c *core) handleListSuppressions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]suppressionJSON, 0, len(list))
+	show := c.operatorShown(r)
 	for _, s := range list {
-		out = append(out, c.suppressionOut(s))
+		out = append(out, c.suppressionOut(s, show))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -264,7 +270,7 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := &models.Suppression{Type: strings.TrimSpace(in.Type), OSUser: strings.TrimSpace(in.OSUser), Exe: strings.TrimSpace(in.Exe),
-		Target: strings.TrimSpace(in.Target), Comment: strings.TrimSpace(in.Comment), CreatedBy: principalFrom(r).Name}
+		Target: strings.TrimSpace(in.Target), Comment: strings.TrimSpace(in.Comment), CreatedBy: principalFrom(r).operator()}
 	if s.Type != "" && !slices.Contains(modules.DetectionTypes, s.Type) {
 		writeError(w, http.StatusBadRequest, "unknown detection type")
 		return
@@ -294,7 +300,7 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 	n := c.applySuppression(s)
 	c.history(principalFrom(r), models.HistSuppression, "created", agentName,
 		describeSuppression(s)+"; "+strconv.Itoa(n)+" open detection(s) now suppressed")
-	writeJSON(w, http.StatusOK, c.suppressionOut(s))
+	writeJSON(w, http.StatusOK, c.suppressionOut(s, c.operatorShown(r)))
 }
 
 // Limits of the text fields of a suppression condition.
@@ -476,8 +482,10 @@ type historyJSON struct {
 	Count       int     `json:"count"`
 }
 
-func historyOut(h *models.HistoryItem) historyJSON {
-	return historyJSON{ID: h.ID, At: ts(h.LastAt), AccountName: h.AccountName, Category: h.Category, Action: h.Action,
+// historyOut converts a history entry for the API; show converts the
+// recorded operator (see operatorShown).
+func historyOut(h *models.HistoryItem, show func(string) string) historyJSON {
+	return historyJSON{ID: h.ID, At: ts(h.LastAt), AccountName: show(h.AccountName), Category: h.Category, Action: h.Action,
 		Target: h.Target, Detail: h.Detail, RemoteAddr: h.RemoteAddr, Count: h.Count}
 }
 
@@ -498,8 +506,9 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]historyJSON, 0, len(items))
+	show := c.operatorShown(r)
 	for _, h := range items {
-		out = append(out, historyOut(h))
+		out = append(out, historyOut(h, show))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": total})
 }

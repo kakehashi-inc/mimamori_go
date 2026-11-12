@@ -69,6 +69,8 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 
 	h("GET /accounts", requireAdmin(c.handleListAccounts))
 	h("POST /accounts", requireAdmin(c.handleCreateAccount))
+	h("PUT /accounts/{id}/email", requireAdmin(c.handleAccountEmail))
+	h("PUT /accounts/{id}/display-name", requireAdmin(c.handleAccountDisplayName))
 	h("PUT /accounts/{id}/role", requireAdmin(c.handleAccountRole))
 	h("PUT /accounts/{id}/password", requireAdmin(c.handleAccountPassword))
 	h("POST /accounts/{id}/disable", requireAdmin(c.handleAccountDisable))

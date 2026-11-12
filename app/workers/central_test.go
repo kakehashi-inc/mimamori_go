@@ -26,6 +26,11 @@ type testEnv struct {
 	cliKey string
 }
 
+// testAdminEmail is the login ID of the administrator every test starts
+// with (password "Admin-pass-123"). The test configuration has no SMTP host
+// (development mode).
+const testAdminEmail = "admin@example.com"
+
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	modules.MigrationsFS = os.DirFS("../..")
@@ -49,7 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 	hash, _ := modules.HashPassword("Admin-pass-123")
-	admin := &models.Account{Name: "admin", Role: models.RoleAdmin, PasswordHash: hash}
+	admin := &models.Account{Email: testAdminEmail, DisplayName: "Admin", Role: models.RoleAdmin, PasswordHash: hash}
 	if err := models.InsertAccount(db, admin); err != nil {
 		t.Fatal(err)
 	}
@@ -250,10 +255,11 @@ func TestTokenRenewalAndReissue(t *testing.T) {
 	}
 }
 
-func login(t *testing.T, e *testEnv, name, pass string) string {
-	rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"name": name, "password": pass}, map[string]string{csrfHeader: "1"}, "192.0.2.1:1")
+func login(t *testing.T, e *testEnv, email, pass string) string {
+	t.Helper()
+	rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"email": email, "password": pass}, map[string]string{csrfHeader: "1"}, "192.0.2.1:1")
 	if rec.Code != 200 {
-		t.Fatalf("login %s: %d %s", name, rec.Code, rec.Body.String())
+		t.Fatalf("login %s: %d %s", email, rec.Code, rec.Body.String())
 	}
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == sessionCookie {
@@ -266,7 +272,7 @@ func login(t *testing.T, e *testEnv, name, pass string) string {
 
 func TestBrowserPermissions(t *testing.T) {
 	e := newTestEnv(t)
-	adminCk := login(t, e, "admin", "Admin-pass-123")
+	adminCk := login(t, e, testAdminEmail, "Admin-pass-123")
 	hdr := func(ck string, csrf bool) map[string]string {
 		h := map[string]string{"Cookie": sessionCookie + "=" + ck}
 		if csrf {
@@ -274,13 +280,13 @@ func TestBrowserPermissions(t *testing.T) {
 		}
 		return h
 	}
-	if rec := e.do(e.web, "POST", "/api/v1/accounts", map[string]string{"name": "view", "role": "viewer", "password": "Viewer-pass-1"}, hdr(adminCk, false), "x:1"); rec.Code != 403 {
+	if rec := e.do(e.web, "POST", "/api/v1/accounts", map[string]string{"email": "view@example.com", "display_name": "Viewer", "role": "viewer", "password": "Viewer-pass-1"}, hdr(adminCk, false), "x:1"); rec.Code != 403 {
 		t.Fatalf("missing CSRF header: %d", rec.Code)
 	}
-	if rec := e.do(e.web, "POST", "/api/v1/accounts", map[string]string{"name": "view", "role": "viewer", "password": "Viewer-pass-1"}, hdr(adminCk, true), "x:1"); rec.Code != 200 {
+	if rec := e.do(e.web, "POST", "/api/v1/accounts", map[string]string{"email": "view@example.com", "display_name": "Viewer", "role": "viewer", "password": "Viewer-pass-1"}, hdr(adminCk, true), "x:1"); rec.Code != 200 {
 		t.Fatalf("create viewer: %d %s", rec.Code, rec.Body.String())
 	}
-	viewCk := login(t, e, "view", "Viewer-pass-1")
+	viewCk := login(t, e, "view@example.com", "Viewer-pass-1")
 	if rec := e.do(e.web, "GET", "/api/v1/agents", nil, hdr(viewCk, false), "x:1"); rec.Code != 200 {
 		t.Fatalf("viewer list agents: %d", rec.Code)
 	}
@@ -313,9 +319,9 @@ func TestBrowserPermissions(t *testing.T) {
 func TestLoginLockout(t *testing.T) {
 	e := newTestEnv(t)
 	for i := 0; i < modules.LoginMaxFailures; i++ {
-		e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"name": "admin", "password": "wrong"}, map[string]string{csrfHeader: "1"}, "x:1")
+		e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"email": testAdminEmail, "password": "wrong"}, map[string]string{csrfHeader: "1"}, "x:1")
 	}
-	rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"name": "admin", "password": "Admin-pass-123"}, map[string]string{csrfHeader: "1"}, "x:1")
+	rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"email": testAdminEmail, "password": "Admin-pass-123"}, map[string]string{csrfHeader: "1"}, "x:1")
 	if rec.Code != http.StatusLocked {
 		t.Fatalf("locked login: %d", rec.Code)
 	}
@@ -367,20 +373,20 @@ func TestNotificationCompose(t *testing.T) {
 
 func TestAccountLanguage(t *testing.T) {
 	e := newTestEnv(t)
-	created := e.admin("POST", "/accounts", map[string]any{"name": "u1", "role": "viewer", "password": "Viewer-pass-123"})
+	created := e.admin("POST", "/accounts", map[string]any{"email": "u1@example.com", "display_name": "U1", "role": "viewer", "password": "Viewer-pass-123"})
 	if created["language"] != "auto" {
 		t.Fatalf("default language: %v", created["language"])
 	}
-	created = e.admin("POST", "/accounts", map[string]any{"name": "u2", "role": "viewer", "language": "ja", "password": "Viewer-pass-123"})
+	created = e.admin("POST", "/accounts", map[string]any{"email": "u2@example.com", "display_name": "U2", "role": "viewer", "language": "ja", "password": "Viewer-pass-123"})
 	if created["language"] != "ja" {
 		t.Fatalf("given language: %v", created["language"])
 	}
-	rec := e.do(e.agent, "POST", "/admin/v1/accounts", map[string]any{"name": "u3", "role": "viewer", "language": "fr", "password": "Viewer-pass-123"},
+	rec := e.do(e.agent, "POST", "/admin/v1/accounts", map[string]any{"email": "u3@example.com", "display_name": "U3", "role": "viewer", "language": "fr", "password": "Viewer-pass-123"},
 		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:1")
 	if rec.Code != 400 {
 		t.Fatalf("unsupported language: %d", rec.Code)
 	}
-	ck := login(t, e, "u2", "Viewer-pass-123")
+	ck := login(t, e, "u2@example.com", "Viewer-pass-123")
 	hdr := map[string]string{"Cookie": sessionCookie + "=" + ck, csrfHeader: "1"}
 	if me := decode[map[string]any](t, e.do(e.web, "GET", "/api/v1/auth/me", nil, hdr, "x:1")); me["language"] != "ja" {
 		t.Fatalf("me: %v", me)
@@ -396,7 +402,7 @@ func TestAccountLanguage(t *testing.T) {
 func TestLoginRemember(t *testing.T) {
 	e := newTestEnv(t)
 	for _, remember := range []bool{false, true} {
-		rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]any{"name": "admin", "password": "Admin-pass-123", "remember": remember},
+		rec := e.do(e.web, "POST", "/api/v1/auth/login", map[string]any{"email": testAdminEmail, "password": "Admin-pass-123", "remember": remember},
 			map[string]string{csrfHeader: "1"}, "x:1")
 		if rec.Code != 200 {
 			t.Fatalf("login: %d", rec.Code)
@@ -411,7 +417,7 @@ func TestLoginRemember(t *testing.T) {
 			if ck.MaxAge != modules.DefaultRememberDays*86400 || !s.Remember || days != modules.DefaultRememberDays {
 				t.Fatalf("remembered: max-age %d, remember %v, days %d", ck.MaxAge, s.Remember, days)
 			}
-		} else if ck.MaxAge != 0 || s.Remember || s.ExpiresAt-s.CreatedAt != modules.DefaultSessionHours*3600 {
+		} else if ck.MaxAge != 0 || s.Remember || s.ExpiresAt-s.CreatedAt != int64(modules.SessionIdleTimeout/time.Second) {
 			t.Fatalf("session cookie: max-age %d, remember %v", ck.MaxAge, s.Remember)
 		}
 	}
@@ -475,7 +481,7 @@ func TestTokenValueVisibility(t *testing.T) {
 		t.Fatalf("CLI list value %v, want the full value", v)
 	}
 	// Browser: an administrator session never receives the full value.
-	cookie := login(t, e, "admin", "Admin-pass-123")
+	cookie := login(t, e, testAdminEmail, "Admin-pass-123")
 	hdr := map[string]string{"Cookie": sessionCookie + "=" + cookie, csrfHeader: "1"}
 	for _, path := range []string{"/api/v1/tokens", "/api/v1/tokens/1"} {
 		rec := e.do(e.web, "GET", path, nil, hdr, "192.0.2.1:1000")

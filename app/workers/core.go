@@ -212,7 +212,7 @@ func (c *core) agentDisplayName(a *models.Agent) string {
 func (c *core) history(p *principal, category, action, target, detail string) {
 	name := "system"
 	if p != nil {
-		name = p.Name
+		name = p.operator()
 	}
 	if err := models.InsertHistory(c.db, &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target, Detail: detail}); err != nil {
 		c.logger.Printf("history: %v", err)
@@ -235,15 +235,65 @@ const principalKey ctxKey = 1
 
 // principal is the authenticated account of a request.
 type principal struct {
-	AccountID int64
-	Name      string
-	Role      string
-	Language  string
-	SessionID string // hashed session id (browser only)
-	ViaCLI    bool
+	AccountID   int64
+	Email       string // the login ID at the time of the request
+	DisplayName string
+	Role        string
+	Language    string
+	SessionID   string // hashed session id (browser only)
+	ViaCLI      bool
 }
 
 func (p *principal) isAdmin() bool { return p != nil && p.Role == models.RoleAdmin }
+
+// operator is the name recorded as the operator (history, created_by,
+// acknowledged_by): the e-mail address of the account, or "cli" for the
+// management CLI.
+func (p *principal) operator() string {
+	if p.ViaCLI {
+		return cliOperator
+	}
+	return p.Email
+}
+
+// foldASCII lowers ASCII letters only, like the NOCASE collation of the
+// accounts.email column.
+func foldASCII(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, s)
+}
+
+// operatorShown returns the function that converts a recorded operator for
+// the response to r. Administrators and the CLI see the recorded value. A
+// viewer sees, for a recorded e-mail address, the current display name of
+// that account, or an empty string when no account has the address any
+// more; values that are not addresses ("cli", "system", "local:<user>") are
+// shown as they are.
+func (c *core) operatorShown(r *http.Request) func(string) string {
+	p := principalFrom(r)
+	if p == nil || p.isAdmin() {
+		return func(v string) string { return v }
+	}
+	var names map[string]string
+	return func(v string) string {
+		if !strings.Contains(v, "@") {
+			return v
+		}
+		if names == nil {
+			names = map[string]string{}
+			if list, err := models.ListAccounts(c.db); err == nil {
+				for _, a := range list {
+					names[foldASCII(a.Email)] = a.DisplayName
+				}
+			}
+		}
+		return names[foldASCII(v)]
+	}
+}
 
 func withPrincipal(r *http.Request, p *principal) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalKey, p))

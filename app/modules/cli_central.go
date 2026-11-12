@@ -76,11 +76,20 @@ func readNewPassword() (string, error) {
 
 // CentralInitAdminCmd creates the first administrator.
 type CentralInitAdminCmd struct {
-	Name     string `help:"Account name" required:""`
-	Language string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
+	Email       string `help:"E-mail address (the login ID)" required:""`
+	DisplayName string `name:"display-name" help:"Display name shown on the screens" required:""`
+	Language    string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
 }
 
 func (c *CentralInitAdminCmd) Run() error {
+	email, err := ValidateEmail(c.Email)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	display, err := ValidateDisplayName(c.DisplayName)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
 	db, err := openCentralDBLocal()
 	if err != nil {
 		return err
@@ -101,18 +110,18 @@ func (c *CentralInitAdminCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	a := &models.Account{Name: strings.TrimSpace(c.Name), Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
+	a := &models.Account{Email: email, DisplayName: display, Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
 	if err := models.InsertAccount(db, a); err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Name, Detail: "first administrator created on the central host"})
-	fmt.Printf("Administrator %q created.\n", a.Name)
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email, Detail: "first administrator created on the central host"})
+	fmt.Printf("Administrator %q created.\n", a.Email)
 	return nil
 }
 
 // CentralResetPasswordCmd resets an administrator's password.
 type CentralResetPasswordCmd struct {
-	Name string `help:"Administrator account name" required:""`
+	Email string `help:"E-mail address (login ID) of the administrator" required:""`
 }
 
 func (c *CentralResetPasswordCmd) Run() error {
@@ -121,9 +130,10 @@ func (c *CentralResetPasswordCmd) Run() error {
 		return err
 	}
 	defer db.Close()
-	a, err := models.GetAccountByName(db, c.Name)
+	email := strings.TrimSpace(c.Email)
+	a, err := models.GetAccountByEmail(db, email)
 	if errors.Is(err, sql.ErrNoRows) {
-		return NewExitErrorf(ExitArgument, "account %q not found", c.Name)
+		return NewExitErrorf(ExitArgument, "account %q not found", email)
 	}
 	if err != nil {
 		return err
@@ -143,9 +153,9 @@ func (c *CentralResetPasswordCmd) Run() error {
 		return err
 	}
 	_ = models.SetAccountDisabled(db, a.ID, false)
-	_ = models.DeleteAccountSessions(db, a.ID, "")
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Name, Detail: "administrator recovered on the central host"})
-	fmt.Printf("Password of %q reset; the account is enabled and its sessions were invalidated.\n", a.Name)
+	_ = RevokeAccountAuth(db, a.ID, "")
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email, Detail: "administrator recovered on the central host"})
+	fmt.Printf("Password of %q reset; the account is enabled and its sessions, trusted browsers and pending codes were invalidated.\n", a.Email)
 	return nil
 }
 

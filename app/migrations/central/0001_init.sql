@@ -7,7 +7,8 @@
 -- +goose StatementBegin
 CREATE TABLE accounts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT    NOT NULL UNIQUE,
+    email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    display_name  TEXT    NOT NULL,
     password_hash TEXT    NOT NULL,
     role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer')),
     language      TEXT    NOT NULL DEFAULT 'auto' CHECK (language IN ('auto', 'en', 'ja')),
@@ -28,6 +29,46 @@ CREATE TABLE sessions (
     last_seen_at INTEGER NOT NULL,
     remember     INTEGER NOT NULL DEFAULT 0
 );
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TABLE auth_codes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    purpose        TEXT    NOT NULL CHECK (purpose IN ('login', 'email_change')),
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    challenge_hash TEXT    NOT NULL DEFAULT '',
+    session_id     TEXT    NOT NULL DEFAULT '',
+    new_email      TEXT    NOT NULL DEFAULT '',
+    code_hash      TEXT    NOT NULL,
+    remember       INTEGER NOT NULL DEFAULT 0,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    remote_addr    TEXT    NOT NULL DEFAULT '',
+    created_at     INTEGER NOT NULL,
+    expires_at     INTEGER NOT NULL
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE INDEX idx_auth_codes_challenge ON auth_codes(challenge_hash);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE INDEX idx_auth_codes_account ON auth_codes(account_id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TABLE browser_verifications (
+    id          TEXT    PRIMARY KEY,
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    trusted     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    remote_addr TEXT    NOT NULL DEFAULT ''
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE INDEX idx_browser_verifications_account ON browser_verifications(account_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -222,6 +263,12 @@ DROP TABLE rule_versions;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE rules;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE browser_verifications;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE auth_codes;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE sessions;

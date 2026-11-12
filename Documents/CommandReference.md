@@ -15,7 +15,7 @@ On the central host:
 
 ```bash
 ./mimamori central config set server_names central.example.com
-./mimamori central init-admin --name admin
+./mimamori central init-admin --email admin@example.com --display-name Admin
 ./mimamori central start
 ```
 
@@ -41,8 +41,8 @@ Commands for the central. Run them on the central host.
 | `central start` | Start the central (browser screens, agent API, management API and the built-in agent). Stops with SIGTERM or SIGINT |
 | `central stop [--timeout DURATION]` | Stop the running central and wait until it has stopped (default 120s) |
 | `central status` | Show whether the central is running, its listen addresses and workers. Exit code 3 when it is not running |
-| `central init-admin --name NAME [--language auto\|en\|ja]` | Create the first administrator (`--language` defaults to `auto`; only while no administrator exists). The password is read from the terminal or the first line of standard input |
-| `central reset-password --name NAME` | Reset an administrator's password, enable the account and invalidate its sessions |
+| `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. `ADDRESS` is the e-mail address used to log in; `NAME` is the name shown on the screens. `--language` defaults to `auto`. Only while no administrator exists. The password is read from the terminal or the first line of standard input |
+| `central reset-password --email ADDRESS` | Reset the password of the administrator with this e-mail address (case is ignored), enable the account and invalidate its sessions, trusted browsers and pending verification codes |
 | `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
 | `central config get NAME` | Print the value of one item |
 | `central config set NAME [VALUE]` | Set one item. Lists are comma separated. `smtp.password` is read from the terminal or standard input |
@@ -130,11 +130,13 @@ Management commands. Run them on the central host while the central is running. 
 
 | Command | Description |
 | --- | --- |
-| `ctl accounts list` | List accounts |
-| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account (`--language` defaults to `auto`; password from standard input) |
-| `ctl accounts role ID admin\|viewer` | Change the role |
-| `ctl accounts password ID` | Reset the password (from standard input) |
-| `ctl accounts disable ID` | Disable an account |
+| `ctl accounts list` | List accounts (id, email, display_name, role, language, disabled, locked_until, created_at) |
+| `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account. `EMAIL` is the e-mail address used to log in (unique, case is ignored); `NAME` is the name shown on the screens (need not be unique). `--language` defaults to `auto`; password from standard input |
+| `ctl accounts email ID ADDRESS` | Change the e-mail address at once, without a verification code. The account's sessions, trusted browsers and pending verification codes are invalidated |
+| `ctl accounts display-name ID NAME` | Change the display name (sessions are kept) |
+| `ctl accounts role ID admin\|viewer` | Change the role (the account's sessions are invalidated) |
+| `ctl accounts password ID` | Reset the password (from standard input). The account's sessions, trusted browsers and pending verification codes are invalidated |
+| `ctl accounts disable ID` | Disable an account. Its sessions, trusted browsers and pending verification codes are invalidated |
 | `ctl accounts enable ID` | Enable an account |
 | `ctl accounts delete ID` | Delete an account |
 

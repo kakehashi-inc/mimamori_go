@@ -249,8 +249,9 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	if a.Kind == models.AgentToken {
 		items, _, err := models.ListHistory(c.db, models.HistToken, name, 100, 0)
 		if err == nil {
+			show := c.operatorShown(r)
 			for _, h := range items {
-				out.TokenHistory = append(out.TokenHistory, historyOut(h))
+				out.TokenHistory = append(out.TokenHistory, historyOut(h, show))
 			}
 		}
 	}
@@ -282,7 +283,7 @@ type tokenJSON struct {
 func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 	now := time.Now().Unix()
 	out := tokenJSON{ID: t.ID, Name: t.Name, Value: tokenValueFor(r, t.Value), Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
-		CreatedBy: t.CreatedBy, LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
+		CreatedBy: c.operatorShown(r)(t.CreatedBy), LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
 	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
 		near := t.ExpiresAt-now < int64(c.conf().TokenRenewBeforeDays)*86400
@@ -388,7 +389,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r)
-	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.Name}
+	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.operator()}
 	if err := models.InsertToken(c.db, tok); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, "a token with this name already exists")

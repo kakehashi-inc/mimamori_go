@@ -23,8 +23,11 @@ func ValidLanguage(lang string) bool {
 
 // Account is a row of the accounts table (a person using the browser screens).
 type Account struct {
-	ID           int64
-	Name         string
+	ID int64
+	// Email is the login ID (unique, compared without regard to case).
+	Email string
+	// DisplayName is the name shown on the screens (duplicates allowed).
+	DisplayName  string
 	PasswordHash string
 	Role         string
 	Language     string
@@ -35,12 +38,12 @@ type Account struct {
 	UpdatedAt    int64
 }
 
-const accountCols = `id, name, password_hash, role, language, disabled, failed_logins, locked_until, created_at, updated_at`
+const accountCols = `id, email, display_name, password_hash, role, language, disabled, failed_logins, locked_until, created_at, updated_at`
 
 func scanAccount(s rowScanner) (*Account, error) {
 	a := &Account{}
 	var disabled int
-	if err := s.Scan(&a.ID, &a.Name, &a.PasswordHash, &a.Role, &a.Language, &disabled, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := s.Scan(&a.ID, &a.Email, &a.DisplayName, &a.PasswordHash, &a.Role, &a.Language, &disabled, &a.FailedLogins, &a.LockedUntil, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	a.Disabled = disabled != 0
@@ -53,8 +56,8 @@ func InsertAccount(db Execer, a *Account) error {
 	if a.Language == "" {
 		a.Language = LangAuto
 	}
-	res, err := db.Exec(`INSERT INTO accounts (name, password_hash, role, language, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		a.Name, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), now, now)
+	res, err := db.Exec(`INSERT INTO accounts (email, display_name, password_hash, role, language, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Email, a.DisplayName, a.PasswordHash, a.Role, a.Language, boolToInt(a.Disabled), now, now)
 	if err != nil {
 		return err
 	}
@@ -68,14 +71,15 @@ func GetAccount(db Execer, id int64) (*Account, error) {
 	return scanAccount(db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE id = ?`, id))
 }
 
-// GetAccountByName returns the account by name.
-func GetAccountByName(db Execer, name string) (*Account, error) {
-	return scanAccount(db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE name = ?`, name))
+// GetAccountByEmail returns the account by e-mail address (the login ID),
+// compared without regard to case.
+func GetAccountByEmail(db Execer, email string) (*Account, error) {
+	return scanAccount(db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE email = ?`, email))
 }
 
-// ListAccounts returns all accounts ordered by name.
+// ListAccounts returns all accounts ordered by e-mail address.
 func ListAccounts(db Execer) ([]*Account, error) {
-	rows, err := db.Query(`SELECT ` + accountCols + ` FROM accounts ORDER BY name`)
+	rows, err := db.Query(`SELECT ` + accountCols + ` FROM accounts ORDER BY email`)
 	return collect(rows, err, scanAccount)
 }
 
@@ -96,6 +100,16 @@ func CountAdmins(db Execer) (int, error) {
 // UpdateAccountRole changes the role.
 func UpdateAccountRole(db Execer, id int64, role string) error {
 	return execOne(db, `UPDATE accounts SET role = ?, updated_at = ? WHERE id = ?`, role, Now(), id)
+}
+
+// UpdateAccountEmail changes the e-mail address (the login ID).
+func UpdateAccountEmail(db Execer, id int64, email string) error {
+	return execOne(db, `UPDATE accounts SET email = ?, updated_at = ? WHERE id = ?`, email, Now(), id)
+}
+
+// UpdateAccountDisplayName changes the display name.
+func UpdateAccountDisplayName(db Execer, id int64, name string) error {
+	return execOne(db, `UPDATE accounts SET display_name = ?, updated_at = ? WHERE id = ?`, name, Now(), id)
 }
 
 // UpdateAccountLanguage changes the display language.
@@ -133,7 +147,8 @@ func ResetLoginFailures(db Execer, id int64) error {
 	return err
 }
 
-// DeleteAccount removes an account (sessions cascade).
+// DeleteAccount removes an account (its sessions, codes and browser
+// verifications cascade).
 func DeleteAccount(db Execer, id int64) error {
 	return execOne(db, `DELETE FROM accounts WHERE id = ?`, id)
 }

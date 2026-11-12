@@ -919,19 +919,30 @@ func (c *CtlSuppressionsDeleteCmd) Run(p *CtlCmd) error {
 // --- accounts ---
 
 type CtlAccountsCmd struct {
-	List     CtlAccountsListCmd     `cmd:"" help:"List accounts"`
-	Create   CtlAccountsCreateCmd   `cmd:"" help:"Create an account (password from standard input)"`
-	Role     CtlAccountsRoleCmd     `cmd:"" help:"Change the role"`
-	Password CtlAccountsPasswordCmd `cmd:"" help:"Reset the password (from standard input)"`
-	Disable  CtlAccountsIDCmd       `cmd:"" help:"Disable an account"`
-	Enable   CtlAccountsEnableCmd   `cmd:"" help:"Enable an account"`
-	Delete   CtlAccountsDeleteCmd   `cmd:"" help:"Delete an account"`
+	List        CtlAccountsListCmd        `cmd:"" help:"List accounts"`
+	Create      CtlAccountsCreateCmd      `cmd:"" help:"Create an account (password from standard input)"`
+	Email       CtlAccountsEmailCmd       `cmd:"" help:"Change the e-mail address (login ID) at once, without a verification code; ends the account's sessions"`
+	DisplayName CtlAccountsDisplayNameCmd `cmd:"" name:"display-name" help:"Change the display name"`
+	Role        CtlAccountsRoleCmd        `cmd:"" help:"Change the role"`
+	Password    CtlAccountsPasswordCmd    `cmd:"" help:"Reset the password (from standard input)"`
+	Disable     CtlAccountsIDCmd          `cmd:"" help:"Disable an account"`
+	Enable      CtlAccountsEnableCmd      `cmd:"" help:"Enable an account"`
+	Delete      CtlAccountsDeleteCmd      `cmd:"" help:"Delete an account"`
 }
 type CtlAccountsListCmd struct{}
 type CtlAccountsCreateCmd struct {
-	Name     string `arg:""`
-	Role     string `help:"admin or viewer" enum:"admin,viewer" required:""`
-	Language string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
+	Email       string `arg:"" help:"E-mail address (the login ID)"`
+	DisplayName string `name:"display-name" help:"Display name shown on the screens" required:""`
+	Role        string `help:"admin or viewer" enum:"admin,viewer" required:""`
+	Language    string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
+}
+type CtlAccountsEmailCmd struct {
+	ID    int64  `arg:""`
+	Email string `arg:"" help:"New e-mail address"`
+}
+type CtlAccountsDisplayNameCmd struct {
+	ID   int64  `arg:""`
+	Name string `arg:"" help:"New display name"`
 }
 type CtlAccountsRoleCmd struct {
 	ID   int64  `arg:""`
@@ -951,14 +962,36 @@ type CtlAccountsDeleteCmd struct {
 }
 
 func (c *CtlAccountsListCmd) Run(p *CtlCmd) error {
-	return runCtl(p, "GET", "/accounts", nil, "id", "name", "role", "language", "disabled", "locked_until", "created_at")
+	return runCtl(p, "GET", "/accounts", nil, "id", "email", "display_name", "role", "language", "disabled", "locked_until", "created_at")
 }
 func (c *CtlAccountsCreateCmd) Run(p *CtlCmd) error {
+	email, err := ValidateEmail(c.Email)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	display, err := ValidateDisplayName(c.DisplayName)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
 	pw, err := readNewPassword()
 	if err != nil {
 		return err
 	}
-	return runCtl(p, "POST", "/accounts", map[string]any{"name": c.Name, "role": c.Role, "language": c.Language, "password": pw})
+	return runCtl(p, "POST", "/accounts", map[string]any{"email": email, "display_name": display, "role": c.Role, "language": c.Language, "password": pw})
+}
+func (c *CtlAccountsEmailCmd) Run(p *CtlCmd) error {
+	email, err := ValidateEmail(c.Email)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/email", c.ID), map[string]any{"email": email})
+}
+func (c *CtlAccountsDisplayNameCmd) Run(p *CtlCmd) error {
+	display, err := ValidateDisplayName(c.Name)
+	if err != nil {
+		return NewExitError(ExitArgument, err.Error())
+	}
+	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/display-name", c.ID), map[string]any{"display_name": display})
 }
 func (c *CtlAccountsRoleCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "PUT", fmt.Sprintf("/accounts/%d/role", c.ID), map[string]any{"role": c.Role})

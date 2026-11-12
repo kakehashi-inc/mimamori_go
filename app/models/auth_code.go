@@ -1,0 +1,96 @@
+package models
+
+// Purposes of a verification code.
+const (
+	CodePurposeLogin       = "login"
+	CodePurposeEmailChange = "email_change"
+)
+
+// AuthCode is a row of the auth_codes table: a verification code mailed to
+// an account and not yet entered. The code itself is never stored, only its
+// hash. A login code is found by its challenge (stored hashed); an e-mail
+// address change code by the session that asked for it.
+type AuthCode struct {
+	ID            int64
+	Purpose       string
+	AccountID     int64
+	ChallengeHash string // login: hash of the challenge given to the browser
+	SessionID     string // email_change: hashed id of the requesting session
+	NewEmail      string // email_change: the requested address
+	CodeHash      string
+	Remember      bool // login: "keep me logged in" was chosen
+	Attempts      int
+	RemoteAddr    string
+	CreatedAt     int64
+	ExpiresAt     int64
+}
+
+const authCodeCols = `id, purpose, account_id, challenge_hash, session_id, new_email, code_hash, remember, attempts, remote_addr, created_at, expires_at`
+
+func scanAuthCode(s rowScanner) (*AuthCode, error) {
+	a := &AuthCode{}
+	var remember int
+	if err := s.Scan(&a.ID, &a.Purpose, &a.AccountID, &a.ChallengeHash, &a.SessionID, &a.NewEmail, &a.CodeHash, &remember, &a.Attempts,
+		&a.RemoteAddr, &a.CreatedAt, &a.ExpiresAt); err != nil {
+		return nil, err
+	}
+	a.Remember = remember != 0
+	return a, nil
+}
+
+// InsertAuthCode stores a code and sets its ID.
+func InsertAuthCode(db Execer, a *AuthCode) error {
+	res, err := db.Exec(`INSERT INTO auth_codes (purpose, account_id, challenge_hash, session_id, new_email, code_hash, remember, attempts, remote_addr, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Purpose, a.AccountID, a.ChallengeHash, a.SessionID, a.NewEmail, a.CodeHash, boolToInt(a.Remember), a.Attempts, a.RemoteAddr, a.CreatedAt, a.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	a.ID, _ = res.LastInsertId()
+	return nil
+}
+
+// GetAuthCode returns the code by id.
+func GetAuthCode(db Execer, id int64) (*AuthCode, error) {
+	return scanAuthCode(db.QueryRow(`SELECT `+authCodeCols+` FROM auth_codes WHERE id = ?`, id))
+}
+
+// GetLoginCodeByChallenge returns the login code of a challenge (hashed).
+func GetLoginCodeByChallenge(db Execer, challengeHash string) (*AuthCode, error) {
+	return scanAuthCode(db.QueryRow(`SELECT `+authCodeCols+` FROM auth_codes WHERE purpose = ? AND challenge_hash = ? AND challenge_hash <> ''`,
+		CodePurposeLogin, challengeHash))
+}
+
+// GetEmailChangeCode returns the pending e-mail address change of an
+// account requested from the given session (hashed id).
+func GetEmailChangeCode(db Execer, accountID int64, sessionID string) (*AuthCode, error) {
+	return scanAuthCode(db.QueryRow(`SELECT `+authCodeCols+` FROM auth_codes WHERE purpose = ? AND account_id = ? AND session_id = ? AND session_id <> ''
+		ORDER BY id DESC LIMIT 1`, CodePurposeEmailChange, accountID, sessionID))
+}
+
+// RecordAuthCodeAttempt counts one wrong entry of a code in a single
+// statement and returns the new number of wrong entries.
+func RecordAuthCodeAttempt(db Execer, id int64) (int, error) {
+	var n int
+	err := db.QueryRow(`UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ? RETURNING attempts`, id).Scan(&n)
+	return n, err
+}
+
+// DeleteAuthCode removes one code (used, expired or failed too often).
+func DeleteAuthCode(db Execer, id int64) error {
+	_, err := db.Exec(`DELETE FROM auth_codes WHERE id = ?`, id)
+	return err
+}
+
+// DeleteAccountAuthCodes removes the codes of an account with the given
+// purpose, or every code of the account when purpose is empty.
+func DeleteAccountAuthCodes(db Execer, accountID int64, purpose string) error {
+	_, err := db.Exec(`DELETE FROM auth_codes WHERE account_id = ? AND (? = '' OR purpose = ?)`, accountID, purpose, purpose)
+	return err
+}
+
+// DeleteExpiredAuthCodes removes the codes whose lifetime has passed.
+func DeleteExpiredAuthCodes(db Execer, now int64) error {
+	_, err := db.Exec(`DELETE FROM auth_codes WHERE expires_at <= ?`, now)
+	return err
+}

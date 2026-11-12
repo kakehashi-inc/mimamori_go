@@ -69,6 +69,8 @@ func (c *core) retention(now time.Time) {
 	}
 	_ = models.DeleteRejectedHistoryBefore(c.db, cut)
 	_ = models.DeleteExpiredSessions(c.db, now.Unix())
+	_ = models.DeleteExpiredAuthCodes(c.db, now.Unix())
+	_ = models.DeleteExpiredBrowserVerifications(c.db, now.Unix())
 	_ = models.DeleteSentNotificationsBefore(c.db, now.Add(-30*24*time.Hour).Unix())
 	_ = models.SetSetting(c.db, settingLastRetentionAt, strconv.FormatInt(now.Unix(), 10))
 }

@@ -18,6 +18,11 @@ const sessionCookie = "mimamori_session"
 // cannot add a custom header without a CORS preflight, which is never allowed.
 const csrfHeader = "X-Mimamori-Request"
 
+// backgroundHeader marks a request the open page sends by itself (the
+// periodic refresh). It is authenticated like any other request but is not
+// an operation of the user, so it does not extend the session.
+const backgroundHeader = "X-Mimamori-Background"
+
 func bearer(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if v, ok := strings.CutPrefix(auth, "Bearer "); ok {
@@ -57,16 +62,18 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "login required")
 			return
 		}
-		if now-s.LastSeenAt > 60 {
-			// An idle-timeout session is extended by activity; a remembered
-			// session keeps its fixed expiry from login (like its cookie).
-			expires := now + int64(c.conf().SessionHours)*3600
+		if r.Header.Get(backgroundHeader) != "1" && now-s.LastSeenAt > 60 {
+			// A session without "keep me logged in" ends SessionIdleTimeout
+			// after the last operation, so every operation extends it; a
+			// remembered session keeps its fixed expiry from login (like its
+			// cookie).
+			expires := now + int64(modules.SessionIdleTimeout/time.Second)
 			if s.Remember {
 				expires = s.ExpiresAt
 			}
 			_ = models.TouchSession(c.db, id, now, expires)
 		}
-		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Name: a.Name, Role: a.Role, Language: a.Language, SessionID: id}))
+		next.ServeHTTP(w, withPrincipal(r, &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: id}))
 	})
 }
 
@@ -85,7 +92,7 @@ func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next.ServeHTTP(w, withPrincipal(r, &principal{Name: cliOperator, Role: models.RoleAdmin, ViaCLI: true}))
+		next.ServeHTTP(w, withPrincipal(r, &principal{DisplayName: cliOperator, Role: models.RoleAdmin, ViaCLI: true}))
 	})
 }
 
@@ -111,9 +118,18 @@ func requireAny(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// invalidateAccount ends every session of an account.
-func (c *core) invalidateAccount(id int64, keepSession string) {
-	_ = models.DeleteAccountSessions(c.db, id, keepSession)
+// invalidateAccount ends every session of an account (a role change).
+func (c *core) invalidateAccount(id int64) {
+	_ = models.DeleteAccountSessions(c.db, id, "")
+}
+
+// revokeAccountAuth ends the sessions (all but keepSession), the browser
+// verifications and the pending codes of an account (a password or e-mail
+// address change, disabling).
+func (c *core) revokeAccountAuth(id int64, keepSession string) {
+	if err := modules.RevokeAccountAuth(c.db, id, keepSession); err != nil {
+		c.logger.Printf("revoke account %d: %v", id, err)
+	}
 }
 
 // cliOperator is the name recorded in the history for CLI operations.

@@ -15,7 +15,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 ```bash
 ./mimamori central config set server_names central.example.com
-./mimamori central init-admin --name admin
+./mimamori central init-admin --email admin@example.com --display-name Admin
 ./mimamori central start
 ```
 
@@ -41,8 +41,8 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `central start` | セントラルを起動する（ブラウザ画面、エージェント用の API、管理用の API、内蔵エージェント）。SIGTERM または SIGINT で終了する |
 | `central stop [--timeout DURATION]` | 起動中のセントラルを停止し、停止するまで待つ（既定 120s） |
 | `central status` | セントラルが稼働中か、待ち受けとワーカー数を表示する。停止中は終了コード 3 |
-| `central init-admin --name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する（`--language` の既定は `auto`。管理者が 1 人もいない場合だけ）。パスワードは端末または標準入力の 1 行目から読む |
-| `central reset-password --name NAME` | 管理者のパスワードを再設定し、アカウントを有効にして、セッションを無効にする |
+| `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する。`ADDRESS` はログインに使うメールアドレス、`NAME` は画面に表示する名前。`--language` の既定は `auto`。管理者が 1 人もいない場合だけ。パスワードは端末または標準入力の 1 行目から読む |
+| `central reset-password --email ADDRESS` | このメールアドレス（大文字と小文字は区別しない）の管理者のパスワードを再設定し、アカウントを有効にして、セッション、信頼済みのブラウザ、送信済みの確認コードを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |
 | `central config get NAME` | 1 項目の値を表示する |
 | `central config set NAME [VALUE]` | 1 項目を設定する。一覧はカンマ区切り。`smtp.password` は端末または標準入力から読む |
@@ -130,11 +130,13 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl accounts list` | アカウントの一覧 |
-| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する（`--language` の既定は `auto`。パスワードは標準入力から） |
-| `ctl accounts role ID admin\|viewer` | 権限を変える |
-| `ctl accounts password ID` | パスワードを再設定する（標準入力から） |
-| `ctl accounts disable ID` | アカウントを無効にする |
+| `ctl accounts list` | アカウントの一覧（id、email、display_name、role、language、disabled、locked_until、created_at） |
+| `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する。`EMAIL` はログインに使うメールアドレス（一意。大文字と小文字は区別しない）、`NAME` は画面に表示する名前（重複してもよい）。`--language` の既定は `auto`。パスワードは標準入力から |
+| `ctl accounts email ID ADDRESS` | メールアドレスを確認コードなしで即時に変える。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
+| `ctl accounts display-name ID NAME` | 表示名を変える（セッションはそのまま） |
+| `ctl accounts role ID admin\|viewer` | 権限を変える（そのアカウントのセッションは無効になる） |
+| `ctl accounts password ID` | パスワードを再設定する（標準入力から）。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
+| `ctl accounts disable ID` | アカウントを無効にする。そのアカウントのセッション、信頼済みのブラウザ、送信済みの確認コードは無効になる |
 | `ctl accounts enable ID` | アカウントを有効にする |
 | `ctl accounts delete ID` | アカウントを削除する |
 

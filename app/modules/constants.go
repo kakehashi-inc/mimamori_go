@@ -57,8 +57,8 @@ const (
 	DefaultNotifyMaxLines     = 200
 	DefaultWorkers            = 1
 	DefaultQueueTimeoutSec    = 10
-	DefaultSessionHours       = 12
 	DefaultRememberDays       = 30
+	DefaultTrustDays          = 30
 	DefaultSMTPTimeoutSec     = 30
 	DefaultCommandTimeoutSec  = 60
 	DefaultHTTPTimeoutSec     = 30
@@ -93,6 +93,24 @@ const (
 	// LoginMaxFailures and LoginLockDuration implement the login lockout.
 	LoginMaxFailures  = 5
 	LoginLockDuration = 15 * time.Minute
+	// SessionIdleTimeout ends a login session (without "keep me logged in")
+	// this long after the last operation. It is deliberately not a
+	// configuration item and is never shown to browser users.
+	SessionIdleTimeout = time.Hour
+	// VerifiedBrowserTTL is how long a login code entered without "trust this
+	// browser" spares new logins from the same browser a code. Like
+	// SessionIdleTimeout it is never shown to browser users.
+	VerifiedBrowserTTL = 3 * time.Hour
+	// AuthCodeLifetime and AuthCodeMaxAttempts bound a mailed verification
+	// code (login or e-mail address change).
+	AuthCodeLifetime    = 10 * time.Minute
+	AuthCodeMaxAttempts = 5
+	// AuthCodeMailTimeoutCap bounds the sending of a code mail inside a
+	// request (smtp.timeout_sec applies when shorter), so that the response
+	// is written within ConnTotalTimeout.
+	AuthCodeMailTimeoutCap = 45 * time.Second
+	// MaxTrustDays is the largest two_step_trust_days.
+	MaxTrustDays = 365
 	// MinPasswordLength is the minimum length of account passwords.
 	MinPasswordLength = 10
 	// PasswordIterations is the PBKDF2-SHA256 iteration count.

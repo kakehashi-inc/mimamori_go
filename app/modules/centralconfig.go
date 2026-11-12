@@ -28,9 +28,23 @@ type SMTPConfig struct {
 	HeloName   string
 }
 
-// Enabled reports whether mail can be sent.
+// Enabled reports whether notification mails can be sent (a server, a
+// sender and notification recipients are set).
 func (s SMTPConfig) Enabled() bool {
-	return s.Host != "" && s.From != "" && len(s.To) > 0
+	return s.CanSend() && len(s.To) > 0
+}
+
+// CanSend reports whether mail can be sent to given recipients (a server and
+// a sender are set). Verification code mails need this.
+func (s SMTPConfig) CanSend() bool {
+	return strings.TrimSpace(s.Host) != "" && strings.TrimSpace(s.From) != ""
+}
+
+// DevelopmentMode reports whether no SMTP server is configured. Then no
+// notification is sent and no verification code is asked for (at login and
+// for an own e-mail address change), because none could be delivered.
+func (s SMTPConfig) DevelopmentMode() bool {
+	return strings.TrimSpace(s.Host) == ""
 }
 
 // NotifyConfig configures notification throttling.
@@ -54,8 +68,8 @@ type CentralConfig struct {
 	TokenRenewBeforeDays    int
 	RetentionDays           int
 	DefaultCheckIntervalSec int
-	SessionHours            int
 	SessionRememberDays     int
+	TwoStepTrustDays        int
 	BuiltinAgent            *bool
 	Notify                  NotifyConfig
 	SMTP                    SMTPConfig
@@ -155,8 +169,8 @@ var ConfigFields = []ConfigField{
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
 	cfgIntField("retention_days", "Retention of detections and of the history of rejected connections (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
 	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
-	cfgIntField("session_hours", "Login session lifetime (hours)", func(c *CentralConfig) *int { return &c.SessionHours }),
 	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", func(c *CentralConfig) *int { return &c.SessionRememberDays }),
+	cfgIntField("two_step_trust_days", "Days a browser marked as trusted at the login code step needs no code", func(c *CentralConfig) *int { return &c.TwoStepTrustDays }),
 	{Name: "builtin_agent", Kind: "bool", Help: "Run the built-in agent (monitoring of the central host)",
 		get: func(c *CentralConfig) string { return strconv.FormatBool(c.BuiltinAgent != nil && *c.BuiltinAgent) },
 		set: func(c *CentralConfig, v string) error {
@@ -170,7 +184,7 @@ var ConfigFields = []ConfigField{
 	cfgIntField("notify.dedupe_hours", "Do not notify the same detection again within (hours)", func(c *CentralConfig) *int { return &c.Notify.DedupeHours }),
 	cfgIntField("notify.max_lines", "Maximum detection lines in one mail", func(c *CentralConfig) *int { return &c.Notify.MaxLines }),
 	cfgStringField("notify.subject_prefix", "Subject prefix of notification mails", func(c *CentralConfig) *string { return &c.Notify.SubjectPrefix }),
-	cfgStringField("smtp.host", "SMTP server (notifications are off while empty)", func(c *CentralConfig) *string { return &c.SMTP.Host }),
+	cfgStringField("smtp.host", "SMTP server (while empty, no notifications are sent and no verification code is asked for at login)", func(c *CentralConfig) *string { return &c.SMTP.Host }),
 	cfgIntField("smtp.port", "SMTP port", func(c *CentralConfig) *int { return &c.SMTP.Port }),
 	cfgStringField("smtp.security", "starttls, tls or none", func(c *CentralConfig) *string { return &c.SMTP.Security }),
 	{Name: "smtp.auth", Kind: "bool", Help: "Use SMTP authentication",
@@ -255,11 +269,11 @@ func (c *CentralConfig) applyDefaults() {
 	if c.DefaultCheckIntervalSec <= 0 {
 		c.DefaultCheckIntervalSec = DefaultCheckIntervalSec
 	}
-	if c.SessionHours <= 0 {
-		c.SessionHours = DefaultSessionHours
-	}
 	if c.SessionRememberDays <= 0 {
 		c.SessionRememberDays = DefaultRememberDays
+	}
+	if c.TwoStepTrustDays <= 0 {
+		c.TwoStepTrustDays = DefaultTrustDays
 	}
 	if c.BuiltinAgent == nil {
 		c.BuiltinAgent = boolPtr(true)
@@ -303,8 +317,8 @@ var configIntMax = map[string]int{
 	"token_renew_before_days":    36500,
 	"retention_days":             36500,
 	"default_check_interval_sec": MaxCheckInterval,
-	"session_hours":              8760,
 	"session_remember_days":      365,
+	"two_step_trust_days":        MaxTrustDays,
 	"notify.min_interval_min":    43200,
 	"notify.dedupe_hours":        8760,
 	"notify.max_lines":           10000,

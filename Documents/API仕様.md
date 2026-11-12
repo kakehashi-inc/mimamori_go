@@ -28,10 +28,17 @@
   - 503 を返すのはブラウザ用の待ち受けだけです。エージェントおよび管理用の待ち受け（HTTPS）では、混雑すると応答を返さずに接続を切ります。
 - 存在しないパスと、そのパスで対応していないメソッドへの要求は、`{"error": ...}` ではなく `text/plain` の `404 page not found` と `405 Method Not Allowed` を返します（ブラウザ用はログイン済みの場合）。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
+- ブラウザ画面が利用者の操作によらずに送る要求（開いている画面の定期的な更新）には、ヘッダー `X-Mimamori-Background: 1` を付けます。この要求も認証しますが、ログインセッションの期限を延ばしません（[システム仕様.md](システム仕様.md) のログインセッション）。
 
 ### 1.3 権限
 
 `A` は管理者のみ、`V` は管理者と閲覧者が使えます。権限の判定はすべてのリクエストでセントラルが行います。
+
+操作者を表す項目（`HistoryItem.account_name`、`created_by`、`acknowledged_by`）には、操作した時点のアカウントのメールアドレス（ログイン ID）が記録されています。閲覧者への応答では、次のように変換して返します。管理者と CLI への応答は記録された値のままです。
+
+- 既存のアカウントのメールアドレスは、そのアカウントの現在の表示名にします。
+- どのアカウントのものでもないメールアドレス（アドレスを変えた、または削除したアカウントのもの）は空の文字列にします。
+- `@` を含まない値（`system`、`cli`、`local:<OS のユーザー名>`）はそのまま返します。
 
 ## 2. 認証
 
@@ -39,16 +46,16 @@
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
-| GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30}` |
-| POST | `/auth/login` | なし | `{"name","password","remember"?}` | `Me`（Cookie を設定）。`remember` が true なら有効期限付きの Cookie（ログインを保持）。失敗は 401、一時停止中は 423 |
+| GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30,"trust_days":30}`（`remember_days` は `session_remember_days`、`trust_days` は `two_step_trust_days` の値） |
+| POST | `/auth/login` | なし | `{"email","password","remember"?}` | `Me`（Cookie を設定）。`email` はメールアドレス（大文字と小文字を区別しない）。`remember` が true なら有効期限付きの Cookie（ログインを保持）。失敗は 401 `{"error":"invalid e-mail address or password"}`、一時停止中は 423 |
 | POST | `/auth/logout` | V | - | `{}` |
-| GET | `/auth/me` | V | - | `Me`。`/admin/v1` では `{"id":0,"name":"cli","role":"admin","language":""}` |
-| POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッションは無効になる） |
+| GET | `/auth/me` | V | - | `Me`。`/admin/v1` では `{"id":0,"email":"","display_name":"cli","role":"admin","language":""}` |
+| POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる） |
 | PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更） |
 
 ```ts
 // language: 'auto' はブラウザの言語から自動判別（日本語なら ja、それ以外は en）
-interface Me { id: number; name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja' }
+interface Me { id: number; email: string; display_name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja' }
 ```
 
 ## 3. 概要
@@ -308,7 +315,7 @@ interface CertStatus {
 ```ts
 type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
 interface HistoryItem {
-  id: number; at: string; account_name: string;   // システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
+  id: number; at: string; account_name: string;   // 操作したアカウントのその時点のメールアドレス（閲覧者には 1.3 の変換をした値）。システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
   category: HistoryCategory; action: string; target: string; detail: string;
   remote_addr: string; count: number;            // 拒否した接続は同じ接続元、理由、トークン名（target）を 10 分以内ならまとめて数える
 }
@@ -319,22 +326,26 @@ interface HistoryItem {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/accounts` | A | - | `Account[]` |
-| POST | `/accounts` | A | `{"name","role","language"?,"password"}` | `Account`（`language` は `auto` / `en` / `ja`、省略時は `auto`） |
-| PUT | `/accounts/{id}/role` | A | `{"role"}` | `Account` |
-| PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account` |
-| POST | `/accounts/{id}/disable` | A | - | `Account` |
+| POST | `/accounts` | A | `{"email","display_name","role","language"?,"password"}` | `Account`（`language` は `auto` / `en` / `ja`、省略時は `auto`。メールアドレスの重複は 409） |
+| PUT | `/accounts/{id}/email` | A | `{"email"}` | `Account`（確認コードなしで即時に変更。対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる。重複は 409） |
+| PUT | `/accounts/{id}/display-name` | A | `{"display_name"}` | `Account`（セッションはそのまま） |
+| PUT | `/accounts/{id}/role` | A | `{"role"}` | `Account`（対象のセッションは無効になる） |
+| PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
+| POST | `/accounts/{id}/disable` | A | - | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
 | POST | `/accounts/{id}/enable` | A | - | `Account` |
 | DELETE | `/accounts/{id}` | A | - | `{}` |
 
 ```ts
 interface Account {
-  id: number; name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja'; disabled: boolean;
+  id: number; email: string; display_name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja'; disabled: boolean;
   locked_until: string | null; created_at: string;
 }
 ```
 
 - 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です（確認と変更は 1 つの書き込みのトランザクションで行うため、同時の要求でも有効な管理者が 0 人になることはありません）。
-- アカウント名は `[A-Za-z0-9._@-]{1,64}` で一意です。パスワードは 10 文字以上、256 バイトまでです。
+- メールアドレス（ログイン ID）は前後の空白を除いて 254 文字以下の、表示名や引用符の無い 1 つのアドレスです（空白、制御文字、`"` `<` `>` `,` は不可。ドメインのドットは不要で `user@localhost` も可）。大文字と小文字を区別せずに一意です。
+- 表示名は前後の空白を除いて 1〜64 文字で、制御文字は使えません。重複してもかまいません。
+- パスワードは 10 文字以上、256 バイトまでです。
 
 ## 12.1 システム設定
 

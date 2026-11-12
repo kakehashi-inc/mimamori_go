@@ -104,7 +104,9 @@ func (c *core) loadRule(w http.ResponseWriter, r *http.Request) *models.Rule {
 	return rule
 }
 
-func (c *core) ruleDetail(rule *models.Rule) (*ruleDetailJSON, error) {
+// ruleDetail converts a rule with its versions for the API; show converts
+// the recorded operators (see operatorShown).
+func (c *core) ruleDetail(rule *models.Rule, show func(string) string) (*ruleDetailJSON, error) {
 	agents, _ := models.ListAgents(c.db)
 	out := &ruleDetailJSON{ruleSummaryJSON: c.ruleSummary(rule, agents), Versions: []ruleVersionMetaJSON{}}
 	versions, err := models.ListRuleVersions(c.db, rule.ID)
@@ -112,7 +114,7 @@ func (c *core) ruleDetail(rule *models.Rule) (*ruleDetailJSON, error) {
 		return nil, err
 	}
 	for _, v := range versions {
-		out.Versions = append(out.Versions, ruleVersionMetaJSON{Version: v.Version, CreatedAt: ts(v.CreatedAt), CreatedBy: v.CreatedBy, Comment: v.Comment})
+		out.Versions = append(out.Versions, ruleVersionMetaJSON{Version: v.Version, CreatedAt: ts(v.CreatedAt), CreatedBy: show(v.CreatedBy), Comment: v.Comment})
 		if v.Version == rule.LatestVersion {
 			content, err := modules.ParseRuleContent([]byte(v.Content))
 			if err != nil {
@@ -138,7 +140,7 @@ func (c *core) handleGetRule(w http.ResponseWriter, r *http.Request) {
 	if rule == nil {
 		return
 	}
-	out, err := c.ruleDetail(rule)
+	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -166,7 +168,7 @@ func (c *core) handleGetRuleVersion(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ruleVersionJSON{RuleID: rule.ID, Version: v.Version, Content: content, CreatedAt: ts(v.CreatedAt), CreatedBy: v.CreatedBy, Comment: v.Comment})
+	writeJSON(w, http.StatusOK, ruleVersionJSON{RuleID: rule.ID, Version: v.Version, Content: content, CreatedAt: ts(v.CreatedAt), CreatedBy: c.operatorShown(r)(v.CreatedBy), Comment: v.Comment})
 }
 
 func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +325,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	rule := &models.Rule{Name: in.Name, Description: strings.TrimSpace(in.Description), CreatedBy: p.Name}
+	rule := &models.Rule{Name: in.Name, Description: strings.TrimSpace(in.Description), CreatedBy: p.operator()}
 	if err := models.InsertRule(tx, rule); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, "a rule with this name already exists")
@@ -332,7 +334,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: 1, Content: content.JSON(), Comment: comment, CreatedBy: p.Name}); err != nil {
+	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: 1, Content: content.JSON(), Comment: comment, CreatedBy: p.operator()}); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -341,7 +343,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(p, models.HistRule, "created", rule.Name, comment)
-	out, err := c.ruleDetail(rule)
+	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -389,7 +391,7 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := cur.LatestVersion + 1
-	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: next, Content: content.JSON(), Comment: strings.TrimSpace(in.Comment), CreatedBy: p.Name}); err != nil {
+	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: next, Content: content.JSON(), Comment: strings.TrimSpace(in.Comment), CreatedBy: p.operator()}); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -403,7 +405,7 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 	}
 	c.history(p, models.HistRule, "saved", rule.Name, "version "+itoa(next)+": "+in.Comment)
 	rule, _ = models.GetRule(c.db, rule.ID)
-	out, err := c.ruleDetail(rule)
+	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -582,7 +584,7 @@ func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc
 		return
 	}
 	p := principalFrom(r)
-	t := &models.Template{Name: name, Description: strings.TrimSpace(desc), Content: content.JSON(), CreatedBy: p.Name}
+	t := &models.Template{Name: name, Description: strings.TrimSpace(desc), Content: content.JSON(), CreatedBy: p.operator()}
 	if err := models.InsertTemplate(c.db, t); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, "a template with this name already exists")

@@ -150,7 +150,7 @@ func TestLoginFailureCountedAtomically(t *testing.T) {
 
 func TestLastAdminProtectedInTransaction(t *testing.T) {
 	e := newTestEnv(t)
-	e.admin("POST", "/accounts", map[string]any{"name": "adm2", "role": "admin", "password": "Admin-pass-456"})
+	e.admin("POST", "/accounts", map[string]any{"email": "adm2@example.com", "display_name": "Admin 2", "role": "admin", "password": "Admin-pass-456"})
 	e.admin("POST", "/accounts/1/disable", nil)
 	cli := map[string]string{"Authorization": "Bearer " + e.cliKey}
 	for _, rq := range []struct {
