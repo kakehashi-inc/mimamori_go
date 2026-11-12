@@ -8,7 +8,7 @@ export function Loading({ label }: { label?: string }) {
     return (
         <div className='flex items-center justify-center gap-2 py-10 text-sm text-muted' role='status'>
             <span className='material-icons-outlined animate-spin text-xl' aria-hidden='true'>
-                progress_activity
+                autorenew
             </span>
             {label ?? t('common.loading')}
         </div>

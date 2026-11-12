@@ -8,20 +8,23 @@ import { commandRunsPath, LatestRunCell } from '../../components/CommandResultVi
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { checkboxClass, inputClass, inputSmClass } from '../../components/FormControls';
 import { Modal } from '../../components/Modal';
-import { Card } from '../../components/PageHeader';
+import { Card, DescriptionItem } from '../../components/PageHeader';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../../components/Table';
 import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
-import type { AgentDetail, CommandRunItem, CommandSet } from '../../types';
+import type { AgentDetail, CommandRun, CommandRunDetail, CommandRunItem, CommandSet } from '../../types';
 import { errorMessage, formatDateTime } from '../../utils/format';
 import { deleteCommandSet, discardCommandRequest, importCommandSets, listCommandSets, requestCommandRun } from '../api';
 import { hostZoneText, scheduleSummary } from '../components/commandSetDraft';
 import { StepUpCancelled, useStepUp } from '../components/StepUp';
 
 // Parts of the command set definitions: the section on the agent page
-// (slot agentDetail.sections) and the command line and note of each command
-// in the run detail (slot commandRun.itemStart).
+// (slot agentDetail.sections), how a run was started in the run history
+// (slots commandRuns.headMiddle and commandRuns.rowMiddle) and in the run
+// detail (slot commandRun.summaryMiddle), the number of commands run (slot
+// commandRun.summaryEnd) and the command line and note of each command in the
+// run detail (slot commandRun.itemStart).
 
 /** Command sets of an agent with create, edit, delete, import, run now and discard request. */
 export function CommandSetsSection({ agent, reload: reloadPage }: { agent: AgentDetail; reload: () => void }) {
@@ -419,6 +422,55 @@ function ImportDialog({
                 {error && <Alert tone='danger'>{error}</Alert>}
             </div>
         </Modal>
+    );
+}
+
+/** Manual or schedule, with the scheduled time of a scheduled run. */
+function RunTrigger({ run }: { run: CommandRun }) {
+    const { t } = useTranslation();
+    if (!run.trigger) return <span className='text-muted'>-</span>;
+    return (
+        <span className='flex flex-col gap-0.5'>
+            <span>{t(`commandSets.run.triggers.${run.trigger}`)}</span>
+            {run.scheduled_for && (
+                <span className='text-xs whitespace-nowrap text-muted'>
+                    {t('commandSets.run.scheduledFor', { at: formatDateTime(run.scheduled_for) })}
+                </span>
+            )}
+        </span>
+    );
+}
+
+/** Heading of the run history column that says how each run was started. */
+export function RunTriggerHead() {
+    const { t } = useTranslation();
+    return <Th>{t('commandSets.run.trigger')}</Th>;
+}
+
+/** Cell of the run history that says how the run was started. */
+export function RunTriggerCell({ run }: { run: CommandRun }) {
+    return (
+        <Td>
+            <RunTrigger run={run} />
+        </Td>
+    );
+}
+
+/** Item of the run detail summary that says how the run was started. */
+export function RunTriggerItem({ run }: { run: CommandRunDetail }) {
+    const { t } = useTranslation();
+    return <DescriptionItem label={t('commandSets.run.trigger')} value={<RunTrigger run={run} />} />;
+}
+
+/** Item of the run detail summary with the number of commands run of all commands of the set. */
+export function RunCommandsItem({ run }: { run: CommandRunDetail }) {
+    const { t } = useTranslation();
+    if (run.commands_total === undefined) return null;
+    return (
+        <DescriptionItem
+            label={t('commandSets.run.commandsRun')}
+            value={t('commandSets.run.commandsCount', { done: (run.commands ?? []).length, total: run.commands_total })}
+        />
     );
 }
 

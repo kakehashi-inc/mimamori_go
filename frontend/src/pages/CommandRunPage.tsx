@@ -60,6 +60,9 @@ function RunBody({ run }: { run: CommandRunDetail }) {
     const reasonText = useReasonText();
     const commands = run.commands ?? [];
     const finished = run.state !== 'running';
+    // When the agent was stopped or ended during the run, the set itself did not stop.
+    const interrupted =
+        run.reason === 'interrupted' || (commands.length > 0 && commands[commands.length - 1].reason === 'interrupted');
 
     return (
         <div className='flex flex-col gap-4'>
@@ -69,32 +72,12 @@ function RunBody({ run }: { run: CommandRunDetail }) {
                         items={[
                             { label: t('commandRun.agent'), value: run.agent_name },
                             { label: t('commandRun.set'), value: run.set_name },
-                            {
-                                label: t('commandRuns.trigger'),
-                                value: (
-                                    <span className='flex flex-wrap gap-2'>
-                                        {t(`commandRuns.triggers.${run.trigger}`)}
-                                        {run.scheduled_for && (
-                                            <span className='text-muted'>
-                                                {t('commandRuns.scheduledFor', {
-                                                    at: formatDateTime(run.scheduled_for),
-                                                })}
-                                            </span>
-                                        )}
-                                    </span>
-                                ),
-                            },
+                            { node: <Slot name='commandRun.summaryMiddle' run={run} /> },
                             { label: t('commandRuns.started'), value: formatDateTime(run.started_at) },
                             { label: t('commandRuns.finished'), value: formatDateTime(run.finished_at) },
                             { label: t('commandRuns.result'), value: <CommandStateBadge state={run.state} /> },
                             ...(run.reason ? [{ label: t('commandRun.reason'), value: reasonText(run.reason) }] : []),
-                            {
-                                label: t('commandRun.commandsRun'),
-                                value: t('commandRun.commandsCount', {
-                                    done: commands.length,
-                                    total: run.commands_total,
-                                }),
-                            },
+                            { node: <Slot name='commandRun.summaryEnd' run={run} /> },
                             { label: t('commandRun.receivedAt'), value: formatDateTime(run.received_at) },
                         ]}
                     />
@@ -108,7 +91,11 @@ function RunBody({ run }: { run: CommandRunDetail }) {
 
             {!finished && <Alert tone='info'>{t('commandRun.stillRunning')}</Alert>}
             {finished && run.not_executed > 0 && (
-                <Alert tone='warning'>{t('commandRun.notExecuted', { count: run.not_executed })}</Alert>
+                <Alert tone='warning'>
+                    {t(interrupted ? 'commandRun.notExecutedCount' : 'commandRun.notExecuted', {
+                        count: run.not_executed,
+                    })}
+                </Alert>
             )}
 
             <section className='flex flex-col gap-3'>

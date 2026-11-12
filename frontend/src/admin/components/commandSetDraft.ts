@@ -312,6 +312,13 @@ function codeRanges(pick: (code: number) => boolean): string {
     return parts.join(', ');
 }
 
+/** Whether a code spec is complete and accepted by the server (whole numbers 0 to 255, a range from low to high). */
+export function codeDraftValid(c: CodeDraft): boolean {
+    const inRange = (s: string) => isWhole(s) && num(s) <= 255;
+    if (!inRange(c.a)) return false;
+    return c.kind !== 'range' || (inRange(c.b) && num(c.b) > num(c.a));
+}
+
 /** Exit codes that would be errors (in neither spec) and codes in both specs. */
 export function codeCoverage(success: CodeDraft, failure: CodeDraft): { errors: string; overlap: string } {
     return {

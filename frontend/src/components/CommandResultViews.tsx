@@ -15,7 +15,7 @@ const stateTone: Record<CommandRunState, BadgeTone> = {
 };
 
 const stateIcon: Record<CommandRunState, string> = {
-    running: 'progress_activity',
+    running: 'autorenew',
     success: 'check_circle',
     failure: 'cancel',
     error: 'error',

@@ -486,10 +486,6 @@ export interface CommandRun {
     id: number;
     set_id: number;
     set_name: string;
-    trigger: 'manual' | 'schedule';
-    scheduled_for: string | null;
-    request_id: number;
-    commands_total: number;
     started_at: string | null;
     finished_at: string | null;
     state: CommandRunState;
@@ -497,6 +493,10 @@ export interface CommandRun {
     display: DisplayValue | null;
     received_at: string | null;
     // Present for administrators only.
+    trigger?: 'manual' | 'schedule';
+    scheduled_for?: string | null;
+    request_id?: number;
+    commands_total?: number;
     set_revision?: number;
     purpose?: string;
     os_user?: string;

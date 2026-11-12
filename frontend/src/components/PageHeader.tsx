@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 
 /** Page title with an optional description, breadcrumb and action buttons. */
 export function PageHeader({
@@ -49,16 +49,30 @@ export function Card({
     );
 }
 
+/** One label/value pair of a DescriptionList. */
+export function DescriptionItem({ label, value }: { label: ReactNode; value: ReactNode }) {
+    return (
+        <div className='contents'>
+            <dt className='text-muted'>{label}</dt>
+            <dd className='min-w-0 break-words text-ink'>{value}</dd>
+        </div>
+    );
+}
+
+/** An entry of a DescriptionList: a label/value pair, or nodes that render DescriptionItem (such as a slot). */
+export type DescriptionEntry = { label: ReactNode; value: ReactNode } | { node: ReactNode };
+
 /** A two-column list of label/value pairs. */
-export function DescriptionList({ items }: { items: { label: ReactNode; value: ReactNode }[] }) {
+export function DescriptionList({ items }: { items: DescriptionEntry[] }) {
     return (
         <dl className='grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]'>
-            {items.map((item, i) => (
-                <div key={i} className='contents'>
-                    <dt className='text-muted'>{item.label}</dt>
-                    <dd className='min-w-0 break-words text-ink'>{item.value}</dd>
-                </div>
-            ))}
+            {items.map((item, i) =>
+                'node' in item ? (
+                    <Fragment key={i}>{item.node}</Fragment>
+                ) : (
+                    <DescriptionItem key={i} label={item.label} value={item.value} />
+                )
+            )}
         </dl>
     );
 }

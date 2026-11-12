@@ -539,12 +539,6 @@
         "deletedNote": "このコマンドセットは削除されています。実行の記録は保存期間が過ぎるまで残ります。",
         "started": "開始日時",
         "finished": "終了日時",
-        "trigger": "きっかけ",
-        "triggers": {
-            "manual": "手動",
-            "schedule": "定期"
-        },
-        "scheduledFor": "予定 {{at}}",
         "result": "結果",
         "value": "値",
         "detail": "詳細",
@@ -557,8 +551,6 @@
         "summary": "概要",
         "agent": "エージェント",
         "set": "コマンドセット",
-        "commandsRun": "実行したコマンド",
-        "commandsCount": "{{total}} 個中 {{done}} 個",
         "reason": "理由",
         "receivedAt": "受信日時",
         "display": "値",
@@ -570,6 +562,7 @@
         "noOutput": "出力はありません。",
         "outputTruncated": "出力は全体で {{size}} でした。最初の 1 MiB だけを保存しています。",
         "notExecuted": "セットが止まったため実行しなかったコマンド: {{count}} 個",
+        "notExecutedCount": "実行しなかったコマンド: {{count}} 個",
         "stillRunning": "この実行はまだ終わっていません。再読み込みすると、その後に終わったコマンドが表示されます。",
         "noCommands": "終わったコマンドはまだありません。"
     }

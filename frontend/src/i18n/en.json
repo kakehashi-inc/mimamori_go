@@ -539,12 +539,6 @@
         "deletedNote": "This command set has been deleted. Its runs are kept until the retention period ends.",
         "started": "Started",
         "finished": "Finished",
-        "trigger": "Trigger",
-        "triggers": {
-            "manual": "Manual",
-            "schedule": "Schedule"
-        },
-        "scheduledFor": "Scheduled for {{at}}",
         "result": "Result",
         "value": "Value",
         "detail": "Details",
@@ -557,8 +551,6 @@
         "summary": "Summary",
         "agent": "Agent",
         "set": "Command set",
-        "commandsRun": "Commands run",
-        "commandsCount": "{{done}} of {{total}}",
         "reason": "Reason",
         "receivedAt": "Received",
         "display": "Values",
@@ -570,6 +562,7 @@
         "noOutput": "No output.",
         "outputTruncated": "The output was {{size}}; only the first 1 MiB is kept.",
         "notExecuted": "Commands not executed because the set stopped: {{count}}",
+        "notExecutedCount": "Commands not executed: {{count}}",
         "stillRunning": "This run has not finished yet. Reload to see the commands that ended since.",
         "noCommands": "No command has ended yet."
     }

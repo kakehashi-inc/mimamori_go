@@ -13,7 +13,15 @@ import { CommandSetEditPage } from './pages/CommandSetEditPage';
 import { ConfigPage } from './pages/ConfigPage';
 import { RuleEditPage } from './pages/RuleEditPage';
 import { RuleNewPage } from './pages/RuleNewPage';
-import { CommandHistoryOption, CommandItemDefinition, CommandSetsSection } from './parts/CommandSetParts';
+import {
+    CommandHistoryOption,
+    CommandItemDefinition,
+    CommandSetsSection,
+    RunCommandsItem,
+    RunTriggerCell,
+    RunTriggerHead,
+    RunTriggerItem,
+} from './parts/CommandSetParts';
 import { AckAction, EmptyHead, SelectAllHead, SelectRow, ToSuppressionAction } from './parts/DetectionParts';
 import { AccountHistoryOption, ConfigHistoryOption, NoCentralHostsNotice } from './parts/MiscParts';
 import { CreateRuleAction, RuleActions } from './parts/RuleParts';
@@ -57,6 +65,10 @@ registerExtension({
         'history.categoryOptionsEnd': [ConfigHistoryOption, CommandHistoryOption],
         'guide.notices': [NoCentralHostsNotice],
         'agentDetail.sections': [CommandSetsSection],
+        'commandRuns.headMiddle': [RunTriggerHead],
+        'commandRuns.rowMiddle': [RunTriggerCell],
+        'commandRun.summaryMiddle': [RunTriggerItem],
+        'commandRun.summaryEnd': [RunCommandsItem],
         'commandRun.itemStart': [CommandItemDefinition],
     },
 });

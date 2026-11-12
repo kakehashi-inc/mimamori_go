@@ -12,6 +12,7 @@ import {
     useReasonText,
 } from '../components/CommandResultViews';
 import { PageHeader } from '../components/PageHeader';
+import { Slot } from '../components/Slot';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
@@ -74,7 +75,7 @@ function CommandRuns({ id, set }: { id: string; set: string }) {
                             <THead>
                                 <Th>{t('commandRuns.started')}</Th>
                                 <Th>{t('commandRuns.finished')}</Th>
-                                <Th>{t('commandRuns.trigger')}</Th>
+                                <Slot name='commandRuns.headMiddle' />
                                 <Th>{t('commandRuns.result')}</Th>
                                 {showValues && <Th className='w-full'>{t('commandRuns.value')}</Th>}
                                 <Th>
@@ -86,18 +87,7 @@ function CommandRuns({ id, set }: { id: string; set: string }) {
                                     <Tr key={run.id}>
                                         <Td className='whitespace-nowrap'>{formatDateTime(run.started_at)}</Td>
                                         <Td className='whitespace-nowrap'>{formatDateTime(run.finished_at)}</Td>
-                                        <Td>
-                                            <div className='flex flex-col gap-0.5'>
-                                                <span>{t(`commandRuns.triggers.${run.trigger}`)}</span>
-                                                {run.scheduled_for && (
-                                                    <span className='text-xs whitespace-nowrap text-muted'>
-                                                        {t('commandRuns.scheduledFor', {
-                                                            at: formatDateTime(run.scheduled_for),
-                                                        })}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </Td>
+                                        <Slot name='commandRuns.rowMiddle' run={run} />
                                         <Td>
                                             <div className='flex flex-col gap-1'>
                                                 <CommandStateBadge state={run.state} />

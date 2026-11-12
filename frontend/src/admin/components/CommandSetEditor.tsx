@@ -8,6 +8,7 @@ import type { CodeSpecKind, CommandPurpose, Joiner, OnProblems, ScheduleKind } f
 import {
     CODE_KINDS,
     codeCoverage,
+    codeDraftValid,
     draftSchedule,
     EVERY_HOURS,
     EVERY_MINUTES,
@@ -415,7 +416,11 @@ function CommandEditor({
     const id = useId();
     const set = <K extends keyof CommandDraft>(key: K, value: CommandDraft[K]) =>
         onChange({ ...command, [key]: value });
-    const coverage = codeCoverage(command.success, command.failure);
+    // Shown only while both specs are complete: an empty or invalid field would give a wrong list.
+    const coverage =
+        codeDraftValid(command.success) && codeDraftValid(command.failure)
+            ? codeCoverage(command.success, command.failure)
+            : null;
     const n = index + 1;
 
     return (
@@ -486,15 +491,16 @@ function CommandEditor({
                         onChange={v => set('failure', v)}
                     />
                 </div>
-                {coverage.overlap ? (
-                    <Alert tone='danger'>{t('commandSets.editor.codesOverlap', { codes: coverage.overlap })}</Alert>
-                ) : (
-                    <p className='text-xs text-muted'>
-                        {coverage.errors
-                            ? t('commandSets.editor.errorCodes', { codes: coverage.errors })
-                            : t('commandSets.editor.noErrorCodes')}
-                    </p>
-                )}
+                {coverage &&
+                    (coverage.overlap ? (
+                        <Alert tone='danger'>{t('commandSets.editor.codesOverlap', { codes: coverage.overlap })}</Alert>
+                    ) : (
+                        <p className='text-xs text-muted'>
+                            {coverage.errors
+                                ? t('commandSets.editor.errorCodes', { codes: coverage.errors })
+                                : t('commandSets.editor.noErrorCodes')}
+                        </p>
+                    ))}
                 <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
                     <Field
                         label={t('commandSets.fields.onProblems')}

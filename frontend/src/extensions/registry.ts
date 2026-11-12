@@ -2,6 +2,8 @@ import { useSyncExternalStore, type ComponentType, type ReactNode } from 'react'
 import i18n from '../i18n/i18n';
 import type {
     AgentDetail,
+    CommandRun,
+    CommandRunDetail,
     CommandRunItem,
     Detection,
     Guide,
@@ -63,6 +65,11 @@ export interface SlotProps {
     'history.categoryOptionsEnd': NoProps;
     'guide.notices': { guide: Guide };
     'agentDetail.sections': { agent: AgentDetail; reload: () => void };
+    'commandRuns.headMiddle': NoProps;
+    'commandRuns.rowMiddle': { run: CommandRun };
+    // Parts of these two slots render DescriptionItem (components/PageHeader).
+    'commandRun.summaryMiddle': { run: CommandRunDetail };
+    'commandRun.summaryEnd': { run: CommandRunDetail };
     'commandRun.itemStart': { item: CommandRunItem };
 }
 

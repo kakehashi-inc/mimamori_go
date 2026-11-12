@@ -533,6 +533,16 @@
             "addPattern": "Add a pattern",
             "patternUp": "Move pattern {{n}} up",
             "patternDown": "Move pattern {{n}} down"
+        },
+        "run": {
+            "trigger": "Trigger",
+            "triggers": {
+                "manual": "Manual",
+                "schedule": "Schedule"
+            },
+            "scheduledFor": "Scheduled for {{at}}",
+            "commandsRun": "Commands run",
+            "commandsCount": "{{done}} of {{total}}"
         }
     }
 }

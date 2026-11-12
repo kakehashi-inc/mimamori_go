@@ -54,7 +54,7 @@ export function Button({
                     className={`material-icons-outlined animate-spin ${size === 'sm' ? 'text-sm' : 'text-base'}`}
                     aria-hidden='true'
                 >
-                    progress_activity
+                    autorenew
                 </span>
             ) : (
                 icon && (

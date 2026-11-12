@@ -1,9 +1,13 @@
 import type { ReactNode, TdHTMLAttributes, ThHTMLAttributes } from 'react';
 
-/** A table inside a bordered card that scrolls horizontally on small screens. */
+/**
+ * A table inside a bordered card that scrolls horizontally on small screens.
+ * The frame is positioned so that visually hidden headings (sr-only, absolute)
+ * stay inside it instead of widening the page.
+ */
 export function Table({ children, className = '' }: { children: ReactNode; className?: string }) {
     return (
-        <div className={`overflow-x-auto rounded-lg border border-line bg-surface ${className}`}>
+        <div className={`relative overflow-x-auto rounded-lg border border-line bg-surface ${className}`}>
             <table className='min-w-full divide-y divide-line text-sm'>{children}</table>
         </div>
     );

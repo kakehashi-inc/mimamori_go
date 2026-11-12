@@ -533,6 +533,16 @@
             "addPattern": "正規表現を追加",
             "patternUp": "正規表現 {{n}} を上へ移動",
             "patternDown": "正規表現 {{n}} を下へ移動"
+        },
+        "run": {
+            "trigger": "きっかけ",
+            "triggers": {
+                "manual": "手動",
+                "schedule": "定期"
+            },
+            "scheduledFor": "予定 {{at}}",
+            "commandsRun": "実行したコマンド",
+            "commandsCount": "{{total}} 個中 {{done}} 個"
         }
     }
 }

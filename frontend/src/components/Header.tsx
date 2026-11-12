@@ -75,7 +75,7 @@ export function Header() {
             <div className='mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5'>
                 <Link
                     to='/'
-                    className='flex items-center gap-2 rounded text-base font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+                    className='flex shrink-0 items-center gap-2 rounded text-base font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
                 >
                     <span className='material-icons-outlined text-xl text-accent' aria-hidden='true'>
                         visibility
@@ -83,7 +83,7 @@ export function Header() {
                     {t('app.title')}
                     {health && <span className='text-xs font-normal text-muted'>{formatVersion(health.version)}</span>}
                 </Link>
-                <div className='flex items-center gap-1 sm:gap-2'>
+                <div className='flex min-w-0 items-center gap-1 sm:gap-2'>
                     {me && <AccountMenu displayName={me.display_name} role={me.role} />}
                     <LanguageSwitch />
                     <button
@@ -139,23 +139,25 @@ function AccountMenu({ displayName, role }: { displayName: string; role: Role })
     useClickOutside(ref, open, close);
 
     return (
-        <div className='relative' ref={ref}>
+        <div className='relative min-w-0' ref={ref}>
             <button
                 type='button'
                 aria-haspopup='menu'
                 aria-expanded={open}
                 title={t('nav.accountMenu')}
                 onClick={() => setOpen(v => !v)}
-                className='flex items-center gap-2 rounded-md px-2 py-1 text-sm text-ink hover:bg-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+                className='flex max-w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm text-ink hover:bg-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
             >
-                <span className='material-icons-outlined text-lg text-muted' aria-hidden='true'>
+                <span className='material-icons-outlined shrink-0 text-lg text-muted' aria-hidden='true'>
                     account_circle
                 </span>
-                <span className='max-w-32 truncate'>{displayName}</span>
-                <span className='hidden sm:inline'>
+                <span className='max-w-32 min-w-0 truncate' title={displayName}>
+                    {displayName}
+                </span>
+                <span className='hidden shrink-0 sm:inline'>
                     <RoleBadge role={role} />
                 </span>
-                <span className='material-icons-outlined text-base text-muted' aria-hidden='true'>
+                <span className='material-icons-outlined shrink-0 text-base text-muted' aria-hidden='true'>
                     {open ? 'expand_less' : 'expand_more'}
                 </span>
             </button>
