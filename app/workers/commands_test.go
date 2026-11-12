@@ -506,7 +506,52 @@ func TestCommandImport(t *testing.T) {
 
 // forbiddenForViewer are the keys a viewer must never receive.
 var forbiddenForViewer = []string{"command_line", "note", "os_user", "work_dir", "schedule", "schedule_summary", "purpose", "description",
-	"patterns", "success", "failure", "on_problems", "timeout_sec", "line_limit", "joiner", "keep_runs", "set_revision"}
+	"patterns", "success", "failure", "on_problems", "timeout_sec", "line_limit", "joiner", "keep_runs", "set_revision",
+	"trigger", "scheduled_for", "request_id", "commands_total"}
+
+// viewerRunKeys are exactly the keys of a run a viewer receives.
+var viewerRunKeys = []string{"id", "set_id", "set_name", "started_at", "finished_at", "state", "reason", "display", "received_at"}
+
+// adminRunKeys are the keys of a run only administrators and the CLI receive.
+var adminRunKeys = []string{"trigger", "scheduled_for", "request_id", "commands_total", "set_revision", "purpose", "os_user", "work_dir"}
+
+// runObjects returns the runs of a results, run list or run detail response.
+func runObjects(t *testing.T, doc map[string]any) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, k := range []string{"results", "sets"} {
+		for _, x := range sliceOf(doc[k]) {
+			if lr, ok := x.(map[string]any)["last_run"].(map[string]any); ok {
+				out = append(out, lr)
+			}
+		}
+	}
+	for _, x := range sliceOf(doc["runs"]) {
+		out = append(out, x.(map[string]any))
+	}
+	if _, ok := doc["commands"]; ok {
+		out = append(out, doc)
+	}
+	if len(out) == 0 {
+		t.Fatalf("no run in %v", doc)
+	}
+	return out
+}
+
+func sliceOf(v any) []any {
+	s, _ := v.([]any)
+	return s
+}
+
+// sortedKeys returns the keys of an object in order.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
 
 // jsonKeys collects every object key of a JSON document.
 func jsonKeys(v any, into map[string]bool) {
@@ -566,10 +611,35 @@ func TestCommandResultsPermissions(t *testing.T) {
 		if strings.Contains(vrec.Body.String(), "secret") || strings.Contains(vrec.Body.String(), "svc") || strings.Contains(vrec.Body.String(), "/srv") {
 			t.Errorf("viewer %s receives definition values: %s", p, vrec.Body.String())
 		}
+		// The runs carry exactly the viewer's keys (the run detail also
+		// the detail keys).
+		detailKeys := []string{"agent_id", "agent_name", "not_executed", "commands"}
+		for _, run := range runObjects(t, doc.(map[string]any)) {
+			want := slices.Clone(viewerRunKeys)
+			if _, ok := run["commands"]; ok {
+				want = append(want, detailKeys...)
+			}
+			slices.Sort(want)
+			if got := sortedKeys(run); !slices.Equal(got, want) {
+				t.Errorf("viewer %s run keys: %v, want %v", p, got, want)
+			}
+		}
 		arec := e.do(e.web, "GET", "/api/v1"+p, nil, browserHdr(admin, false), "x:1")
 		crec := e.cli("GET", p, nil)
 		if arec.Code != 200 || crec.Code != 200 {
 			t.Fatalf("admin %s: %d %d", p, arec.Code, crec.Code)
+		}
+		for who, rec := range map[string]*httptest.ResponseRecorder{"admin": arec, "cli": crec} {
+			for _, run := range runObjects(t, decode[map[string]any](t, rec)) {
+				for _, k := range adminRunKeys {
+					if _, ok := run[k]; !ok {
+						t.Errorf("%s %s run lacks %q: %v", who, p, k, run)
+					}
+				}
+				if run["trigger"] != "schedule" || run["scheduled_for"] == nil || run["commands_total"] != float64(2) {
+					t.Errorf("%s %s run: %v", who, p, run)
+				}
+			}
 		}
 	}
 	// What the viewer does receive (the display value, not the values of
@@ -691,6 +761,10 @@ func TestCommandSetEndToEnd(t *testing.T) {
 	}
 	run := runs[0].(map[string]any)
 	if run["state"] != "success" || run["trigger"] != "manual" || run["finished_at"] == nil {
+		t.Fatalf("run: %v", run)
+	}
+	// Administrators receive scheduled_for as null for a manual run.
+	if due, ok := run["scheduled_for"]; !ok || due != nil || run["request_id"].(float64) <= 0 || run["commands_total"] != float64(1) {
 		t.Fatalf("run: %v", run)
 	}
 	rows := run["display"].(map[string]any)["rows"].([]any)

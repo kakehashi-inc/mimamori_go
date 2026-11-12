@@ -44,15 +44,17 @@ func commandRequestOut(q *models.CommandRequest) *commandRequestJSON {
 }
 
 // commandRunJSON is a run. The fields with omitempty are given to
-// administrators and the CLI only.
+// administrators and the CLI only: a viewer does not receive the keys at
+// all. ScheduledFor is a pointer to a pointer so that administrators still
+// receive the key with null when a run was not started by the schedule.
 type commandRunJSON struct {
 	ID            int64                 `json:"id"`
 	SetID         int64                 `json:"set_id"`
 	SetName       string                `json:"set_name"`
-	Trigger       string                `json:"trigger"`
-	ScheduledFor  *string               `json:"scheduled_for"`
-	RequestID     int64                 `json:"request_id"`
-	CommandsTotal int                   `json:"commands_total"`
+	Trigger       *string               `json:"trigger,omitempty"`
+	ScheduledFor  **string              `json:"scheduled_for,omitempty"`
+	RequestID     *int64                `json:"request_id,omitempty"`
+	CommandsTotal *int                  `json:"commands_total,omitempty"`
 	StartedAt     *string               `json:"started_at"`
 	FinishedAt    *string               `json:"finished_at"`
 	State         string                `json:"state"`
@@ -66,8 +68,7 @@ type commandRunJSON struct {
 }
 
 func commandRunOut(run *models.CommandRun, full bool) *commandRunJSON {
-	out := &commandRunJSON{ID: run.ID, SetID: run.SetID, SetName: run.SetName, Trigger: run.Trigger, ScheduledFor: ts(run.ScheduledFor),
-		RequestID: run.RequestID, CommandsTotal: run.CommandsTotal, StartedAt: ts(run.StartedAt), FinishedAt: ts(run.FinishedAt),
+	out := &commandRunJSON{ID: run.ID, SetID: run.SetID, SetName: run.SetName, StartedAt: ts(run.StartedAt), FinishedAt: ts(run.FinishedAt),
 		State: run.State, Reason: run.Reason, ReceivedAt: ts(run.ReceivedAt)}
 	if run.DisplayRows != "" {
 		var dv modules.DisplayValue
@@ -84,6 +85,8 @@ func commandRunOut(run *models.CommandRun, full bool) *commandRunJSON {
 		out.Display = &modules.DisplayValue{Rows: []modules.DisplayRow{}}
 	}
 	if full {
+		trigger, due, request, total := run.Trigger, ts(run.ScheduledFor), run.RequestID, run.CommandsTotal
+		out.Trigger, out.ScheduledFor, out.RequestID, out.CommandsTotal = &trigger, &due, &request, &total
 		rev, purpose, user, dir := run.SetRevision, run.Purpose, run.OSUser, run.WorkDir
 		out.SetRevision, out.Purpose, out.OSUser, out.WorkDir = &rev, &purpose, &user, &dir
 	}

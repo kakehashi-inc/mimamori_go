@@ -221,7 +221,7 @@ interface HostInfo {
 - 破棄は `pending`（まだエージェントに渡していない）の指示だけで、それ以外は 409 です。
 - `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（`name` が空なら空の配列）。
 - 実行の一覧は新しい順で、`limit` は既定 50、最大 500、`before` はその ID より前の実行だけを返します（次のページは `next_before` を `before` に指定。最後のページでは `null`）。削除したセットの実行も、保存期間の間は見られます。
-- 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
+- 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）、実行の始まり方（`trigger`、`scheduled_for`、`request_id`）とコマンドの数（`commands_total`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
 - コマンドセットの作成、変更、削除、インポート、実行指示、破棄、指示の期限切れは、履歴の分類 `command` に記録します。
 
 ```ts
@@ -291,10 +291,10 @@ interface DisplayValue {
 interface CommandRun {
   id: number; set_id: number;
   set_name: string;                   // 実行したときの名前
-  trigger: 'manual' | 'schedule';
-  scheduled_for: string | null;       // 定期の予定時刻
-  request_id: number;                 // 手動の実行指示の ID（定期は 0）
-  commands_total: number;
+  trigger?: 'manual' | 'schedule';    // A のみ
+  scheduled_for?: string | null;      // A のみ。定期の予定時刻（手動は null）
+  request_id?: number;                // A のみ。手動の実行指示の ID（定期は 0）
+  commands_total?: number;            // A のみ。実行したときのセットのコマンドの数
   started_at: string; finished_at: string | null;   // 実行中は null
   state: 'running' | 'success' | 'failure' | 'error';   // 終わった実行は、実行したコマンドの最も悪い区分
   reason: string;                     // 実行全体の理由（"interrupted" など。通常は ""）
