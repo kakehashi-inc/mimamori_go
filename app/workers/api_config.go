@@ -78,6 +78,8 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(changed) > 0 {
+		// The history shows the values as saved (lists normalized).
+		saved, _, savedErr := modules.CentralConfigState(c.db)
 		sort.Strings(changed)
 		unset := map[string]bool{}
 		for _, n := range in.Unset {
@@ -91,8 +93,10 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				parts = append(parts, n+" = (default)")
 			case f.Secret():
 				parts = append(parts, n+" changed")
-			default:
+			case savedErr != nil:
 				parts = append(parts, n+" = "+in.Set[n])
+			default:
+				parts = append(parts, n+" = "+f.Value(saved))
 			}
 		}
 		c.history(principalFrom(r), models.HistConfig, "updated", strings.Join(changed, ", "), strings.Join(parts, "; "))

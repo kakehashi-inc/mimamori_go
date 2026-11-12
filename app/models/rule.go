@@ -40,11 +40,6 @@ func GetRule(db Execer, id int64) (*Rule, error) {
 	return scanRule(db.QueryRow(`SELECT `+ruleCols+` FROM rules WHERE id = ?`, id))
 }
 
-// GetRuleByName returns the rule by name.
-func GetRuleByName(db Execer, name string) (*Rule, error) {
-	return scanRule(db.QueryRow(`SELECT `+ruleCols+` FROM rules WHERE name = ?`, name))
-}
-
 // ListRules returns all rules ordered by name.
 func ListRules(db Execer) ([]*Rule, error) {
 	rows, err := db.Query(`SELECT ` + ruleCols + ` FROM rules ORDER BY name`)

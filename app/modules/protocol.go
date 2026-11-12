@@ -81,9 +81,3 @@ type ReportRequest struct {
 type CAResponse struct {
 	CAPEMs []string `json:"ca_pems"`
 }
-
-// Agent transport errors that the agent treats specially.
-var (
-	// ErrUnauthorized means the token or its binding was rejected.
-	ErrUnauthorized = &HTTPError{Status: 401, Body: `{"error":"unauthorized"}`}
-)

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"mimamori/app/models"
 )
@@ -134,12 +136,24 @@ func parseBool(name, v string) (bool, error) {
 var ConfigFields = []ConfigField{
 	cfgStringField("web_listen", "Listen address of the browser screens (IP:port)", func(c *CentralConfig) *string { return &c.WebListen }),
 	cfgStringField("agent_listen", "Listen address of the agent and management API (IP:port)", func(c *CentralConfig) *string { return &c.AgentListen }),
-	cfgListField("server_names", "Host names and IP addresses in the server certificate", func(c *CentralConfig) *[]string { return &c.ServerNames }),
+	{Name: "server_names", Kind: "list", Help: "Host names and IP addresses in the server certificate",
+		get: func(c *CentralConfig) string { return strings.Join(c.ServerNames, ",") },
+		set: func(c *CentralConfig, v string) error {
+			// Each name is kept in its canonical form (NormalizeCertName),
+			// as it appears in the certificate.
+			c.ServerNames = nil
+			for _, s := range strings.Split(v, ",") {
+				if s = NormalizeCertName(s); s != "" {
+					c.ServerNames = append(c.ServerNames, s)
+				}
+			}
+			return nil
+		}},
 	cfgIntField("workers", "Requests processed at the same time", func(c *CentralConfig) *int { return &c.Workers }),
 	cfgIntField("queue_timeout_sec", "Longest wait of a queued request (seconds)", func(c *CentralConfig) *int { return &c.QueueTimeoutSec }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
-	cfgIntField("retention_days", "Retention of detections, reports and history (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
+	cfgIntField("retention_days", "Retention of detections and of the history of rejected connections (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
 	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
 	cfgIntField("session_hours", "Login session lifetime (hours)", func(c *CentralConfig) *int { return &c.SessionHours }),
 	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", func(c *CentralConfig) *int { return &c.SessionRememberDays }),
@@ -175,7 +189,7 @@ var ConfigFields = []ConfigField{
 	cfgStringField("smtp.from", "Sender address", func(c *CentralConfig) *string { return &c.SMTP.From }),
 	cfgListField("smtp.to", "Recipient addresses", func(c *CentralConfig) *[]string { return &c.SMTP.To }),
 	cfgIntField("smtp.timeout_sec", "SMTP timeout (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
-	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: the host name)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
+	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: localhost)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
 }
 
 // FindConfigField returns the field with the given name.
@@ -280,35 +294,124 @@ func (c *CentralConfig) applyDefaults() {
 	}
 }
 
+// configIntMax is the largest accepted value of each number item. The bounds
+// keep every time computed from the items far from overflowing.
+var configIntMax = map[string]int{
+	"workers":                    64,
+	"queue_timeout_sec":          3600,
+	"token_valid_days":           36500,
+	"token_renew_before_days":    36500,
+	"retention_days":             36500,
+	"default_check_interval_sec": MaxCheckInterval,
+	"session_hours":              8760,
+	"session_remember_days":      365,
+	"notify.min_interval_min":    43200,
+	"notify.dedupe_hours":        8760,
+	"notify.max_lines":           10000,
+	"smtp.port":                  65535,
+	"smtp.timeout_sec":           3600,
+}
+
+// emptyAllowed lists the items whose empty value is meaningful (no extra
+// certificate names, notifications off, no user name, and so on). The others
+// need a value: an empty one would only store their default.
+var emptyAllowed = map[string]bool{
+	"server_names": true, "smtp.host": true, "smtp.username": true, "smtp.password": true,
+	"smtp.from": true, "smtp.to": true, "smtp.helo_name": true,
+}
+
+// validHostName reports whether s is an ASCII DNS name: labels of letters,
+// digits and hyphens (1 to 63 characters each), at most 253 characters.
+func validHostName(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for _, r := range label {
+			ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-'
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validMailAddress reports whether s is exactly one mail address (without a
+// display name).
+func validMailAddress(s string) bool {
+	a, err := mail.ParseAddress(s)
+	return err == nil && a.Address == s
+}
+
 // Validate checks the configuration values.
 func (c *CentralConfig) Validate() error {
+	if errs := c.validationErrors(); len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// validationErrors returns one message per problem of the configuration.
+func (c *CentralConfig) validationErrors() []string {
 	var errs []string
 	for _, a := range []struct{ name, addr string }{{"web_listen", c.WebListen}, {"agent_listen", c.AgentListen}} {
-		host, _, err := net.SplitHostPort(a.addr)
+		host, port, err := net.SplitHostPort(a.addr)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", a.name, err))
-		} else if host != "" && net.ParseIP(host) == nil {
+			continue
+		}
+		if host != "" && net.ParseIP(host) == nil {
 			errs = append(errs, fmt.Sprintf("%s: the address must be an IP address", a.name))
+		}
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			errs = append(errs, fmt.Sprintf("%s: the port must be 1-65535", a.name))
 		}
 	}
 	if c.WebListen == c.AgentListen {
 		errs = append(errs, "web_listen and agent_listen must differ")
+	}
+	for _, n := range c.ServerNames {
+		if net.ParseIP(n) == nil && !validHostName(n) {
+			errs = append(errs, fmt.Sprintf("server_names: %q is not a host name or IP address", n))
+		}
 	}
 	switch c.SMTP.Security {
 	case "starttls", "tls", "none":
 	default:
 		errs = append(errs, "smtp.security must be starttls, tls or none")
 	}
-	if c.SessionRememberDays > 365 {
-		errs = append(errs, "session_remember_days must be 365 or less")
+	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validHostName(h) {
+		errs = append(errs, "smtp.host must be a host name or IP address")
 	}
-	if c.Workers > 64 {
-		errs = append(errs, "workers must be 64 or less")
+	if c.SMTP.From != "" && !validMailAddress(c.SMTP.From) {
+		errs = append(errs, "smtp.from must be one mail address")
 	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
+	for _, to := range c.SMTP.To {
+		if !validMailAddress(to) {
+			errs = append(errs, fmt.Sprintf("smtp.to: %q is not a mail address", to))
+		}
 	}
-	return nil
+	for i := range ConfigFields {
+		f := &ConfigFields[i]
+		switch f.Kind {
+		case "int":
+			if n, _ := strconv.Atoi(f.get(c)); n > configIntMax[f.Name] {
+				errs = append(errs, fmt.Sprintf("%s must be %d or less", f.Name, configIntMax[f.Name]))
+			}
+		case "string", "list", "secret":
+			if strings.IndexFunc(f.get(c), unicode.IsControl) >= 0 {
+				errs = append(errs, f.Name+" must not contain control characters")
+			}
+		}
+	}
+	if c.TokenRenewBeforeDays >= c.TokenValidDays {
+		errs = append(errs, "token_renew_before_days must be less than token_valid_days")
+	}
+	return errs
 }
 
 // storedCentralConfig reads the stored items (without defaults) and returns
@@ -365,7 +468,18 @@ func CentralConfigState(db models.Execer) (*CentralConfig, map[string]bool, erro
 // checking the resulting configuration as a whole. It returns the names of
 // the items whose stored value changed.
 func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string) ([]string, error) {
-	cur, stored, err := storedCentralConfig(db)
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A write statement first takes the database's write lock, so that no
+	// other change is saved between the read below and the write: the check
+	// is made against the values that are really stored.
+	if _, err := tx.Exec(`UPDATE settings SET value = value WHERE 0`); err != nil {
+		return nil, err
+	}
+	cur, stored, err := storedCentralConfig(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -391,6 +505,9 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 		if err != nil {
 			return nil, err
 		}
+		if strings.TrimSpace(v) == "" && !emptyAllowed[name] {
+			return nil, fmt.Errorf("a value is required for %s", name)
+		}
 		probe := &CentralConfig{}
 		if err := f.set(probe, v); err != nil {
 			return nil, err
@@ -404,15 +521,27 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 		}
 	}
 	next.applyDefaults()
-	if err := next.Validate(); err != nil {
-		return nil, err
+	if errs := next.validationErrors(); len(errs) > 0 {
+		// Problems the stored configuration already has (for example a value
+		// saved by an older version) do not block a change, so that it can
+		// be corrected one item at a time; a change must not add a problem.
+		before := *cur
+		before.applyDefaults()
+		known := map[string]bool{}
+		for _, e := range before.validationErrors() {
+			known[e] = true
+		}
+		var added []string
+		for _, e := range errs {
+			if !known[e] {
+				added = append(added, e)
+			}
+		}
+		if len(added) > 0 {
+			return nil, errors.New(strings.Join(added, "; "))
+		}
 	}
 	var changed []string
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
 	for _, f := range ConfigFields {
 		v, keep := values[f.Name]
 		switch {

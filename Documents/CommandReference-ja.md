@@ -6,7 +6,7 @@
 mimamori [--data-dir DIR] <command> [arguments] [flags]
 ```
 
-- `--data-dir DIR`: データディレクトリ。既定は実行ファイルと同じディレクトリの `data/`（実行ファイルの場所が分からない場合はカレントディレクトリの `data/`）。
+- `--data-dir DIR`: データディレクトリ。既定は実行ファイルと同じディレクトリの `data/`（実行ファイルの場所が分からない場合はカレントディレクトリの `data/`）。空の値は引数エラー（終了コード 2）です。
 - 各コマンドのヘルプは `mimamori <command> --help` で表示します。
 
 ## 導入の流れ
@@ -44,7 +44,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `central config set NAME [VALUE]` | 1 項目を設定する。一覧はカンマ区切り。`smtp.password` は端末または標準入力から読む |
 | `central config unset NAME` | 1 項目を既定値に戻す |
 
-設定は動作中のセントラルにすぐ反映されます。ただし `web_listen`、`agent_listen`、`workers`、`queue_timeout_sec`、`builtin_agent` はセントラルの再起動後に反映されます。
+`central config` での変更は、動作中のセントラルが次の定期的な確認（30 秒ごと）で反映します。設定画面での変更は保存した時点で反映されます。ただし `web_listen`、`agent_listen`、`workers`、`queue_timeout_sec`、`builtin_agent` はセントラルの再起動後に反映されます。
 
 ## agent
 
@@ -153,8 +153,8 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | 0 | 正常 |
 | 1 | 一般エラー |
-| 2 | 引数エラー |
-| 3 | 設定または DB のエラー。`status` では停止中 |
+| 2 | 引数エラー（不明なコマンドやフラグ、値の不足など、コマンドラインそのものの誤りを含む） |
+| 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent set-central` を含む）。`status` では停止中 |
 | 4 | 認証または権限のエラー |
 | 5 | 実行エラー（外部コマンドまたはセントラル） |
 | 6 | ファイル I/O エラー |

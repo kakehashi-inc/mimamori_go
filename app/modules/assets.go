@@ -7,7 +7,7 @@ import "io/fs"
 //   - MigrationsFS: root contains "app/migrations/<schema>/*.sql" (goose migrations).
 //   - FrontendFS:   root contains "frontend/dist/**" (the built SPA).
 //
-// They are package-level variables (mirroring the StartServer pattern) so that
+// They are package-level variables (like StartCentral) so that
 // modules/workers can reach the binary-embedded assets without an import cycle
 // back into package main.
 var (

@@ -74,11 +74,6 @@ func GetToken(db Execer, id int64) (*Token, error) {
 	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE id = ?`, id))
 }
 
-// GetTokenByName returns the token by name.
-func GetTokenByName(db Execer, name string) (*Token, error) {
-	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE name = ?`, name))
-}
-
 // FindTokenByHash returns the token whose current or pending value has hash.
 func FindTokenByHash(db Execer, hash string) (*Token, error) {
 	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ? OR (pending_hash <> '' AND pending_hash = ?)`, hash, hash))

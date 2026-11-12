@@ -4,9 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -105,10 +103,12 @@ func (c *core) manageCertificates() error {
 	needNew := forceServer || cur == nil || cur.IssuerFP != active.Fingerprint ||
 		time.Unix(cur.NotAfter, 0).Sub(now) < modules.ServerCertRenewBefore
 	if cur != nil && !needNew {
+		// Both sides are normalized, so names written differently (an IP
+		// address in another textual form, a host name in upper case) do not
+		// cause a new certificate at every check.
 		var names []string
 		_ = json.Unmarshal([]byte(cur.Names), &names)
-		sort.Strings(names)
-		if strings.Join(names, ",") != strings.Join(wantNames, ",") {
+		if strings.Join(modules.ServerCertNames(names), ",") != strings.Join(wantNames, ",") {
 			needNew = true
 		}
 	}
@@ -171,10 +171,7 @@ func (c *core) writeCABundle() error {
 		b.WriteString(p)
 	}
 	path := filepath.Join(c.dataDir, modules.CABundleFileName)
-	if err := modules.WriteFileAtomic(path, []byte(b.String()), 0o644); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o644)
+	return modules.WriteFileAtomic(path, []byte(b.String()), 0o644)
 }
 
 // tlsConfig serves the current server certificate (switched without restart).

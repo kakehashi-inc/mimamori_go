@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"syscall"
 
@@ -19,7 +20,7 @@ var version = "dev"
 // CLI defines the top-level command structure. Startup parameter parsing lives
 // here; the commands themselves are implemented in app/modules.
 type CLI struct {
-	DataDir string `help:"Data directory (default: data/ next to the executable)" name:"data-dir" type:"path" placeholder:"DIR"`
+	DataDir string `help:"Data directory (default: data/ next to the executable)" name:"data-dir" type:"datadir" placeholder:"DIR"`
 
 	Central modules.CentralCmd `cmd:"" help:"Central service and its local administration"`
 	Agent   modules.AgentCmd   `cmd:"" help:"Agent initialization and service"`
@@ -35,6 +36,21 @@ func (v *VersionCmd) Run() error {
 	return nil
 }
 
+// dataDirMapper reads the --data-dir value like kong's "path" type (made
+// absolute, "~/" expanded) but rejects an empty value, which would otherwise
+// become the current directory.
+func dataDirMapper(ctx *kong.DecodeContext, target reflect.Value) error {
+	var path string
+	if err := ctx.Scan.PopValueInto("DIR", &path); err != nil {
+		return err
+	}
+	if path == "" {
+		return errors.New("the data directory must not be empty")
+	}
+	target.SetString(kong.ExpandPath(path))
+	return nil
+}
+
 func main() {
 	// Files created by this program (databases, configuration, keys) must not
 	// be readable by other users.
@@ -46,16 +62,27 @@ func main() {
 	modules.AppVersion = version
 
 	var cli CLI
-	ctx := kong.Parse(&cli,
+	parser, err := kong.New(&cli,
 		kong.Name(modules.AppName),
 		kong.Description("mimamori: detects and reports operations performed by selected OS users on each host."),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
 		kong.Vars{"default_agent_port": strconv.Itoa(modules.DefaultAgentPort)},
+		kong.NamedMapper("datadir", kong.MapperFunc(dataDirMapper)),
 	)
+	if err != nil {
+		panic(err)
+	}
+	ctx, err := parser.Parse(os.Args[1:])
+	if err != nil {
+		// Errors in the command line (unknown commands or flags, missing or
+		// invalid values) are argument errors. --help exits inside Parse.
+		parser.Exit = func(int) { os.Exit(modules.ExitArgument) }
+		parser.FatalIfErrorf(err)
+	}
 	modules.SetDataDir(cli.DataDir)
 
-	err := ctx.Run(&cli.Ctl)
+	err = ctx.Run(&cli.Ctl)
 	if err != nil {
 		var exitErr *modules.ExitError
 		if errors.As(err, &exitErr) {

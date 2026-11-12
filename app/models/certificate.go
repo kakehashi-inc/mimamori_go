@@ -8,7 +8,7 @@ const (
 )
 
 // Certificate is a row of the certificates table: a private CA or a server
-// certificate with its private key (the database file is root-only).
+// certificate with its private key.
 type Certificate struct {
 	ID          int64
 	Kind        string

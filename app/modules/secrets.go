@@ -24,7 +24,8 @@ func GenerateSecret(prefix string) (string, error) {
 }
 
 // HashSecret returns the SHA-256 hash (hex) of a high-entropy secret value.
-// Tokens, CLI credentials and session ids are stored only as this hash.
+// Session ids are stored only as this hash; tokens are looked up by it (the
+// tokens table also keeps the value in effect, for the management CLI).
 func HashSecret(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return hex.EncodeToString(sum[:])
@@ -33,7 +34,8 @@ func HashSecret(v string) string {
 // DeriveRenewalToken derives the automatically renewed token value from the
 // central server key, the token id and the renewal counter. Deriving instead
 // of storing lets the central hand out the same new value again after an
-// agent failed to save it, while only the hash is kept in the database.
+// agent failed to save it, while only its hash is kept in the database until
+// the agent uses it (the value is stored then).
 func DeriveRenewalToken(serverKey []byte, tokenID int64, counter int) string {
 	m := hmac.New(sha256.New, serverKey)
 	fmt.Fprintf(m, "token-renewal:%d:%d", tokenID, counter)

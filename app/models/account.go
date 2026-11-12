@@ -21,7 +21,7 @@ func ValidLanguage(lang string) bool {
 	return lang == LangAuto || lang == LangEnglish || lang == LangJapanese
 }
 
-// Account is a row of the accounts table (a person using the browser or CLI).
+// Account is a row of the accounts table (a person using the browser screens).
 type Account struct {
 	ID           int64
 	Name         string

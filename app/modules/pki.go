@@ -106,13 +106,22 @@ func GenerateServerCert(ca *CertKeyPair, names []string, now time.Time) (*CertKe
 	return finishPair(der, key)
 }
 
+// NormalizeCertName returns the canonical form of a certificate name: the
+// textual form of an IP address, or a host name in lower case.
+func NormalizeCertName(n string) string {
+	n = strings.TrimSpace(n)
+	if ip := net.ParseIP(n); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(n)
+}
+
 // ServerCertNames returns the configured names plus the loopback names,
-// de-duplicated and sorted.
+// normalized (NormalizeCertName), de-duplicated and sorted.
 func ServerCertNames(names []string) []string {
 	set := map[string]bool{"127.0.0.1": true, "::1": true, "localhost": true}
 	for _, n := range names {
-		n = strings.TrimSpace(n)
-		if n != "" {
+		if n = NormalizeCertName(n); n != "" {
 			set[n] = true
 		}
 	}

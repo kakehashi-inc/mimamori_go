@@ -112,14 +112,13 @@ const (
 // --- Rules ---
 
 const (
-	MaxRuleElements   = 200
-	MaxExtensions     = 50
-	MinCheckInterval  = 10
-	MaxCheckInterval  = 3600
-	MinScanInterval   = 60
-	MaxScanInterval   = 7 * 24 * 3600
-	MaxTargetLength   = 512
-	MaxDetectionsSend = 5000
+	MaxRuleElements  = 200
+	MaxExtensions    = 50
+	MinCheckInterval = 10
+	MaxCheckInterval = 3600
+	MinScanInterval  = 60
+	MaxScanInterval  = 7 * 24 * 3600
+	MaxTargetLength  = 512
 	// AuditBacklogLimit is the backlog size the agent sets (-b).
 	AuditBacklogLimit = 8192
 	// MaxScanEntries bounds the number of entries one scan visits.

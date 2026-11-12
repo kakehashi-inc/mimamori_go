@@ -19,8 +19,7 @@ func isTerminal(fd uintptr) bool {
 }
 
 // stdin is the single buffered reader of standard input, shared by every
-// read so that values given one per line (for example a CLI credential
-// followed by a password or JSON) are not lost between reads.
+// read so that values given one per line are not lost between reads.
 var stdin = bufio.NewReader(os.Stdin)
 
 // ReadSecret reads a secret without putting it on the command line: from the

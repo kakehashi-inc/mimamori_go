@@ -6,7 +6,7 @@
 mimamori [--data-dir DIR] <command> [arguments] [flags]
 ```
 
-- `--data-dir DIR`: data directory. Default: `data/` next to the executable (`data/` in the current directory when the executable's directory cannot be determined).
+- `--data-dir DIR`: data directory. Default: `data/` next to the executable (`data/` in the current directory when the executable's directory cannot be determined). An empty value is an argument error (exit code 2).
 - `mimamori <command> --help` shows the help of each command.
 
 ## Getting started
@@ -44,7 +44,7 @@ Commands for the central. Run them on the central host.
 | `central config set NAME [VALUE]` | Set one item. Lists are comma separated. `smtp.password` is read from the terminal or standard input |
 | `central config unset NAME` | Remove one item so its default applies again |
 
-Configuration items take effect immediately on a running central, except `web_listen`, `agent_listen`, `workers`, `queue_timeout_sec` and `builtin_agent`, which take effect when the central restarts.
+A running central applies a change made with `central config` at its next periodic check (every 30 seconds); a change made on the configuration screen is applied at once. `web_listen`, `agent_listen`, `workers`, `queue_timeout_sec` and `builtin_agent` take effect when the central restarts.
 
 ## agent
 
@@ -153,8 +153,8 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | 0 | Success |
 | 1 | Unspecified error |
-| 2 | Invalid arguments or flags |
-| 3 | Configuration or database error; for `status`, not running |
+| 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value) |
+| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use) and `agent set-central` while the agent is running; for `status`, not running |
 | 4 | Authentication or authorization failure |
 | 5 | Execution error (external command or the central) |
 | 6 | File or directory I/O error |

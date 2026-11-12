@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite"
@@ -19,13 +20,20 @@ const (
 	SchemaAgentLocal = "agentlocal" // the agent's local database on each host
 )
 
-// OpenSQLite opens (creating when missing) the SQLite database at path,
-// restricts the file to its owner and applies the migrations of schema.
+// sqliteURIPath escapes the characters that have a meaning in an SQLite URI
+// filename ("%" starts an escape, "?" the query and "#" the fragment), so
+// that any path names exactly that file.
+var sqliteURIPath = strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23")
+
+// OpenSQLite opens (creating when missing) the SQLite database at path and
+// applies the migrations of schema. A new file gets its mode from the umask
+// (the -wal and -shm files take the mode of the database file); the mode of
+// an existing file is not changed.
 func OpenSQLite(path, schema string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
+	dsn := "file:" + sqliteURIPath.Replace(path) + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -36,11 +44,6 @@ func OpenSQLite(path, schema string) (*sql.DB, error) {
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, err
-	}
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if _, err := os.Stat(p); err == nil {
-			_ = os.Chmod(p, 0o600)
-		}
 	}
 	if err := migrate(db, schema); err != nil {
 		db.Close()

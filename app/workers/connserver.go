@@ -288,7 +288,6 @@ func (s *connServer) serveConn(conn net.Conn, sp *listenerSpec) {
 	}
 }
 
-// listenTCP opens a TCP listener.
 // listenTCP opens a listening socket for "IP:port". The socket is created
 // with system calls (instead of net.Listen) so that nothing is read from
 // /proc; the address must be an IP address.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
 // ProcessLock is an exclusive advisory lock on a file that prevents a second
@@ -13,18 +14,35 @@ type ProcessLock struct {
 	f *os.File
 }
 
-// AcquireLock takes the lock or fails immediately when another process holds it.
+// lockAttempts and lockRetryPause bound how long AcquireLock waits for a
+// lock that is busy: "status" and "stop" hold a shared lock on the file for
+// a moment while they check it, which must not make a start fail.
+const (
+	lockAttempts   = 5
+	lockRetryPause = 100 * time.Millisecond
+)
+
+// AcquireLock takes the lock or fails when another process still holds it
+// after a few short retries.
 func AcquireLock(path string) (*ProcessLock, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+	for attempt := 1; ; attempt++ {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			f.Close()
+			return nil, err
+		}
+		if attempt >= lockAttempts {
+			f.Close()
 			return nil, fmt.Errorf("another instance is already running (lock %s)", path)
 		}
-		return nil, err
+		time.Sleep(lockRetryPause)
 	}
 	_ = f.Truncate(0)
 	_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())

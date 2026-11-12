@@ -26,7 +26,7 @@ func effectNote(f *ConfigField) string {
 	if f.Restart {
 		return "The change takes effect when the central is restarted."
 	}
-	return "A running central applies the change within a minute."
+	return fmt.Sprintf("A running central applies the change at its next periodic check (every %s).", PeriodicTick)
 }
 
 // CentralConfigListCmd lists the configuration.
@@ -128,9 +128,13 @@ func (c *CentralConfigSetCmd) Run() error {
 		fmt.Printf("%s is unchanged.\n", f.Name)
 		return nil
 	}
-	detail := f.Name + " = " + value
-	if f.Secret() {
-		detail = f.Name + " changed"
+	detail := f.Name + " changed"
+	if !f.Secret() {
+		// The history shows the value as saved (lists normalized).
+		detail = f.Name + " = " + value
+		if saved, _, err := CentralConfigState(db); err == nil {
+			detail = f.Name + " = " + f.Value(saved)
+		}
 	}
 	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name, Detail: detail})
 	fmt.Printf("%s set. %s\n", f.Name, effectNote(f))

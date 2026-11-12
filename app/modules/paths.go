@@ -11,7 +11,8 @@ import (
 var dataDirOverride string
 
 // SetDataDir overrides the data directory for this process. An empty value
-// keeps the default (data/ next to the executable).
+// (the flag was not given) keeps the default (data/ next to the executable);
+// an empty flag value is rejected when the command line is parsed.
 func SetDataDir(dir string) {
 	dataDirOverride = dir
 }

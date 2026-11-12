@@ -2,8 +2,8 @@ package models
 
 import "database/sql"
 
-// Setting is one row of the settings table of the central database: internal
-// the configuration (keys "config.<name>") and internal state of the central
+// Setting is one row of the settings table of the central database: the
+// configuration (keys "config.<name>") and internal state of the central
 // such as the server key and the last notification time.
 type Setting struct {
 	Key   string
