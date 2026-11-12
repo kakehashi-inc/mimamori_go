@@ -660,7 +660,7 @@ interface DetectionReport {
 interface ReportRequest {
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
-  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目。日時（collected_at、trusted_cas[].not_after）は Unix 秒
+  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after）は Unix 秒
   apply?: ApplyResult;                 // 最後の適用の結果（まだ適用していなければ省略）
   dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
   command_runs?: CommandRunReport[];   // コマンドセットの実行（開始、コマンドごと、終了のたびに送る）
