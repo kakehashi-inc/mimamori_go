@@ -3,6 +3,7 @@ package workers
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"mimamori/app/models"
 )
@@ -85,10 +86,10 @@ func TestRuleContentMustBeObject(t *testing.T) {
 
 // Text is cut at most n bytes on a character boundary.
 func TestTruncateKeepsUTF8(t *testing.T) {
-	s := "a" + strings.Repeat("あ", 10)
+	s := "a" + strings.Repeat("\u3042", 10)
 	for n := 0; n <= len(s); n++ {
 		got := truncate(s, n)
-		if len(got) > n || !strings.HasPrefix(s, got) || strings.ContainsRune(got, '�') {
+		if len(got) > n || !strings.HasPrefix(s, got) || !utf8.ValidString(got) {
 			t.Errorf("truncate(%d) = %q", n, got)
 		}
 	}

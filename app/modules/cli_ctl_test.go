@@ -67,12 +67,12 @@ func TestCtlLocalizesOnlyTimeFields(t *testing.T) {
 
 // Shortened cells end on a character boundary; JSON output keeps & < >.
 func TestCtlOutputKeepsText(t *testing.T) {
-	s := "ab" + strings.Repeat("あ", 70)
+	s := "ab" + strings.Repeat("\u3042", 70)
 	got := cell("description", s, false)
 	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 60 || !strings.HasSuffix(got, "...") {
 		t.Errorf("shortened = %q", got)
 	}
-	short := strings.Repeat("あ", 60)
+	short := strings.Repeat("\u3042", 60)
 	if got := cell("description", short, false); got != short {
 		t.Errorf("60 characters were shortened: %q", got)
 	}
@@ -186,7 +186,7 @@ func TestParseRuleContentErrors(t *testing.T) {
 
 // Byte limits never cut inside a UTF-8 sequence.
 func TestTruncateKeepsUTF8(t *testing.T) {
-	s := "a" + strings.Repeat("あ", 10)
+	s := "a" + strings.Repeat("\u3042", 10)
 	for n := 0; n <= len(s); n++ {
 		got := truncate(s, n)
 		if !utf8.ValidString(got) || len(got) > n {
