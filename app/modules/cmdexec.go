@@ -408,7 +408,12 @@ func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()
 		Sys:   &syscall.SysProcAttr{Setsid: true},
 	})
 	if err != nil {
-		return err
+		// The error names the program's path; the messages do not.
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return fmt.Errorf("the helper could not be started: %v", err)
 	}
 	defer func() { _ = proc.Release() }()
 	deadline := time.Now().Add(signalHelperWait)

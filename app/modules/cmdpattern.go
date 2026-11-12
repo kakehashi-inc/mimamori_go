@@ -133,7 +133,7 @@ func generatedGroupPrefix(p string) string {
 // isPatternWordChar is the library's IsWordChar (letters, non-spacing
 // marks, decimal digits, connector punctuation, ZWJ, ZWNJ).
 func isPatternWordChar(r rune) bool {
-	return unicode.In(r, unicode.L, unicode.Mn, unicode.Nd, unicode.Pc) || r == '‍' || r == '‌'
+	return unicode.In(r, unicode.L, unicode.Mn, unicode.Nd, unicode.Pc) || r == '\u200d' || r == '\u200c'
 }
 
 func isOctalDigit(r rune) bool { return r >= '0' && r <= '7' }
@@ -182,6 +182,12 @@ func (s *patternScanner) rewrite() (string, error) {
 				n := 0
 				for s.at(n) != 0 && s.at(n) != '\n' {
 					n++
+				}
+				if s.at(n) == '\n' && s.oddBackslashes(n) {
+					// Python reads the backslash and the line break as one
+					// character and continues the comment on the next line.
+					s.fail(`a # comment that ends with a backslash is not supported`)
+					continue
 				}
 				s.copy(n)
 			} else {
@@ -317,6 +323,17 @@ func (s *patternScanner) addRef(text string, num, digits int, octal, angled bool
 	s.refs = append(s.refs, r)
 }
 
+// oddBackslashes reports whether the run of backslashes that ends right
+// before offset n has an odd length, so that its last backslash escapes the
+// character at n.
+func (s *patternScanner) oddBackslashes(n int) bool {
+	k := 0
+	for n-k-1 >= 0 && s.at(n-k-1) == '\\' {
+		k++
+	}
+	return k%2 == 1
+}
+
 // scanName returns the length of the run of word characters at offset i.
 func (s *patternScanner) scanName(i int) int {
 	n := 0
@@ -335,6 +352,12 @@ func (s *patternScanner) open() {
 		n := 3
 		for s.at(n) != 0 && s.at(n) != ')' {
 			n++
+		}
+		if s.at(n) == ')' && s.oddBackslashes(n) {
+			// Python reads "\)" as one character and continues the
+			// comment after it.
+			s.fail(`a comment (?#...) that ends with a backslash is not supported`)
+			return
 		}
 		s.copy(n + 1)
 		return

@@ -211,6 +211,7 @@ func TestCommandPatternNumbering(t *testing.T) {
 		{"class with a range and parentheses", `[!-)](?P<a>\w)(\w)\2`, `'abb (cdd *eff`, ev(`a`, `a`, `a`, `c`)},
 		{"comment with parentheses", `(?#(x)(?P<a>\w)(\w)\2`, `abb acd`, ev(`a`, `a`)},
 		{"comment between groups", `(?P<a>\w)(?#)(\w)\2`, `abb acd`, ev(`a`, `a`)},
+		{"comment that ends with an escaped backslash", `(?#a\\)(x)(?P<a>a)\1`, `xax xab`, ev(`a`, `a`)},
 		{"x option with a comment", "(?x) (?P<a>\\w)  # a ( comment (\n (\\w) \\2", `abb acd`, ev(`a`, `a`)},
 		{"x option: # in a class is not a comment", `(?x) [#(] (?P<a>\w) (\w) \2`, `#abb (cdd`, ev(`a`, `a`, `a`, `c`)},
 		{"x option: escaped #", `(?x) \# (?P<a>\w) (\w)\2`, `#abb`, ev(`a`, `a`)},
@@ -273,6 +274,13 @@ func TestCommandPatternRefused(t *testing.T) {
 		{"numbered group", `(?<1>a)(?P<b>b)`},                                 // Python: bad character in group name '1' at position 4
 		{"balancing group", `(?<a>a)(?<b-a>b)`},                               // Python: bad character in group name 'b-a' at position 12
 		{"empty group", `(?)(?P<a>a)`},                                        // Python: unknown extension ?) at position 1
+		// Python reads "\)" in a comment as one character, so that its
+		// comment goes on to the next ")" and (x) is not a group; the library
+		// ends the comment at the first ")" and counts (x).
+		{"comment that ends with a backslash", `(?#\)(x)(?P<a>a)`},
+		// Python reads a backslash and the line break as one character, so
+		// that its comment goes on over the next line.
+		{"x comment that ends with a backslash", "(?x)(?P<a>a) #c\\\n(b)\\2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
