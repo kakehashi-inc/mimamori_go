@@ -69,7 +69,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
-	_, port, err := net.SplitHostPort(cfg.AgentListen)
+	host, portNum, err := CtlTarget(cfg.AgentListen)
 	if err != nil {
 		return nil, NewExitErrorf(ExitConfig, "agent_listen: %v", err)
 	}
@@ -82,11 +82,10 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if !pool.AppendCertsFromPEM(pemData) {
 		return nil, NewExitErrorf(ExitFileIO, "no certificate in %s (the central writes it when it starts)", caFile)
 	}
-	portNum, err := strconv.Atoi(port)
-	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "agent_listen: %v", err)
-	}
-	hc, err := NewHTTPSClient("127.0.0.1", portNum, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+	// The server certificate always contains the loopback addresses but not
+	// necessarily the listen address, so it is verified under the IPv4
+	// loopback address whatever address is connected to.
+	hc, err := NewHTTPSClient(host, portNum, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: ctlServerName}, 60*time.Second)
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
@@ -96,6 +95,35 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	}
 	hc.Headers["Authorization"] = "Bearer " + strings.TrimSpace(string(secret))
 	return &ctlClient{http: hc, json: c.JSON, port: portNum}, nil
+}
+
+// ctlServerName is the name ctl verifies the server certificate under: a
+// name every server certificate of the central contains (ServerCertNames).
+const ctlServerName = "127.0.0.1"
+
+// CtlTarget returns the address and port ctl connects to for the central's
+// agent_listen: the IPv4 loopback address when the central listens on every
+// address (empty host, 0.0.0.0 or ::), otherwise the listen IP itself.
+func CtlTarget(agentListen string) (string, int, error) {
+	host, port, err := net.SplitHostPort(agentListen)
+	if err != nil {
+		return "", 0, err
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum <= 0 || portNum > 65535 {
+		return "", 0, fmt.Errorf("%s: invalid port", agentListen)
+	}
+	if host == "" {
+		return "127.0.0.1", portNum, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "", 0, fmt.Errorf("%s: the listen address must be an IP address", agentListen)
+	}
+	if ip.IsUnspecified() {
+		return "127.0.0.1", portNum, nil
+	}
+	return ip.String(), portNum, nil
 }
 
 func (cl *ctlClient) call(method, path string, in any) (any, error) {

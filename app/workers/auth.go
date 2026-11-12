@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -69,6 +70,10 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 		public := (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
 			(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 		if public {
+			if r.Method == http.MethodPost && !readBodyBeforeAuth(r) {
+				writeError(w, http.StatusRequestTimeout, "request timeout")
+				return
+			}
 			viewer.ServeHTTP(w, r)
 			return
 		}
@@ -97,13 +102,15 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 	})
 }
 
-// adminAPIAuth guards the management API: loopback source address only
-// (otherwise it does not exist), and the CLI secret the central wrote into
-// its data directory at start. The CLI is not tied to an account and has
-// full authority.
+// adminAPIAuth guards the management API: only a connection from this host
+// (a loopback source address, or a source address equal to the local
+// address of the connection; otherwise it does not exist), and the CLI
+// secret the central wrote into its data directory at start. The CLI is not
+// tied to an account and has full authority.
 func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) {
+		local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+		if !isLocalPeer(r.RemoteAddr, local) {
 			http.NotFound(w, r)
 			return
 		}

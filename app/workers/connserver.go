@@ -3,6 +3,7 @@ package workers
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -35,6 +37,9 @@ type job struct {
 	spec       *listenerSpec
 	acceptedAt time.Time
 	task       func()
+	// ready is set when the connection has sent what a worker needs to start
+	// on it without waiting (probeConn). Only ready jobs are handed over.
+	ready bool
 }
 
 // connServer accepts connections on several listeners from ONE flow and
@@ -42,8 +47,10 @@ type job struct {
 // worker, the accepting flow itself processes every request and periodic
 // task in turn, so no goroutine is created at all. With more workers, the
 // accepting flow only accepts and dispatches, and workers-many goroutines do
-// the processing. Connections that cannot be handled within queueTimeout
-// are rejected.
+// the processing. A connection is handed to a worker only once it has sent
+// data (the accepting flow probes the queued connections without blocking),
+// so a client that sends nothing never occupies a worker. Connections that
+// cannot be handled within queueTimeout are rejected.
 type connServer struct {
 	specs        []*listenerSpec
 	workers      int
@@ -55,13 +62,15 @@ type connServer struct {
 	lastPoll time.Time
 	wg       sync.WaitGroup
 	taskBusy atomic.Bool
+	// probeBuf is the buffer of probeConn (used by the accepting flow only).
+	probeBuf []byte
 }
 
 func newConnServer(specs []*listenerSpec, workers int, queueTimeout time.Duration, logger *log.Logger) *connServer {
 	if workers < 1 {
 		workers = 1
 	}
-	return &connServer{specs: specs, workers: workers, queueTimeout: queueTimeout, logger: logger}
+	return &connServer{specs: specs, workers: workers, queueTimeout: queueTimeout, logger: logger, probeBuf: make([]byte, modules.ProbeHeadBytes)}
 }
 
 // run is the main loop of the central flow. tick is called between jobs and
@@ -78,26 +87,28 @@ func (s *connServer) run(stopping func() bool, tick func() func()) {
 		s.acceptAll()
 		if t := tick(); t != nil && !s.taskBusy.Load() {
 			s.taskBusy.Store(true)
-			s.queue = append(s.queue, job{task: t, acceptedAt: time.Now()})
+			s.queue = append(s.queue, job{task: t, acceptedAt: time.Now(), ready: true})
 		}
 		s.expireQueue()
-		if len(s.queue) == 0 {
-			continue
-		}
+		s.probeQueue()
 		if s.workers == 1 {
-			j := s.queue[0]
-			s.queue = s.queue[1:]
-			s.process(j)
+			if i := s.nextReady(0); i >= 0 {
+				s.process(s.take(i))
+			}
 			continue
 		}
-		for len(s.queue) > 0 {
+		// Hand ready jobs, in queue order, to the workers that are free.
+		for i := s.nextReady(0); i >= 0; i = s.nextReady(i) {
+			sent := false
 			select {
-			case s.jobCh <- s.queue[0]:
-				s.queue = s.queue[1:]
-				continue
+			case s.jobCh <- s.queue[i]:
+				sent = true
 			default:
 			}
-			break
+			if !sent {
+				break
+			}
+			s.take(i)
 		}
 	}
 	for _, j := range s.queue {
@@ -115,6 +126,76 @@ func (s *connServer) run(stopping func() bool, tick func() func()) {
 	}
 }
 
+// nextReady returns the index of the first ready job at or after from, or -1.
+func (s *connServer) nextReady(from int) int {
+	for i := from; i < len(s.queue); i++ {
+		if s.queue[i].ready {
+			return i
+		}
+	}
+	return -1
+}
+
+// take removes the job at index i from the queue and returns it.
+func (s *connServer) take(i int) job {
+	j := s.queue[i]
+	s.queue = append(s.queue[:i], s.queue[i+1:]...)
+	return j
+}
+
+// probeQueue marks the queued connections that have sent data as ready and
+// closes those whose client has gone. It never blocks.
+func (s *connServer) probeQueue() {
+	kept := s.queue[:0]
+	for _, j := range s.queue {
+		if !j.ready {
+			ready, gone := probeConn(j.conn, j.spec.tls == nil, s.probeBuf)
+			if gone {
+				_ = j.conn.Close()
+				continue
+			}
+			j.ready = ready
+		}
+		kept = append(kept, j)
+	}
+	s.queue = kept
+}
+
+// probeConn looks at the data a client has sent without consuming it and
+// without blocking (recv with MSG_PEEK|MSG_DONTWAIT). A TLS connection is
+// ready when anything has arrived (the start of the handshake); a plain HTTP
+// connection when the complete request head has arrived, or as much of a
+// head as fills buf. gone is true when the client closed the connection
+// without sending anything, or the connection failed.
+func probeConn(c net.Conn, plain bool, buf []byte) (ready, gone bool) {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return true, false
+	}
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return true, false
+	}
+	var n int
+	var rerr error
+	if err := raw.Read(func(fd uintptr) bool {
+		n, _, rerr = syscall.Recvfrom(int(fd), buf, syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+		return true // never wait for the descriptor
+	}); err != nil {
+		return false, true
+	}
+	switch {
+	case errors.Is(rerr, syscall.EAGAIN) || errors.Is(rerr, syscall.EINTR):
+		return false, false
+	case rerr != nil, n <= 0:
+		return false, true
+	case !plain, n >= len(buf):
+		return true, false
+	}
+	head := buf[:n]
+	return bytes.Contains(head, []byte("\r\n\r\n")) || bytes.Contains(head, []byte("\n\n")), false
+}
+
 func (s *connServer) workerLoop() {
 	defer s.wg.Done()
 	for j := range s.jobCh {
@@ -122,8 +203,10 @@ func (s *connServer) workerLoop() {
 	}
 }
 
-// acceptAll polls every listener once. When work is already queued the poll
-// does not wait; otherwise each listener is waited on for a short interval.
+// acceptAll polls every listener once. When a queued job is ready (or a
+// connection was just accepted and is still to be probed) the poll does not
+// wait; otherwise each listener is waited on for a short interval, which is
+// also the interval at which waiting connections are probed again.
 //
 // A connection accepted now may have been waiting in the kernel since the
 // previous poll ended (for example while the single worker was processing a
@@ -134,9 +217,10 @@ func (s *connServer) acceptAll() {
 		waitingSince = time.Now()
 	}
 	defer func() { s.lastPoll = time.Now() }()
+	busy := s.nextReady(0) >= 0
 	for _, sp := range s.specs {
 		wait := modules.AcceptPollInterval
-		if len(s.queue) > 0 {
+		if busy {
 			wait = time.Millisecond
 		}
 		for {
@@ -153,14 +237,28 @@ func (s *connServer) acceptAll() {
 				break
 			}
 			j := job{conn: c, spec: sp, acceptedAt: waitingSince}
-			if len(s.queue) >= modules.MaxPendingConns {
+			if len(s.queue) >= modules.MaxPendingConns && !s.evictWaiting() {
 				s.reject(j)
 				continue
 			}
 			s.queue = append(s.queue, j)
+			busy = true
 			wait = time.Millisecond
 		}
 	}
+}
+
+// evictWaiting makes room in a full queue by rejecting the oldest connection
+// that has not sent anything usable yet, so that connections which send
+// nothing cannot keep new clients out. It reports whether one was rejected.
+func (s *connServer) evictWaiting() bool {
+	for i, j := range s.queue {
+		if j.conn != nil && !j.ready {
+			s.reject(s.take(i))
+			return true
+		}
+	}
+	return false
 }
 
 // expireQueue rejects connections that waited longer than queueTimeout.
@@ -224,6 +322,12 @@ func (w *respWriter) Write(b []byte) (int, error) {
 }
 
 // serveConn handles exactly one request on a connection, in the calling flow.
+// The connection has already sent data (probeConn), so the TLS handshake and
+// the request head have ConnHeaderTimeout only. The routes that read a body
+// before the caller is authenticated (the login routes of the browser API)
+// read it within ConnBodyTimeout (readBodyBeforeAuth); every other route
+// that reads a body authenticates the request first. The response is
+// written within the bound described at ConnWriteTimeout.
 func (s *connServer) serveConn(conn net.Conn, sp *listenerSpec) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(modules.ConnHeaderTimeout))
@@ -246,9 +350,16 @@ func (s *connServer) serveConn(conn net.Conn, sp *listenerSpec) {
 		}
 		return
 	}
-	_ = conn.SetDeadline(time.Now().Add(modules.ConnTotalTimeout))
+	total := time.Now().Add(modules.ConnTotalTimeout)
+	_ = conn.SetDeadline(total)
 	req.RemoteAddr = conn.RemoteAddr().String()
 	req.TLS = state
+	// The local address of the connection (never a header) tells the
+	// management API whether a client of this host connected to one of the
+	// host's own addresses.
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey, conn.LocalAddr())
+	ctx = context.WithValue(ctx, connInfoKey{}, &connInfo{conn: conn, total: total})
+	req = req.WithContext(ctx)
 	w := &respWriter{header: http.Header{}}
 	req.Body = http.MaxBytesReader(w, req.Body, modules.MaxRequestBody)
 	func() {
@@ -282,10 +393,62 @@ func (s *connServer) serveConn(conn net.Conn, sp *listenerSpec) {
 		Close:         true,
 		Request:       req,
 	}
+	// A response is written within ConnWriteTimeout plus its size at
+	// MinWriteRate (never longer than the whole request may take), so a
+	// client that does not read cannot hold the worker much longer than a
+	// client reading at that rate needs.
+	writeDeadline := time.Now().Add(modules.ConnWriteTimeout + time.Duration(len(body))*time.Second/modules.MinWriteRate)
+	if writeDeadline.After(total) {
+		writeDeadline = total
+	}
+	_ = conn.SetDeadline(writeDeadline)
 	bw := bufio.NewWriter(c)
 	if err := resp.Write(bw); err == nil {
 		_ = bw.Flush()
 	}
+}
+
+// connInfo is what serveConn passes to the handlers about the connection.
+type connInfo struct {
+	conn  net.Conn
+	total time.Time // the deadline of the whole request
+}
+
+type connInfoKey struct{}
+
+// errReader returns its error on every read.
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// readBodyBeforeAuth reads the whole body of a request that is served
+// before its caller is authenticated (the login routes) within
+// ConnBodyTimeout, so that a client sending its body slowly cannot hold a
+// worker for longer. It reports false when the time ran out (the caller
+// answers 408). Any other read error is passed on to the handler with the
+// data read before it, as if the body had been read directly.
+func readBodyBeforeAuth(r *http.Request) bool {
+	ci, _ := r.Context().Value(connInfoKey{}).(*connInfo)
+	if ci == nil {
+		return true
+	}
+	limit := time.Now().Add(modules.ConnBodyTimeout)
+	if limit.After(ci.total) {
+		limit = ci.total
+	}
+	_ = ci.conn.SetReadDeadline(limit)
+	data, err := io.ReadAll(r.Body)
+	_ = ci.conn.SetReadDeadline(ci.total)
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return false
+		}
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(data), errReader{err}))
+		return true
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return true
 }
 
 // listenTCP opens a listening socket for "IP:port". The socket is created
@@ -356,13 +519,26 @@ func bindListen(fd int, sa syscall.Sockaddr) error {
 // listenBacklog is the queue length of pending connections.
 const listenBacklog = 512
 
-// isLoopback reports whether the connection's source address (never a
-// forwarding header) is a loopback address.
-func isLoopback(remoteAddr string) bool {
+// isLocalPeer reports whether a connection comes from this host: its source
+// address (never a forwarding header) is a loopback address, or equals the
+// local address the connection was accepted on (a connection from this host
+// to one of its own addresses). local is the local address of the accepted
+// connection (nil when unknown: then only loopback counts).
+func isLocalPeer(remoteAddr string, local net.Addr) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		return false
 	}
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] // the zone of a link-local address
+	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.Equal(net.IPv4(127, 0, 0, 1)) || ip.Equal(net.IPv6loopback))
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	ta, ok := local.(*net.TCPAddr)
+	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip)
 }

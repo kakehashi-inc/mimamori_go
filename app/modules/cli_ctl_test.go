@@ -2,6 +2,7 @@ package modules
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -194,5 +195,39 @@ func TestTruncateKeepsUTF8(t *testing.T) {
 		if !utf8.ValidString(got) || len(got) > n {
 			t.Errorf("truncate(%d) = %q", n, got)
 		}
+	}
+}
+
+// ctl connects to the address of agent_listen: the IPv4 loopback address
+// for a wildcard, the listen IP itself otherwise, with the port of
+// agent_listen.
+func TestCtlTarget(t *testing.T) {
+	cases := []struct{ in, host string }{
+		{":9081", "127.0.0.1"},
+		{"0.0.0.0:9081", "127.0.0.1"},
+		{"[::]:9081", "127.0.0.1"},
+		{"[::ffff:0.0.0.0]:9081", "127.0.0.1"},
+		{"127.0.0.1:9081", "127.0.0.1"},
+		{"127.0.0.2:9081", "127.0.0.2"},
+		{"[::1]:9081", "::1"},
+		{"192.0.2.7:9081", "192.0.2.7"},
+		{"[::ffff:192.0.2.7]:9081", "192.0.2.7"},
+		{"[2001:db8::5]:9081", "2001:db8::5"},
+	}
+	for _, c := range cases {
+		host, port, err := CtlTarget(c.in)
+		if err != nil || host != c.host || port != 9081 {
+			t.Errorf("CtlTarget(%q) = %q, %d, %v; want %q, 9081", c.in, host, port, err, c.host)
+		}
+	}
+	for _, bad := range []string{"9081", "central.example:9081", "0.0.0.0:x", "0.0.0.0:0", "0.0.0.0:70000"} {
+		if _, _, err := CtlTarget(bad); err == nil {
+			t.Errorf("CtlTarget(%q) accepted", bad)
+		}
+	}
+	// The name the certificate is verified under is one every server
+	// certificate of the central contains.
+	if !slices.Contains(ServerCertNames(nil), ctlServerName) {
+		t.Errorf("%q is not always in the server certificate", ctlServerName)
 	}
 }

@@ -85,10 +85,31 @@ const (
 // --- Server ---
 
 const (
-	// ConnHeaderTimeout bounds TLS handshake and request header reading.
-	ConnHeaderTimeout = 10 * time.Second
-	// ConnTotalTimeout bounds one whole request (read, handle, write).
+	// ConnHeaderTimeout bounds the TLS handshake and the reading of the
+	// request head after a connection was handed to a worker. A connection is
+	// handed over only when it has sent data (for plain HTTP: the complete
+	// head), so this only has to cover the rest of the handshake (one more
+	// round trip of the client); it is half the default queue timeout so
+	// that a client that stops in the middle cannot hold a worker for long.
+	ConnHeaderTimeout = 5 * time.Second
+	// ConnBodyTimeout bounds the reading of the body of a request that is
+	// served before its caller is authenticated (the login routes; their
+	// bodies are a few hundred bytes). Every other route that reads a body
+	// authenticates the request first.
+	ConnBodyTimeout = 5 * time.Second
+	// ConnWriteTimeout plus the response size at MinWriteRate (bytes per
+	// second) bounds the writing of a response (never beyond
+	// ConnTotalTimeout), so that a client that does not read cannot hold a
+	// worker much longer than a client reading at MinWriteRate needs.
+	ConnWriteTimeout = 5 * time.Second
+	MinWriteRate     = 32 << 10
+	// ConnTotalTimeout bounds one whole request (read, handle, write),
+	// counted from the end of the request head.
 	ConnTotalTimeout = 60 * time.Second
+	// ProbeHeadBytes is how much of a queued connection's data is looked at
+	// to decide whether its request head is complete; a head that fills it
+	// is handed over as it is.
+	ProbeHeadBytes = 16 << 10
 	// MaxRequestBody limits a request body (agent reports are the largest).
 	MaxRequestBody = 32 << 20
 	// AcceptPollInterval is how long one listener is polled before the next.
