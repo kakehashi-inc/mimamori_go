@@ -54,7 +54,10 @@ func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *
 			if r.ExpiresAt <= now {
 				continue
 			}
-			if err := models.MarkCommandRequestDelivered(tdb, r.ID, now); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err := models.MarkCommandRequestDelivered(tdb, r.ID, now); errors.Is(err, sql.ErrNoRows) {
+				// Discarded or expired after it was listed: not delivered.
+				continue
+			} else if err != nil {
 				return err
 			}
 		}

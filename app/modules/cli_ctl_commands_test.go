@@ -241,7 +241,7 @@ func TestCommandSetsTextOutput(t *testing.T) {
 	out := b.String()
 	for _, want := range []string{
 		"command set:   disk (id 4)", "trigger:       schedule, due 2026-11-11 12:00:00", "OS user:       svc", "work dir:      (home directory)",
-		"started:       2026-11-11 12:00:05", "state:         error", "  version: 1.2,1.3", "  (truncated by the line limit)",
+		"started:       2026-11-11 12:00:05", "state:         error", "  version: 1.2,1.3", "  (truncated by the line or size limit)",
 		"--- command 1 of 3: success, exit code 0", "command line:\n  echo a &&\n  echo b\n", "note: first",
 		"console output (13 bytes):\nline 1\nline 2\n", "--- command 2 of 3: error (timeout), no exit code",
 		"only the first 1048576 bytes were kept", "1 command(s) not executed",

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestExtractCommandValues(t *testing.T) {
@@ -44,7 +45,7 @@ func TestExtractCommandValues(t *testing.T) {
 		{"back-reference", []string{`(?P<w>\b\w+) \k<w>\b`}, "the the cat cat dog", 20, ev("w", "the", "w", "cat"), false},
 		{"line limit across values", []string{`(?P<v>\d+)`}, "1 2 3 4", 3, ev("v", "1", "v", "2", "v", "3"), true},
 		{"line breaks inside values count", []string{`(?s)\[(?P<v>.*?)\]`}, "[a\nb][c\nd\ne]", 3, ev("v", "a\nb", "v", "c"), true},
-		{"invalid UTF-8 is replaced for matching", []string{`(?P<v>a.b)`}, "a\xffb", 20, ev("v", "a�b"), false},
+		{"invalid UTF-8 is replaced for matching", []string{`(?P<v>a.b)`}, "a\xffb", 20, ev("v", "a\uFFFDb"), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,14 +104,56 @@ func TestRenderDisplayValue(t *testing.T) {
 	}{
 		{DisplayValue{}, "(no values)\n"},
 		{DisplayValue{Rows: []DisplayRow{{Name: "use", Value: "41,77"}}}, "use: 41,77\n"},
-		{DisplayValue{Rows: []DisplayRow{{Name: "", Value: "a\nb"}}, Truncated: true}, "(output):\n  a\n  b\n(truncated by the line limit)\n"},
+		{DisplayValue{Rows: []DisplayRow{{Name: "", Value: "a\nb"}}, Truncated: true}, "(output):\n  a\n  b\n(truncated by the line or size limit)\n"},
 	}
 	for _, tc := range tests {
 		if got := RenderDisplayValue(tc.dv); got != tc.want {
 			t.Errorf("%q, want %q", got, tc.want)
 		}
 	}
-	if DisplayText([]byte("ok\xfe")) != "ok�" {
+	if DisplayText([]byte("ok\xfe")) != "ok\uFFFD" {
 		t.Fatal("invalid UTF-8 not replaced")
+	}
+}
+
+// TestValueSizeLimits checks that patterns which capture the same large text
+// many times stay within MaxCommandValueBytes per command and
+// MaxDisplayValueBytes per run.
+func TestValueSizeLimits(t *testing.T) {
+	big := []byte(strings.Repeat("x", MaxCommandOutputBytes))
+	// Three named groups capture the whole output: only the first fits.
+	got := ExtractCommandValues([]string{`(?<a>(?<b>(?<c>x+)))`}, big, MaxCommandLineLimit)
+	size := 0
+	for _, v := range got.Values {
+		size += len(v.Value)
+	}
+	if !got.Truncated || size > MaxCommandValueBytes || len(got.Values) != 1 || got.Values[0].Name != "a" {
+		t.Fatalf("values: %d of %d bytes, truncated %v", len(got.Values), size, got.Truncated)
+	}
+	// A look-ahead captures the rest of the output at every position: the
+	// collection stops at the limits instead of growing with each match.
+	start := time.Now()
+	got = ExtractCommandValues([]string{`(?=(?<rest>x{1000}))`}, big[:200000], MaxCommandLineLimit)
+	size = 0
+	for _, v := range got.Values {
+		size += len(v.Value)
+	}
+	if !got.Truncated || size > MaxCommandValueBytes || time.Since(start) > 10*time.Second {
+		t.Fatalf("look-ahead: %d values, %d bytes, truncated %v", len(got.Values), size, got.Truncated)
+	}
+	// A cut keeps whole characters.
+	multi := []byte(strings.Repeat("あ", MaxCommandValueBytes/3+1))
+	got = ExtractCommandValues(nil, multi, 1)
+	if !got.Truncated || len(got.Values) != 1 || len(got.Values[0].Value) > MaxCommandValueBytes || !utf8.ValidString(got.Values[0].Value) {
+		t.Fatalf("cut: truncated %v, %d bytes", got.Truncated, len(got.Values[0].Value))
+	}
+	// The display value of a run is bounded across its commands.
+	cmds := []CommandValues{
+		{Values: []ExtractedValue{{Name: "v", Value: strings.Repeat("a", MaxDisplayValueBytes-10)}}},
+		{Values: []ExtractedValue{{Name: "v", Value: strings.Repeat("b", 100)}, {Name: "w", Value: "c"}}},
+	}
+	dv := BuildDisplayValue(cmds, JoinerComma)
+	if !dv.Truncated || len(dv.Rows) != 1 || len(dv.Rows[0].Values) != 2 || len(dv.Rows[0].Values[1]) != 10 {
+		t.Fatalf("display: truncated %v, rows %d", dv.Truncated, len(dv.Rows))
 	}
 }

@@ -189,6 +189,13 @@ const (
 	// MaxCommandOutputBytes is the console output stored per command; what
 	// exceeds is read and dropped.
 	MaxCommandOutputBytes = 1 << 20
+	// MaxCommandValueBytes bounds the extracted values of one command and
+	// MaxDisplayValueBytes the values of the display value of one run (what
+	// exceeds is dropped and marked truncated), so that a pattern that
+	// captures the same text many times cannot make a report larger than
+	// the central accepts (MaxRequestBody).
+	MaxCommandValueBytes = 1 << 20
+	MaxDisplayValueBytes = 1 << 20
 	// CommandPatternTimeout bounds the matching of one pattern against the
 	// output of one command.
 	CommandPatternTimeout = 2 * time.Second

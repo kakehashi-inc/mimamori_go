@@ -260,6 +260,9 @@ func TestViewerAdminRoutesDoNotExist(t *testing.T) {
 		"/api/v1/agents/1/command-sets/import":   "/api/v1/nothing/1/command-sets/import",
 		"/api/v1/agents/1/command-sets/1/run":    "/api/v1/nothing/1/command-sets/1/run",
 		"/api/v1/agents/1/command-requests/1":    "/api/v1/nothing/1/command-requests/1",
+		// Re-authentication for command set changes.
+		"/api/v1/auth/step-up":        "/api/v1/nothing/step-up",
+		"/api/v1/auth/step-up/verify": "/api/v1/nothing/step-up/verify",
 	}
 	methods := []string{"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
 	for p, twin := range twins {
@@ -278,7 +281,8 @@ func TestViewerAdminRoutesDoNotExist(t *testing.T) {
 	}
 	// Administrators still have every route.
 	for _, r := range [][2]string{{"GET", "/api/v1/accounts"}, {"GET", "/api/v1/config"}, {"PUT", "/api/v1/accounts/2/role"}, {"PUT", "/api/v1/accounts/2/notify"}, {"POST", "/api/v1/rules/validate"},
-		{"GET", "/api/v1/agents/1/command-sets"}, {"POST", "/api/v1/agents/1/command-sets/validate"}, {"POST", "/api/v1/agents/1/command-sets/import"}} {
+		{"GET", "/api/v1/agents/1/command-sets"}, {"POST", "/api/v1/agents/1/command-sets/validate"}, {"POST", "/api/v1/agents/1/command-sets/import"},
+		{"POST", "/api/v1/auth/step-up"}} {
 		if rec := call(r[0], r[1], adminCk); rec.Code == 404 || rec.Code == 405 {
 			t.Fatalf("admin %s %s: %d", r[0], r[1], rec.Code)
 		}
