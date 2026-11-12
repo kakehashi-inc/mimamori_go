@@ -489,6 +489,9 @@ func historyOut(h *models.HistoryItem, show func(string) string) historyJSON {
 		Target: h.Target, Detail: h.Detail, RemoteAddr: h.RemoteAddr, Count: h.Count}
 }
 
+// viewerHiddenHistory are the history categories a viewer does not receive.
+var viewerHiddenHistory = []string{models.HistAccount, models.HistConfig}
+
 func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 	limit, err := queryInt(r, "limit", 100, 1, 500)
 	if err != nil {
@@ -500,7 +503,13 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	items, total, err := models.ListHistory(c.db, r.URL.Query().Get("category"), "", limit, offset)
+	// Viewers do not receive the history of accounts and of the system
+	// settings (it lists every account and the configured values).
+	var exclude []string
+	if p := principalFrom(r); !p.isAdmin() {
+		exclude = viewerHiddenHistory
+	}
+	items, total, err := models.ListHistory(c.db, r.URL.Query().Get("category"), "", exclude, limit, offset)
 	if err != nil {
 		c.internalError(w, r, err)
 		return

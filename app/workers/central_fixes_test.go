@@ -213,7 +213,7 @@ func TestRejectedTokenReasons(t *testing.T) {
 		if rec := e.do(e.agent, "POST", "/agent/v1/sync", modules.SyncRequest{}, hdr, "192.0.2.20:1"); rec.Code != 401 {
 			t.Fatalf("%q: %d", tc.auth, rec.Code)
 		}
-		items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", 1, 0)
+		items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", nil, 1, 0)
 		if len(items) == 0 || items[0].Action != tc.reason {
 			t.Fatalf("%q recorded as %+v", tc.auth, items)
 		}

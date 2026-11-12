@@ -399,3 +399,49 @@ func TestRetentionRemovesExpiredCodes(t *testing.T) {
 		t.Fatal("retention must remove the expired verifications and codes only")
 	}
 }
+
+// Viewers do not receive the history of accounts and of the system settings.
+func TestViewerHistoryCategories(t *testing.T) {
+	e := newTestEnv(t)
+	e.admin("POST", "/accounts", map[string]any{"email": "v@example.com", "display_name": "V", "role": "viewer", "password": "Viewer-pass-123"})
+	e.admin("PUT", "/config", map[string]any{"set": map[string]string{"retention_days": "90"}})
+	e.admin("POST", "/rules", map[string]any{"name": "r1"})
+	viewer := login(t, e, "v@example.com", "Viewer-pass-123")
+	admin := login(t, e, testAdminEmail, "Admin-pass-123")
+	list := func(cookie, query string) (int, map[string]int) {
+		rec := e.do(e.web, "GET", "/api/v1/history"+query, nil, map[string]string{"Cookie": sessionCookie + "=" + cookie}, "192.0.2.1:1")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("history %s: %d %s", query, rec.Code, rec.Body.String())
+		}
+		out := decode[struct {
+			Items []struct {
+				Category string `json:"category"`
+			} `json:"items"`
+			Total int `json:"total"`
+		}](t, rec)
+		seen := map[string]int{}
+		for _, it := range out.Items {
+			seen[it.Category]++
+		}
+		return out.Total, seen
+	}
+	total, seen := list(viewer, "")
+	if seen[models.HistAccount] != 0 || seen[models.HistConfig] != 0 || seen[models.HistRule] == 0 {
+		t.Errorf("viewer history categories: %v", seen)
+	}
+	rows := 0
+	for _, n := range seen {
+		rows += n
+	}
+	if total != rows {
+		t.Errorf("viewer total %d does not match the rows %v", total, seen)
+	}
+	for _, c := range []string{models.HistAccount, models.HistConfig} {
+		if total, seen := list(viewer, "?category="+c); total != 0 || len(seen) != 0 {
+			t.Errorf("viewer category %s: total %d rows %v", c, total, seen)
+		}
+		if total, _ := list(admin, "?category="+c); total == 0 {
+			t.Errorf("administrator category %s is empty", c)
+		}
+	}
+}

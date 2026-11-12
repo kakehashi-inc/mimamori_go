@@ -247,7 +247,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	name := out.DisplayName
 	if a.Kind == models.AgentToken {
-		items, _, err := models.ListHistory(c.db, models.HistToken, name, 100, 0)
+		items, _, err := models.ListHistory(c.db, models.HistToken, name, nil, 100, 0)
 		if err == nil {
 			show := c.operatorShown(r)
 			for _, h := range items {

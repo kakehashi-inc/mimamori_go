@@ -8,6 +8,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
+import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import type { HistoryCategory } from '../types';
 import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
@@ -37,6 +38,9 @@ function historyDetail(h: { category: string; detail: string }): string {
 
 export function HistoryPage() {
     const { t } = useTranslation();
+    const { isAdmin } = useAuth();
+    // Viewers do not receive the history of accounts and of the system settings.
+    const categories = isAdmin ? CATEGORIES : CATEGORIES.filter(c => c !== 'account' && c !== 'config');
     const [category, setCategory] = useState('');
     const [offset, setOffset] = useState(0);
     const { data, error, loading, reload } = useApi(
@@ -71,7 +75,7 @@ export function HistoryPage() {
                         }}
                     >
                         <option value=''>{t('common.all')}</option>
-                        {CATEGORIES.map(c => (
+                        {categories.map(c => (
                             <option key={c} value={c}>
                                 {t(`historyCategory.${c}`)}
                             </option>

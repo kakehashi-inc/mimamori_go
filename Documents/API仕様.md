@@ -350,6 +350,8 @@ interface CertStatus {
 
 `limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。
 
+閲覧者には、分類が `account`（アカウント）と `config`（システム設定）の行を返しません（`total` にも数えません）。`category` にこれらを指定した場合は、空の一覧を返します。
+
 ```ts
 type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
 interface HistoryItem {

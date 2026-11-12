@@ -62,10 +62,15 @@ func RecordRejected(db Execer, remote, reason, target string, window int64) erro
 	return InsertHistory(db, &HistoryItem{AccountName: "system", Category: HistRejected, Action: reason, Target: target, RemoteAddr: remote})
 }
 
-// ListHistory returns history rows newest first with optional filters.
-func ListHistory(db Execer, category, target string, limit, offset int) ([]*HistoryItem, int, error) {
+// ListHistory returns history rows newest first with optional filters. Rows
+// of the categories in exclude are left out.
+func ListHistory(db Execer, category, target string, exclude []string, limit, offset int) ([]*HistoryItem, int, error) {
 	where := `WHERE (? = '' OR category = ?) AND (? = '' OR target = ?)`
 	args := []any{category, category, target, target}
+	for _, c := range exclude {
+		where += ` AND category <> ?`
+		args = append(args, c)
+	}
 	var total int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM history `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err

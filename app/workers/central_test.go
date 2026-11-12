@@ -153,7 +153,7 @@ func TestAgentFlow(t *testing.T) {
 	if rec := e.agentCall("sync", tok, "machine-2", modules.SyncRequest{}); rec.Code != 401 || strings.Contains(rec.Body.String(), "machine") {
 		t.Fatalf("other machine: %d %s", rec.Code, rec.Body.String())
 	}
-	items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", 10, 0)
+	items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", nil, 10, 0)
 	if len(items) == 0 || items[0].Action != "instance id mismatch" {
 		t.Fatalf("rejected connection not recorded: %+v", items)
 	}
