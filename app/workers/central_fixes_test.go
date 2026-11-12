@@ -2,6 +2,7 @@ package workers
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -57,10 +58,7 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 }
 
 func TestBusyResponseLength(t *testing.T) {
-	client, server := net.Pipe()
-	s := &connServer{}
-	go s.reject(job{conn: server, spec: &listenerSpec{}})
-	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(busyResponse)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

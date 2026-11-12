@@ -70,10 +70,6 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 		public := (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
 			(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 		if public {
-			if r.Method == http.MethodPost && !readBodyBeforeAuth(r) {
-				writeError(w, http.StatusRequestTimeout, "request timeout")
-				return
-			}
 			viewer.ServeHTTP(w, r)
 			return
 		}

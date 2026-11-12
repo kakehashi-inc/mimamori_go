@@ -85,40 +85,37 @@ const (
 // --- Server ---
 
 const (
-	// ConnHeaderTimeout bounds the TLS handshake and the reading of the
-	// request head after a connection was handed to a worker. A connection is
-	// handed over only when it has sent data (for plain HTTP: the complete
-	// head; for TLS: the complete ClientHello), so this only has to cover
-	// the rest of the handshake (one more round trip of the client); it is
-	// half the default queue timeout so that a client that stops in the
-	// middle cannot hold a worker for long.
-	ConnHeaderTimeout = 5 * time.Second
-	// ConnBodyTimeout bounds the reading of the body of a request that is
-	// served before its caller is authenticated (the login routes; their
-	// bodies are a few hundred bytes). Every other route that reads a body
-	// authenticates the request first.
-	ConnBodyTimeout = 5 * time.Second
-	// ConnWriteTimeout plus the response size at MinWriteRate (bytes per
-	// second) bounds the writing of a response (never beyond
-	// ConnTotalTimeout), so that a client that does not read cannot hold a
-	// worker much longer than a client reading at MinWriteRate needs.
-	ConnWriteTimeout = 5 * time.Second
-	MinWriteRate     = 32 << 10
-	// ConnTotalTimeout bounds one whole request (read, handle, write),
-	// counted from the end of the request head.
+	// The connection server (app/workers/connserver.go) reads requests and
+	// writes responses in its accepting flow without waiting; a worker only
+	// runs the handler on a request that is complete in memory.
+	//
+	// ConnTotalTimeout bounds one whole request, counted from the end of the
+	// request head: a body larger than MaxHeadBytes must arrive and the
+	// response must be written within it. (The head, and a body up to
+	// MaxHeadBytes, must arrive within the queue timeout.)
 	ConnTotalTimeout = 60 * time.Second
-	// ProbeHeadBytes is how much of a queued connection's data is looked at
-	// to decide whether its request head is complete; a head that fills it
-	// is handed over as it is.
-	ProbeHeadBytes = 16 << 10
+	// TLSHandshakeTimeout bounds the TLS handshake, the only step that waits
+	// for the client in the accepting flow. It starts when the client's
+	// first record (the ClientHello) is complete, so only the client's next
+	// flight is waited for: one round trip and its key exchange.
+	TLSHandshakeTimeout = 2 * time.Second
+	// HandshakePenalty is how long the TLS listener refuses a source address
+	// (never this host) whose handshake ran into TLSHandshakeTimeout.
+	HandshakePenalty = 60 * time.Second
+	// MaxHeadBytes bounds a request head (larger: 431). Every connection may
+	// always buffer this much; bodies beyond it are read only while all
+	// connections together buffer less than MaxBufferedBytes.
+	MaxHeadBytes     = 64 << 10
+	MaxBufferedBytes = 128 << 20
 	// MaxRequestBody limits a request body (agent reports are the largest).
 	MaxRequestBody = 32 << 20
-	// AcceptPollInterval is how long one listener is polled before the next.
-	AcceptPollInterval = 20 * time.Millisecond
-	// ProbeInterval is how often the queued connections that have not sent
-	// enough yet are looked at again.
-	ProbeInterval = 10 * time.Millisecond
-	// MaxPendingConns bounds connections accepted but not yet handled.
+	// LoopWakeInterval is the longest the accepting flow waits for socket
+	// readiness before it looks at the stop signal and the periodic tasks.
+	LoopWakeInterval = 250 * time.Millisecond
+	// StopFlushTimeout bounds how long a stopping central finishes the
+	// requests in work and writes their responses.
+	StopFlushTimeout = 5 * time.Second
+	// MaxPendingConns bounds the open connections of the central.
 	MaxPendingConns = 256
 	// PeriodicTick is the interval of the central periodic tasks.
 	PeriodicTick = 30 * time.Second
