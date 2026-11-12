@@ -19,7 +19,9 @@ On the central host:
 ./mimamori central start
 ```
 
-Open `http://<central>:9080` in a browser, log in, create a monitoring rule and issue a token.
+`central start` runs in the foreground until it receives SIGTERM or SIGINT, so run it from a service manager or keep its terminal open. The `ctl` commands run in another terminal.
+
+Open `http://<central>:9080` in a browser, log in, create a monitoring rule and issue a token. The same can be done with `ctl rules create` and `ctl tokens issue`.
 
 On each monitored host:
 
@@ -27,6 +29,8 @@ On each monitored host:
 ./mimamori agent init --central-host central.example.com
 ./mimamori agent start
 ```
+
+`agent init` asks for the token (the value of the issued token). `agent start` runs in the foreground until it receives SIGTERM or SIGINT.
 
 ## central
 
@@ -37,7 +41,7 @@ Commands for the central. Run them on the central host.
 | `central start` | Start the central (browser screens, agent API, management API and the built-in agent). Stops with SIGTERM or SIGINT |
 | `central stop [--timeout DURATION]` | Stop the running central and wait until it has stopped (default 120s) |
 | `central status` | Show whether the central is running, its listen addresses and workers. Exit code 3 when it is not running |
-| `central init-admin --name NAME [--language auto\|en\|ja]` | Create the first administrator (only while no administrator exists). The password is read from the terminal or the first line of standard input |
+| `central init-admin --name NAME [--language auto\|en\|ja]` | Create the first administrator (`--language` defaults to `auto`; only while no administrator exists). The password is read from the terminal or the first line of standard input |
 | `central reset-password --name NAME` | Reset an administrator's password, enable the account and invalidate its sessions |
 | `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
 | `central config get NAME` | Print the value of one item |
@@ -60,7 +64,7 @@ Commands for the agent. Run them on each monitored host.
 
 ## ctl
 
-Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON (`ctl rules export` always prints JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object.
+Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON (`ctl rules export` always prints JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
 
 ### agents
 
@@ -73,10 +77,10 @@ Management commands. Run them on the central host while the central is running. 
 
 | Command | Description |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token and show its value with the `agent init` command to run on the monitored host (with `--central-port` when `agent_listen` does not use port 9081) |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token (`--valid-days` defaults to the `token_valid_days` setting of the central, also when 0 or less is given; more than 3650 is an argument error; `--rule-version` applies only together with `--rule` and defaults to the latest version) and show its value with the `agent init` command to run on the monitored host (with `--central-port` when `agent_listen` does not use port 9081) |
 | `ctl tokens list` | List tokens with their values in full |
 | `ctl tokens show ID` | Show a token with its value in full |
-| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name; the previous values stop working. The `agent init` command shown includes `--overwrite` |
+| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name (`--valid-days` as in `tokens issue`); the previous values stop working. The `agent init` command shown includes `--overwrite` |
 | `ctl tokens unbind ID` | Remove the binding to an agent instance |
 | `ctl tokens revoke ID` | Revoke a token immediately |
 
@@ -85,15 +89,15 @@ Management commands. Run them on the central host while the central is running. 
 | Command | Description |
 | --- | --- |
 | `ctl rules list` | List rules |
-| `ctl rules show ID [--version V]` | Show a rule (latest or given version) |
-| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty. Each `--choice` is one value (`FIELD` may contain commas) |
-| `ctl rules export ID [--version V]` | Print the content of a version as JSON |
+| `ctl rules show ID [--version V]` | Show a rule (given version; the latest when omitted or 0 or less) |
+| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty. Each `--choice` is one value (`FIELD` may contain commas). With `--template`, `--file` is ignored; `--choice` is used only together with `--template` |
+| `ctl rules export ID [--version V]` | Print the content of a version as JSON (the latest version when `--version` is omitted) |
 | `ctl rules save ID --file F [--comment C] [--description D]` | Save edited content as a new version |
 | `ctl rules edit ID [--comment C] [--editor CMD]` | Edit the latest version with an editor (default `vi`) and save it as a new version |
 | `ctl rules history ID` | List the versions of a rule |
 | `ctl rules diff ID FROM TO` | Show the difference between two versions |
-| `ctl rules apply ID --agent ID... [--version V]` | Apply a version to agents (an agent given more than once counts once) |
-| `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version |
+| `ctl rules apply ID --agent ID... [--version V]` | Apply a version (default: latest) to agents (an agent given more than once counts once; an agent that does not exist is an argument error) |
+| `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version (default: latest) |
 | `ctl rules delete ID` | Delete a rule (not possible while applied) |
 
 ### templates
@@ -102,7 +106,7 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | `ctl templates list` | List templates |
 | `ctl templates show NAME` | Show a template |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | Create an administrator template (`--from-rule` copies the latest version unless `--version` is given) |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | Create an administrator template (`--from-rule` copies the latest version unless `--version` is given; `--version` is used only with `--from-rule`). When more than one source is given, the first of `--from-builtin`, `--from-rule` and `--file` in this order is used and the others are ignored |
 | `ctl templates update NAME --file F [--description D]` | Change an administrator template (the description is kept when `--description` is omitted) |
 | `ctl templates delete NAME` | Delete an administrator template |
 
@@ -110,7 +114,7 @@ Management commands. Run them on the central host while the central is running. 
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error. `--agent` 0 or less means all agents. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 |
 | `ctl detections show AGENT_ID ID` | Show a detection |
 | `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be integers |
 
@@ -119,7 +123,7 @@ Management commands. Run them on the central host while the central is running. 
 | Command | Description |
 | --- | --- |
 | `ctl suppressions list` | List suppression conditions |
-| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`) |
+| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`). At least one of `--type`, `--user`, `--exe` and `--target` is required; `--agent` alone is an argument error (without `--agent` the condition applies to all agents) |
 | `ctl suppressions delete ID` | Delete a suppression condition |
 
 ### accounts
@@ -127,7 +131,7 @@ Management commands. Run them on the central host while the central is running. 
 | Command | Description |
 | --- | --- |
 | `ctl accounts list` | List accounts |
-| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account (password from standard input) |
+| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account (`--language` defaults to `auto`; password from standard input) |
 | `ctl accounts role ID admin\|viewer` | Change the role |
 | `ctl accounts password ID` | Reset the password (from standard input) |
 | `ctl accounts disable ID` | Disable an account |
@@ -139,7 +143,7 @@ Management commands. Run them on the central host while the central is running. 
 | Command | Description |
 | --- | --- |
 | `ctl certs status` | Show the CA and server certificate status |
-| `ctl history [--category C] [--limit N] [--offset N]` | Show the history. Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config` |
+| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config` |
 
 ## version
 

@@ -17,7 +17,7 @@ mimamori detects operations performed with the privileges of selected OS users o
 ### Requirements
 
 - Supported OS: Amazon Linux 2023, Rocky Linux 9, AlmaLinux 9, Ubuntu 24.04 (x64)
-- auditd running on each host (including the central host)
+- auditd running on each monitored host (on the central host, only for the built-in agent)
 - An SMTP server for notifications
 
 ### Start and stop

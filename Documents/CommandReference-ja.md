@@ -19,7 +19,9 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 ./mimamori central start
 ```
 
-ブラウザで `http://<セントラル>:9080` を開いてログインし、監視ルールの作成とトークンの発行を行います。
+`central start` は SIGTERM または SIGINT を受けるまで前面で動き続けるため、サービス管理の仕組みから実行するか、その端末を開いたままにします。`ctl` のコマンドは別の端末で実行します。
+
+ブラウザで `http://<セントラル>:9080` を開いてログインし、監視ルールの作成とトークンの発行を行います。同じことは `ctl rules create` と `ctl tokens issue` でも行えます。
 
 各監視対象のホストで:
 
@@ -27,6 +29,8 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 ./mimamori agent init --central-host central.example.com
 ./mimamori agent start
 ```
+
+`agent init` はトークン（発行したトークンの値）を尋ねます。`agent start` は SIGTERM または SIGINT を受けるまで前面で動き続けます。
 
 ## central
 
@@ -37,7 +41,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `central start` | セントラルを起動する（ブラウザ画面、エージェント用の API、管理用の API、内蔵エージェント）。SIGTERM または SIGINT で終了する |
 | `central stop [--timeout DURATION]` | 起動中のセントラルを停止し、停止するまで待つ（既定 120s） |
 | `central status` | セントラルが稼働中か、待ち受けとワーカー数を表示する。停止中は終了コード 3 |
-| `central init-admin --name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する（管理者が 1 人もいない場合だけ）。パスワードは端末または標準入力の 1 行目から読む |
+| `central init-admin --name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する（`--language` の既定は `auto`。管理者が 1 人もいない場合だけ）。パスワードは端末または標準入力の 1 行目から読む |
 | `central reset-password --name NAME` | 管理者のパスワードを再設定し、アカウントを有効にして、セッションを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |
 | `central config get NAME` | 1 項目の値を表示する |
@@ -60,7 +64,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 ## ctl
 
-管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します（`ctl rules export` は常に JSON を出力し、`ctl rules edit` はメッセージだけを表示します）。表では時刻をローカル時間で表示し、それ以外の値はそのまま表示します。長い値は 60 文字に省略します（`ctl tokens list` を除く）。`--file` で指定する内容のファイルは JSON のオブジェクトである必要があります。
+管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します（`ctl rules export` は常に JSON を出力し、`ctl rules edit` はメッセージだけを表示します）。表では時刻をローカル時間で表示し、それ以外の値はそのまま表示します。長い値は 60 文字に省略します（`ctl tokens list` を除く）。`--file` で指定する内容のファイルは JSON のオブジェクトである必要があります。同時に指定した他のフラグと組み合わせが合わないフラグは、エラーにならずに無視されます。どれが使われるかは、以下の各コマンドの説明に書いています。
 
 ### agents
 
@@ -73,10 +77,10 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行し、値と、監視対象のホストで実行する `agent init` のコマンドを表示する（`agent_listen` のポートが 9081 以外なら `--central-port` を含む） |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行する（`--valid-days` の既定はセントラルの設定 `token_valid_days` で、0 以下を指定した場合も同じ。3650 を超える値は引数エラー。`--rule-version` は `--rule` と一緒に指定した場合だけ使われ、既定は最新の版）。値と、監視対象のホストで実行する `agent init` のコマンドを表示する（`agent_listen` のポートが 9081 以外なら `--central-port` を含む） |
 | `ctl tokens list` | トークンの一覧（値を省略せずに表示） |
 | `ctl tokens show ID` | トークンを値を省略せずに表示する |
-| `ctl tokens reissue ID [--valid-days N]` | 同じ名前でトークンを再発行する。それまでの値は使えなくなる。表示する `agent init` のコマンドは `--overwrite` を含む |
+| `ctl tokens reissue ID [--valid-days N]` | 同じ名前でトークンを再発行する（`--valid-days` は `tokens issue` と同じ）。それまでの値は使えなくなる。表示する `agent init` のコマンドは `--overwrite` を含む |
 | `ctl tokens unbind ID` | エージェントとの結び付けを解除する |
 | `ctl tokens revoke ID` | トークンをすぐに失効させる |
 
@@ -85,15 +89,15 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl rules list` | 監視ルールの一覧 |
-| `ctl rules show ID [--version V]` | 監視ルールを表示する（最新または指定の版） |
-| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | テンプレートから、JSON ファイル（`-` で標準入力）から、または空で監視ルールを作成する。`--choice` は 1 つで 1 つの値（`FIELD` はカンマを含んでよい） |
-| `ctl rules export ID [--version V]` | 版の内容を JSON で出力する |
+| `ctl rules show ID [--version V]` | 監視ルールを表示する（指定の版。省略または 0 以下なら最新の版） |
+| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | テンプレートから、JSON ファイル（`-` で標準入力）から、または空で監視ルールを作成する。`--choice` は 1 つで 1 つの値（`FIELD` はカンマを含んでよい）。`--template` があると `--file` は無視され、`--choice` は `--template` と一緒に指定した場合だけ使われる |
+| `ctl rules export ID [--version V]` | 版の内容を JSON で出力する（`--version` を省略すると最新の版） |
 | `ctl rules save ID --file F [--comment C] [--description D]` | 編集した内容を新しい版として保存する |
 | `ctl rules edit ID [--comment C] [--editor CMD]` | 最新の版をエディタ（既定 `vi`）で編集し、新しい版として保存する |
 | `ctl rules history ID` | 監視ルールの版の一覧 |
 | `ctl rules diff ID FROM TO` | 2 つの版の差分を表示する |
-| `ctl rules apply ID --agent ID... [--version V]` | 版をエージェントに適用する（同じエージェントを複数回指定しても 1 件として扱う） |
-| `ctl rules to-template ID NAME [--version V] [--description D]` | 版から管理者のテンプレートを作る |
+| `ctl rules apply ID --agent ID... [--version V]` | 版（既定は最新）をエージェントに適用する（同じエージェントを複数回指定しても 1 件として扱う。存在しないエージェントは引数エラー） |
+| `ctl rules to-template ID NAME [--version V] [--description D]` | 版（既定は最新）から管理者のテンプレートを作る |
 | `ctl rules delete ID` | 監視ルールを削除する（適用中は不可） |
 
 ### templates
@@ -102,7 +106,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl templates list` | テンプレートの一覧 |
 | `ctl templates show NAME` | テンプレートを表示する |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | 管理者のテンプレートを作成する（`--from-rule` は `--version` が無ければ最新の版をコピーする） |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | 管理者のテンプレートを作成する（`--from-rule` は `--version` が無ければ最新の版をコピーする。`--version` は `--from-rule` と一緒に指定した場合だけ使われる）。複数の元を指定した場合は、`--from-builtin`、`--from-rule`、`--file` の順で最初のものを使い、他は無視される |
 | `ctl templates update NAME --file F [--description D]` | 管理者のテンプレートを変更する（`--description` を省略すると説明はそのまま） |
 | `ctl templates delete NAME` | 管理者のテンプレートを削除する |
 
@@ -110,7 +114,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は引数エラー |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
 | `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は整数 |
 
@@ -119,7 +123,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl suppressions list` | 抑止条件の一覧 |
-| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | 抑止条件を作成する（空の項目はすべてに一致し、`--exe` と `--target` は `*` を使える） |
+| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | 抑止条件を作成する（空の項目はすべてに一致し、`--exe` と `--target` は `*` を使える）。`--type`、`--user`、`--exe`、`--target` のうち少なくとも 1 つが必要で、`--agent` だけの指定は引数エラー（`--agent` を省略するとすべてのエージェントが対象） |
 | `ctl suppressions delete ID` | 抑止条件を削除する |
 
 ### accounts
@@ -127,7 +131,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl accounts list` | アカウントの一覧 |
-| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する（パスワードは標準入力から） |
+| `ctl accounts create NAME --role admin\|viewer [--language auto\|en\|ja]` | アカウントを作成する（`--language` の既定は `auto`。パスワードは標準入力から） |
 | `ctl accounts role ID admin\|viewer` | 権限区分を変える |
 | `ctl accounts password ID` | パスワードを再設定する（標準入力から） |
 | `ctl accounts disable ID` | アカウントを無効にする |
@@ -139,7 +143,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl certs status` | 独自 CA とサーバー証明書の状態を表示する |
-| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する。区分: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config` |
+| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。区分: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config` |
 
 ## version
 
