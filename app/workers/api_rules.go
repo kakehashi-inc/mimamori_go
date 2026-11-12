@@ -301,7 +301,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		content = merged
 		comment = "expanded from templates: " + strings.Join(in.Templates, ", ")
-	case len(in.Content) > 0 && string(in.Content) != "null":
+	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -435,6 +435,16 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "select at least one agent")
 		return
 	}
+	// An agent given more than once is applied and counted once.
+	seen := map[int64]bool{}
+	ids := in.AgentIDs[:0]
+	for _, id := range in.AgentIDs {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	in.AgentIDs = ids
 	p := principalFrom(r)
 	var names []string
 	for _, id := range in.AgentIDs {
@@ -612,6 +622,12 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		content = &t.Content
 		origin = "from built-in template " + t.Name
 	case in.FromRule != nil:
+		if in.FromRule.Version == 0 {
+			// Without a version the latest one is used, as elsewhere.
+			if rule, err := models.GetRule(c.db, in.FromRule.RuleID); err == nil {
+				in.FromRule.Version = rule.LatestVersion
+			}
+		}
 		v, err := models.GetRuleVersion(c.db, in.FromRule.RuleID, in.FromRule.Version)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "rule version not found")
@@ -624,7 +640,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 		content = parsed
 		origin = fmt.Sprintf("from rule %d version %d", in.FromRule.RuleID, in.FromRule.Version)
-	case len(in.Content) > 0 && string(in.Content) != "null":
+	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -644,7 +660,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Description string          `json:"description"`
+		Description *string         `json:"description"`
 		Content     json.RawMessage `json:"content"`
 	}
 	if err := readJSON(r, &in); err != nil {
@@ -660,7 +676,23 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, strings.Join(errs, "; "))
 		return
 	}
-	if err := models.UpdateTemplate(c.db, name, strings.TrimSpace(in.Description), content.JSON()); err != nil {
+	var desc string
+	if in.Description != nil {
+		desc = strings.TrimSpace(*in.Description)
+	} else {
+		// Without a description the stored one is kept.
+		cur, err := models.GetTemplateByName(c.db, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "template not found")
+				return
+			}
+			c.internalError(w, r, err)
+			return
+		}
+		desc = cur.Description
+	}
+	if err := models.UpdateTemplate(c.db, name, desc, content.JSON()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "template not found")
 			return
@@ -669,7 +701,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistTemplate, "updated", name, "")
-	writeJSON(w, http.StatusOK, templateJSON{Name: name, Description: strings.TrimSpace(in.Description), UpdatedAt: ts(time.Now().Unix()), Content: content})
+	writeJSON(w, http.StatusOK, templateJSON{Name: name, Description: desc, UpdatedAt: ts(time.Now().Unix()), Content: content})
 }
 
 func (c *core) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {

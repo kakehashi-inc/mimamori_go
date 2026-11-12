@@ -60,7 +60,7 @@ Commands for the agent. Run them on each monitored host.
 
 ## ctl
 
-Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON.
+Management commands. Run them on the central host while the central is running. `--json` prints the raw JSON (`ctl rules export` always prints JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object.
 
 ### agents
 
@@ -73,10 +73,10 @@ Management commands. Run them on the central host while the central is running. 
 
 | Command | Description |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token and show its value |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token and show its value with the `agent init` command to run on the monitored host (with `--central-port` when `agent_listen` does not use port 9081) |
 | `ctl tokens list` | List tokens with their values in full |
 | `ctl tokens show ID` | Show a token with its value in full |
-| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name; the previous values stop working |
+| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name; the previous values stop working. The `agent init` command shown includes `--overwrite` |
 | `ctl tokens unbind ID` | Remove the binding to an agent instance |
 | `ctl tokens revoke ID` | Revoke a token immediately |
 
@@ -86,13 +86,13 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | `ctl rules list` | List rules |
 | `ctl rules show ID [--version V]` | Show a rule (latest or given version) |
-| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty |
+| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty. Each `--choice` is one value (`FIELD` may contain commas) |
 | `ctl rules export ID [--version V]` | Print the content of a version as JSON |
 | `ctl rules save ID --file F [--comment C] [--description D]` | Save edited content as a new version |
 | `ctl rules edit ID [--comment C] [--editor CMD]` | Edit the latest version with an editor (default `vi`) and save it as a new version |
 | `ctl rules history ID` | List the versions of a rule |
 | `ctl rules diff ID FROM TO` | Show the difference between two versions |
-| `ctl rules apply ID --agent ID... [--version V]` | Apply a version to agents |
+| `ctl rules apply ID --agent ID... [--version V]` | Apply a version to agents (an agent given more than once counts once) |
 | `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version |
 | `ctl rules delete ID` | Delete a rule (not possible while applied) |
 
@@ -102,17 +102,17 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | `ctl templates list` | List templates |
 | `ctl templates show NAME` | Show a template |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID --version V \| --file F] [--description D]` | Create an administrator template |
-| `ctl templates update NAME --file F [--description D]` | Change an administrator template |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | Create an administrator template (`--from-rule` copies the latest version unless `--version` is given) |
+| `ctl templates update NAME --file F [--description D]` | Change an administrator template (the description is kept when `--description` is omitted) |
 | `ctl templates delete NAME` | Delete an administrator template |
 
 ### detections
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is RFC3339 or `YYYY-MM-DD[THH:MM[:SS]]` (local time); a value that cannot be parsed is an error |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error |
 | `ctl detections show AGENT_ID ID` | Show a detection |
-| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged |
+| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be integers |
 
 ### suppressions
 
@@ -153,9 +153,9 @@ Management commands. Run them on the central host while the central is running. 
 | --- | --- |
 | 0 | Success |
 | 1 | Unspecified error |
-| 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value) |
+| 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value, and values the central refuses, such as a duplicate name or a change to a built-in template) |
 | 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use) and `agent init` or `agent set-central` while the agent is running; for `status`, not running |
-| 4 | Authentication or authorization failure |
+| 4 | Authentication or authorization failure (for `ctl`, `cli.secret` that does not match the running central, or a central certificate that `ca.crt` cannot verify) |
 | 5 | Execution error (external command or the central) |
-| 6 | File or directory I/O error |
+| 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read) |
 | 7 | Timeout |

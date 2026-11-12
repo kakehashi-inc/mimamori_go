@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -404,8 +406,13 @@ func AgentStart(dataDir string) error {
 	return nil
 }
 
-// marshalIndent is a helper for command output.
+// marshalIndent is a helper for command output. Values are printed as they
+// are (& < > are not escaped).
 func marshalIndent(v any) string {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	return string(b)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+	return strings.TrimSuffix(buf.String(), "\n")
 }

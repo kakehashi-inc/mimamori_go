@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -17,12 +18,13 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 )
 
 // CtlCmd groups the management commands. They run on the central host and
 // use the management API over the loopback address.
 type CtlCmd struct {
-	JSON bool `help:"Print raw JSON"`
+	JSON bool `help:"Print raw JSON (rules export always prints JSON; rules edit prints its messages only)"`
 
 	Agents       CtlAgentsCmd       `cmd:"" help:"Agents"`
 	Tokens       CtlTokensCmd       `cmd:"" help:"Tokens"`
@@ -41,6 +43,8 @@ type ctlClient struct {
 	json bool
 	// full prints every cell in full (long text is shortened otherwise).
 	full bool
+	// port is the port of the central's agent_listen.
+	port int
 }
 
 func (c *CtlCmd) client() (*ctlClient, error) {
@@ -69,7 +73,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	caFile := filepath.Join(dir, CABundleFileName)
 	pemData, err := os.ReadFile(caFile)
 	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "CA certificate of the central: %v", err)
+		return nil, NewExitErrorf(ExitFileIO, "cannot read the CA certificate of the central: %v (the central writes it when it starts)", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemData) {
@@ -85,10 +89,10 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	}
 	secret, err := os.ReadFile(filepath.Join(dir, CLISecretFileName))
 	if err != nil {
-		return nil, NewExitErrorf(ExitAuth, "CLI secret of the central: %v (is the central running?)", err)
+		return nil, NewExitErrorf(ExitFileIO, "cannot read the CLI secret of the central: %v (the central writes it each time it starts)", err)
 	}
 	hc.Headers["Authorization"] = "Bearer " + strings.TrimSpace(string(secret))
-	return &ctlClient{http: hc, json: c.JSON}, nil
+	return &ctlClient{http: hc, json: c.JSON, port: portNum}, nil
 }
 
 func (cl *ctlClient) call(method, path string, in any) (any, error) {
@@ -97,16 +101,26 @@ func (cl *ctlClient) call(method, path string, in any) (any, error) {
 		var he *HTTPError
 		if errors.As(err, &he) {
 			code := ExitGeneral
+			msg := he.Error()
 			switch he.Status {
 			case 400, 404, 409:
 				code = ExitArgument
-			case 401, 403:
+			case 403:
+				// The management API returns 403 only when a built-in
+				// template is to be changed or deleted (the CLI has full
+				// authority), so it is an invalid argument like 409.
+				code = ExitArgument
+			case 401:
 				code = ExitAuth
+				msg += " (" + CLISecretFileName + " does not match the running central; the central writes it each time it starts)"
 			}
-			return nil, NewExitError(code, he.Error())
+			return nil, NewExitError(code, msg)
 		}
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			return nil, NewExitError(ExitExec, "the central is not running or not listening on "+cl.http.Address+" (a changed agent_listen takes effect when the central is restarted)")
+		}
+		if IsCertificateError(err) {
+			return nil, NewExitErrorf(ExitAuth, "the certificate of the central cannot be verified with %s (it does not match the central's CA): %v", CABundleFileName, err)
 		}
 		return nil, NewExitError(ExitExec, err.Error())
 	}
@@ -130,7 +144,7 @@ func (cl *ctlClient) show(v any, columns ...string) {
 	case map[string]any:
 		if items, ok := t["items"].([]any); ok {
 			rows = items
-			defer fmt.Printf("(%v total)\n", t["total"])
+			defer fmt.Printf("(%s total)\n", cell("total", t["total"], true))
 		} else {
 			fmt.Println(marshalIndent(v))
 			return
@@ -142,7 +156,7 @@ func (cl *ctlClient) show(v any, columns ...string) {
 		m, _ := r.(map[string]any)
 		var cells []string
 		for _, col := range columns {
-			cells = append(cells, cell(lookup(m, col), cl.full))
+			cells = append(cells, cell(col, lookup(m, col), cl.full))
 		}
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
@@ -166,26 +180,74 @@ func localizeText(s string) string {
 	return rfc3339Re.ReplaceAllStringFunc(s, localTime)
 }
 
+// isTimeKey reports whether a field of the API holds a timestamp.
+func isTimeKey(key string) bool {
+	switch key {
+	case "at", "not_before", "not_after", "locked_until", "switch_after":
+		return true
+	}
+	return strings.HasSuffix(key, "_at") || strings.HasSuffix(key, "ctime")
+}
+
+// localizeField renders a string field for display: timestamps in local
+// time, the history detail (which embeds timestamps) with its timestamps in
+// local time, and every other value unchanged.
+func localizeField(key, s string) string {
+	if i := strings.LastIndex(key, "."); i >= 0 {
+		key = key[i+1:]
+	}
+	switch {
+	case isTimeKey(key):
+		return localTime(s)
+	case key == "detail":
+		return localizeText(s)
+	}
+	return s
+}
+
 // localizeValue converts the timestamps of a decoded JSON value to local
 // time for display (the --json output keeps the API's UTC values).
 func localizeValue(v any) any {
+	return localizeKeyed("", v)
+}
+
+func localizeKeyed(key string, v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, x := range t {
-			out[k] = localizeValue(x)
+			out[k] = localizeKeyed(k, x)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, x := range t {
-			out[i] = localizeValue(x)
+			out[i] = localizeKeyed(key, x)
 		}
 		return out
 	case string:
-		return localizeText(t)
+		return localizeField(key, t)
 	}
 	return v
+}
+
+// formatNumber prints a JSON number; whole numbers never use the exponent
+// form, so identifiers can be passed to other commands as printed.
+func formatNumber(f float64) string {
+	if f == math.Trunc(f) && math.Abs(f) < 1e18 {
+		return strconv.FormatInt(int64(f), 10)
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// shorten cuts a text to at most n characters (never inside a character),
+// marking the cut with "...".
+func shorten(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-3]) + "..."
 }
 
 func lookup(m map[string]any, path string) any {
@@ -200,19 +262,20 @@ func lookup(m map[string]any, path string) any {
 	return cur
 }
 
-func cell(v any, full bool) string {
+// cell renders the value of the column col for a table.
+func cell(col string, v any, full bool) string {
 	switch t := v.(type) {
 	case nil:
 		return "-"
 	case float64:
-		return fmt.Sprintf("%v", t)
+		return formatNumber(t)
 	case string:
 		if t == "" {
 			return "-"
 		}
-		t = localizeText(t)
-		if !full && len(t) > 60 {
-			return t[:57] + "..."
+		t = localizeField(col, t)
+		if !full {
+			return shorten(t, 60)
 		}
 		return t
 	case []any:
@@ -220,6 +283,8 @@ func cell(v any, full bool) string {
 		for _, x := range t {
 			if m, ok := x.(map[string]any); ok {
 				parts = append(parts, fmt.Sprintf("%v", m["display_name"]))
+			} else if f, ok := x.(float64); ok {
+				parts = append(parts, formatNumber(f))
 			} else {
 				parts = append(parts, fmt.Sprint(x))
 			}
@@ -262,6 +327,9 @@ func readJSONFile(path string) (json.RawMessage, error) {
 	}
 	if !json.Valid(data) {
 		return nil, NewExitErrorf(ExitArgument, "%s is not valid JSON", path)
+	}
+	if !IsJSONObject(data) {
+		return nil, NewExitErrorf(ExitArgument, "%s must contain a JSON object", path)
 	}
 	return data, nil
 }
@@ -311,7 +379,7 @@ type CtlTokensShowCmd struct {
 }
 type CtlTokensReissueCmd struct {
 	ID        int64 `arg:""`
-	ValidDays int   `name:"valid-days"`
+	ValidDays int   `name:"valid-days" help:"Validity in days (default: central setting)"`
 }
 type CtlTokensIDCmd struct {
 	ID int64 `arg:""`
@@ -320,16 +388,30 @@ type CtlTokensRevokeCmd struct {
 	ID int64 `arg:""`
 }
 
-func printTokenValue(p *CtlCmd, out any) {
+func printTokenValue(p *CtlCmd, cl *ctlClient, out any, reissued bool) {
 	m, _ := out.(map[string]any)
 	if p.JSON {
 		fmt.Println(marshalIndent(out))
 		return
 	}
 	tok, _ := m["token"].(map[string]any)
-	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell(tok["expires_at"], true), m["value"])
+	fmt.Printf("token name: %v\nexpires:    %v\nvalue:      %v\n", tok["name"], cell("expires_at", tok["expires_at"], true), m["value"])
 	fmt.Println("\nInitialize the agent on the monitored host with the following command and enter the value when asked:")
-	fmt.Printf("  ./%s agent init --central-host <central host>\n", AppName)
+	fmt.Println("  " + agentInitCommand(cl.port, reissued))
+}
+
+// agentInitCommand is the "agent init" command shown after a token is
+// issued or reissued: the port is given when agent_listen does not use the
+// default port, and a reissued value goes to an initialized agent.
+func agentInitCommand(port int, reissued bool) string {
+	s := fmt.Sprintf("./%s agent init --central-host <central host>", AppName)
+	if port != DefaultAgentPort {
+		s += fmt.Sprintf(" --central-port %d", port)
+	}
+	if reissued {
+		s += " --overwrite"
+	}
+	return s
 }
 
 func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {
@@ -351,7 +433,7 @@ func (c *CtlTokensIssueCmd) Run(p *CtlCmd) error {
 	if err != nil {
 		return err
 	}
-	printTokenValue(p, out)
+	printTokenValue(p, cl, out, false)
 	return nil
 }
 func (c *CtlTokensListCmd) Run(p *CtlCmd) error {
@@ -374,7 +456,7 @@ func (c *CtlTokensReissueCmd) Run(p *CtlCmd) error {
 	if err != nil {
 		return err
 	}
-	printTokenValue(p, out)
+	printTokenValue(p, cl, out, true)
 	return nil
 }
 func (c *CtlTokensIDCmd) Run(p *CtlCmd) error {
@@ -408,7 +490,7 @@ type CtlRulesCreateCmd struct {
 	Name        string   `arg:""`
 	Description string   `help:"Description"`
 	Template    []string `help:"Template to expand (repeatable)"`
-	Choice      []string `help:"Conflict choice FIELD=TEMPLATE (repeatable)"`
+	Choice      []string `help:"Conflict choice FIELD=TEMPLATE (repeatable; FIELD may contain commas)" sep:"none"`
 	File        string   `help:"Content JSON file ('-' for standard input)"`
 }
 type CtlRulesExportCmd struct {
@@ -633,14 +715,14 @@ type CtlTemplatesCreateCmd struct {
 	Name        string `arg:""`
 	Description string `help:"Description"`
 	FromBuiltin string `name:"from-builtin" help:"Copy a built-in template"`
-	FromRule    int64  `name:"from-rule" help:"Copy a rule version (with --version)"`
-	Version     int    `help:"Rule version for --from-rule"`
+	FromRule    int64  `name:"from-rule" help:"Copy a rule version (latest unless --version is given)"`
+	Version     int    `help:"Rule version for --from-rule (default: latest)"`
 	File        string `help:"Content JSON file ('-' for standard input)"`
 }
 type CtlTemplatesUpdateCmd struct {
-	Name        string `arg:""`
-	File        string `help:"Content JSON file ('-' for standard input)" required:""`
-	Description string `help:"Description"`
+	Name        string  `arg:""`
+	File        string  `help:"Content JSON file ('-' for standard input)" required:""`
+	Description *string `help:"New description (default: unchanged)"`
 }
 type CtlTemplatesDeleteCmd struct {
 	Name string `arg:""`
@@ -673,7 +755,11 @@ func (c *CtlTemplatesUpdateCmd) Run(p *CtlCmd) error {
 	if err != nil {
 		return err
 	}
-	return runCtl(p, "PUT", "/templates/"+url.PathEscape(c.Name), map[string]any{"description": c.Description, "content": raw})
+	in := map[string]any{"content": raw}
+	if c.Description != nil {
+		in["description"] = *c.Description
+	}
+	return runCtl(p, "PUT", "/templates/"+url.PathEscape(c.Name), in)
 }
 func (c *CtlTemplatesDeleteCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "DELETE", "/templates/"+url.PathEscape(c.Name), nil)
@@ -690,8 +776,8 @@ type CtlDetectionsListCmd struct {
 	Agent        int64  `help:"Agent id"`
 	Category     string `help:"alert or normal" enum:",alert,normal" default:""`
 	Type         string `help:"exec, denied, read, network, writable or exec_file"`
-	From         string `help:"From (RFC3339 or 2006-01-02T15:04)"`
-	To           string `help:"To (RFC3339 or 2006-01-02T15:04)"`
+	From         string `help:"From, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM, YYYY-MM-DD or RFC3339"`
+	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM, YYYY-MM-DD or RFC3339"`
 	Acknowledged string `help:"true or false" enum:",true,false" default:""`
 	Suppressed   string `help:"true or false" enum:",true,false" default:""`
 	Limit        int    `help:"Maximum rows" default:"100"`
@@ -705,12 +791,40 @@ type CtlDetectionsAckCmd struct {
 	Items []string `arg:"" help:"AGENT_ID:ID"`
 }
 
+// ctlTimeLayouts are the forms --from and --to accept besides RFC3339; they
+// are read in the local time zone of the CLI.
+var ctlTimeLayouts = []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02"}
+
+// parseCtlTime reads a --from / --to value and returns it as RFC3339 in UTC.
+func parseCtlTime(flag, s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	for _, layout := range ctlTimeLayouts {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return t.UTC().Format(time.RFC3339), nil
+		}
+	}
+	return "", NewExitErrorf(ExitArgument, "invalid --%s %q: use \"YYYY-MM-DD HH:MM:SS\", \"YYYY-MM-DD HH:MM\", YYYY-MM-DD (local time) or RFC3339", flag, s)
+}
+
 func (c *CtlDetectionsListCmd) Run(p *CtlCmd) error {
+	from, err := parseCtlTime("from", c.From)
+	if err != nil {
+		return err
+	}
+	to, err := parseCtlTime("to", c.To)
+	if err != nil {
+		return err
+	}
 	q := url.Values{}
 	if c.Agent > 0 {
 		q.Set("agent_id", fmt.Sprint(c.Agent))
 	}
-	for k, v := range map[string]string{"category": c.Category, "type": c.Type, "from": c.From, "to": c.To, "acknowledged": c.Acknowledged, "suppressed": c.Suppressed} {
+	for k, v := range map[string]string{"category": c.Category, "type": c.Type, "from": from, "to": to, "acknowledged": c.Acknowledged, "suppressed": c.Suppressed} {
 		if v != "" {
 			q.Set(k, v)
 		}
@@ -725,13 +839,27 @@ func (c *CtlDetectionsShowCmd) Run(p *CtlCmd) error {
 func (c *CtlDetectionsAckCmd) Run(p *CtlCmd) error {
 	var items []map[string]int64
 	for _, s := range c.Items {
-		var a, id int64
-		if _, err := fmt.Sscanf(s, "%d:%d", &a, &id); err != nil {
+		a, id, ok := parseDetectionRef(s)
+		if !ok {
 			return NewExitErrorf(ExitArgument, "expected AGENT_ID:ID, got %q", s)
 		}
 		items = append(items, map[string]int64{"agent_id": a, "id": id})
 	}
 	return runCtl(p, "POST", "/detections/ack", map[string]any{"items": items})
+}
+
+// parseDetectionRef reads AGENT_ID:ID; both parts must be integers.
+func parseDetectionRef(s string) (agent, id int64, ok bool) {
+	as, is, found := strings.Cut(s, ":")
+	if !found {
+		return 0, 0, false
+	}
+	agent, err1 := strconv.ParseInt(as, 10, 64)
+	id, err2 := strconv.ParseInt(is, 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return agent, id, true
 }
 
 // --- suppressions ---

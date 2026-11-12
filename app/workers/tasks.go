@@ -197,8 +197,8 @@ func summarizeDetection(d *models.Detection) string {
 	}
 	if d.Target != "" {
 		t := d.Target
-		if len(t) > 160 {
-			t = t[:160] + "..."
+		if r := []rune(t); len(r) > 160 {
+			t = string(r[:160]) + "..."
 		}
 		parts = append(parts, "target="+t)
 	}

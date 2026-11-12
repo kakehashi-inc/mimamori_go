@@ -60,7 +60,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 ## ctl
 
-管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します。
+管理用のコマンドです。セントラルの稼働中に、セントラルのホストで実行します。`--json` で JSON のまま表示します（`ctl rules export` は常に JSON を出力し、`ctl rules edit` はメッセージだけを表示します）。表では時刻をローカル時間で表示し、それ以外の値はそのまま表示します。長い値は 60 文字に省略します（`ctl tokens list` を除く）。`--file` で指定する内容のファイルは JSON のオブジェクトである必要があります。
 
 ### agents
 
@@ -73,10 +73,10 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行し、値を表示する |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行し、値と、監視対象のホストで実行する `agent init` のコマンドを表示する（`agent_listen` のポートが 9081 以外なら `--central-port` を含む） |
 | `ctl tokens list` | トークンの一覧（値を省略せずに表示） |
 | `ctl tokens show ID` | トークンを値を省略せずに表示する |
-| `ctl tokens reissue ID [--valid-days N]` | 同じ名前でトークンを再発行する。それまでの値は使えなくなる |
+| `ctl tokens reissue ID [--valid-days N]` | 同じ名前でトークンを再発行する。それまでの値は使えなくなる。表示する `agent init` のコマンドは `--overwrite` を含む |
 | `ctl tokens unbind ID` | エージェントとの結び付けを解除する |
 | `ctl tokens revoke ID` | トークンをすぐに失効させる |
 
@@ -86,13 +86,13 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl rules list` | 監視ルールの一覧 |
 | `ctl rules show ID [--version V]` | 監視ルールを表示する（最新または指定の版） |
-| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | テンプレートから、JSON ファイル（`-` で標準入力）から、または空で監視ルールを作成する |
+| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | テンプレートから、JSON ファイル（`-` で標準入力）から、または空で監視ルールを作成する。`--choice` は 1 つで 1 つの値（`FIELD` はカンマを含んでよい） |
 | `ctl rules export ID [--version V]` | 版の内容を JSON で出力する |
 | `ctl rules save ID --file F [--comment C] [--description D]` | 編集した内容を新しい版として保存する |
 | `ctl rules edit ID [--comment C] [--editor CMD]` | 最新の版をエディタ（既定 `vi`）で編集し、新しい版として保存する |
 | `ctl rules history ID` | 監視ルールの版の一覧 |
 | `ctl rules diff ID FROM TO` | 2 つの版の差分を表示する |
-| `ctl rules apply ID --agent ID... [--version V]` | 版をエージェントに適用する |
+| `ctl rules apply ID --agent ID... [--version V]` | 版をエージェントに適用する（同じエージェントを複数回指定しても 1 件として扱う） |
 | `ctl rules to-template ID NAME [--version V] [--description D]` | 版から管理者のテンプレートを作る |
 | `ctl rules delete ID` | 監視ルールを削除する（適用中は不可） |
 
@@ -102,17 +102,17 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `ctl templates list` | テンプレートの一覧 |
 | `ctl templates show NAME` | テンプレートを表示する |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID --version V \| --file F] [--description D]` | 管理者のテンプレートを作成する |
-| `ctl templates update NAME --file F [--description D]` | 管理者のテンプレートを変更する |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | 管理者のテンプレートを作成する（`--from-rule` は `--version` が無ければ最新の版をコピーする） |
+| `ctl templates update NAME --file F [--description D]` | 管理者のテンプレートを変更する（`--description` を省略すると説明はそのまま） |
 | `ctl templates delete NAME` | 管理者のテンプレートを削除する |
 
 ### detections
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` は RFC3339 または `YYYY-MM-DD[THH:MM[:SS]]`（ローカル時間）。解釈できない値はエラー |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は引数エラー |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
-| `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする |
+| `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は整数 |
 
 ### suppressions
 
@@ -153,9 +153,9 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | 0 | 正常 |
 | 1 | 一般エラー |
-| 2 | 引数エラー（不明なコマンドやフラグ、値の不足など、コマンドラインそのものの誤りを含む） |
+| 2 | 引数エラー（不明なコマンドやフラグ、値の不足など、コマンドラインそのものの誤りと、名前の重複や組み込みテンプレートの変更など、セントラルが受け付けない値を含む） |
 | 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent init` と `agent set-central` を含む）。`status` では停止中 |
-| 4 | 認証または権限のエラー |
+| 4 | 認証または権限のエラー（`ctl` では、`cli.secret` が稼働中のセントラルと一致しない場合と、セントラルの証明書を `ca.crt` で検証できない場合） |
 | 5 | 実行エラー（外部コマンドまたはセントラル） |
-| 6 | ファイル I/O エラー |
+| 6 | ファイル I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合を含む） |
 | 7 | タイムアウト |

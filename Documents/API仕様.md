@@ -154,7 +154,7 @@ interface Token {
 | POST | `/rules/merge-preview` | A | `{"templates":["base","nginx"]}` | `MergePreview` |
 | POST | `/rules` | A | `RuleCreate` | `RuleDetail` |
 | PUT | `/rules/{id}` | A | `{"description","content","comment"}` | `RuleDetail`（版が 1 上がる） |
-| POST | `/rules/{id}/apply` | A | `{"version","agent_ids":[1,2]}` | `{"applied":2}` |
+| POST | `/rules/{id}/apply` | A | `{"version","agent_ids":[1,2]}` | `{"applied":2}`（重複した ID は 1 件として扱う） |
 | POST | `/rules/{id}/to-template` | A | `{"version","name","description"}` | `TemplateDetail` |
 | DELETE | `/rules/{id}` | A | - | `{}`（適用中なら 409） |
 | POST | `/rules/validate` | A | `{"content":RuleContent}` | `{"errors":string[]}` |
@@ -198,6 +198,8 @@ interface RuleCreate {
 }
 ```
 
+- `content`（監視ルールの作成と保存、テンプレートの作成と変更、`/rules/validate`）は JSON のオブジェクトである必要があります。`null`、配列、文字列などは 400 です。
+
 - 種類ごとの有効条件（項目を指定しなかった種類は行わない）:
   - 実行: `users` と `exec.category`
   - 拒否された操作: `users` と `denied.category`
@@ -213,8 +215,8 @@ interface RuleCreate {
 | --- | --- | --- | --- | --- |
 | GET | `/templates` | V | - | `TemplateSummary[]` |
 | GET | `/templates/{name}` | V | - | `TemplateDetail` |
-| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"}}` | `TemplateDetail` |
-| PUT | `/templates/{name}` | A | `{"description","content"}` | `TemplateDetail`（組み込みは 403） |
+| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版） |
+| PUT | `/templates/{name}` | A | `{"description"?,"content"}` | `TemplateDetail`（`description` を省略すると現在の説明を保つ。組み込みは 403） |
 | DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403） |
 
 ```ts

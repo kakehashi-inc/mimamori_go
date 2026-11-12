@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // AuditEvent is one parsed audit event (all records with the same serial).
@@ -273,6 +274,10 @@ func decodeSockAddr(h string) (string, bool) {
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	// Cut at most n bytes, never inside a UTF-8 sequence.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

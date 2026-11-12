@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
@@ -321,6 +322,10 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	// Cut at most n bytes, never inside a UTF-8 sequence.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

@@ -2,8 +2,10 @@ package modules
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -100,14 +102,59 @@ type RuleContent struct {
 // ParseRuleContent decodes JSON strictly (unknown fields are rejected) and
 // normalizes the result.
 func ParseRuleContent(data []byte) (*RuleContent, error) {
+	if !IsJSONObject(data) {
+		return nil, fmt.Errorf("invalid rule content: the content must be a JSON object")
+	}
 	var c RuleContent
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("invalid rule content: %w", err)
+		var te *json.UnmarshalTypeError
+		if errors.As(err, &te) {
+			field := te.Field
+			if field == "" {
+				field = "the content"
+			}
+			return nil, fmt.Errorf("invalid rule content: %s must be %s, not %s", field, jsonKindName(te.Type), te.Value)
+		}
+		return nil, fmt.Errorf("invalid rule content: %s", strings.TrimPrefix(err.Error(), "json: "))
 	}
 	c.Normalize()
 	return &c, nil
+}
+
+// IsJSONObject reports whether data holds a JSON object (not null, an array
+// or a scalar value).
+func IsJSONObject(data []byte) bool {
+	t := strings.TrimSpace(string(data))
+	return strings.HasPrefix(t, "{")
+}
+
+// jsonKindName names the JSON form expected for a Go type, for messages
+// that must not expose Go type names.
+func jsonKindName(t reflect.Type) string {
+	if t == nil {
+		return "a valid value"
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		return "an array"
+	case reflect.Struct, reflect.Map:
+		return "an object"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "an integer"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	}
+	return "a valid value"
 }
 
 // JSON returns the canonical indented JSON of the content.
