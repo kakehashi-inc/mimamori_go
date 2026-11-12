@@ -66,7 +66,7 @@ Commands for the agent. Run them on each monitored host.
 
 ## ctl
 
-Management commands. Run them on the central host while the central is running. They connect to the address of `agent_listen` (to `127.0.0.1` when it listens on every address, to `::1` for `::`) and its port, and verify the central's certificate with `ca.crt` of the data directory; the management API answers only connections from the central host itself. `--json` prints the raw JSON (`ctl rules export` and `ctl command-sets export` always print JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
+Management commands. Run them on the central host while the central is running. They connect to the address of `agent_listen` (to `127.0.0.1` for an empty host or `0.0.0.0`, to `::1` for `::`) and its port, and verify the central's certificate with `ca.crt` of the data directory; the management API answers only connections from the central host itself. `--json` prints the raw JSON (`ctl rules export` and `ctl command-sets export` always print JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
 
 ### agents
 
