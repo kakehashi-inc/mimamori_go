@@ -15,6 +15,7 @@ import { useApi } from '../hooks/useApi';
 import type { AgentSummary, Detection } from '../types';
 import { formatDateTime, formatOperator, localInputToRfc3339 } from '../utils/format';
 import { DETECTION_TYPES } from '../utils/ruleContent';
+import { DetectionDetailModal } from './DetectionDetailModal';
 
 // Rows per page and the choices offered.
 const DEFAULT_LIMIT = 100;
@@ -45,6 +46,8 @@ export function DetectionsPage() {
     const [draft, setDraft] = useState<Filters>(applied);
     const [agents, setAgents] = useState<AgentSummary[]>([]);
     const [selected, setSelected] = useState<Set<string>>(new Set());
+    // Detection whose details are shown in the dialog.
+    const [detail, setDetail] = useState<Detection | null>(null);
 
     const queryKey = params.toString();
     const { data, error, loading, reload } = useApi(
@@ -280,7 +283,19 @@ export function DetectionsPage() {
                                             selected={selected}
                                             setSelected={setSelected}
                                         />
-                                        <Td className='whitespace-nowrap'>{formatDateTime(d.last_at)}</Td>
+                                        <Td className='whitespace-nowrap'>
+                                            <button
+                                                type='button'
+                                                onClick={() => setDetail(d)}
+                                                title={t('detections.detail.open')}
+                                                className='inline-flex items-center gap-1 rounded text-accent hover:text-accent-hover hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+                                            >
+                                                <span className='material-icons-outlined text-base' aria-hidden='true'>
+                                                    open_in_full
+                                                </span>
+                                                {formatDateTime(d.last_at)}
+                                            </button>
+                                        </Td>
                                         <Td>
                                             <Link
                                                 to={`/agents/${d.agent_id}`}
@@ -353,6 +368,7 @@ export function DetectionsPage() {
                     />
                 )}
             </div>
+            <DetectionDetailModal detection={detail} onClose={() => setDetail(null)} />
         </>
     );
 }

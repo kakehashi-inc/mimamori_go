@@ -24,7 +24,7 @@ import {
 } from './parts/CommandSetParts';
 import { AckAction, EmptyHead, SelectAllHead, SelectRow, ToSuppressionAction } from './parts/DetectionParts';
 import { AccountHistoryOption, ConfigHistoryOption, NoCentralHostsNotice } from './parts/MiscParts';
-import { CreateRuleAction, RuleActions } from './parts/RuleParts';
+import { CreateRuleAction, RemoveRuleAction, RuleActions } from './parts/RuleParts';
 import { CreateSuppressionAction, DeleteSuppressionAction, SuppressionActionsHead } from './parts/SuppressionParts';
 import { BuiltinTemplateNotice, CreateTemplateAction, TemplateActions, TemplateEditor } from './parts/TemplateParts';
 import { IssueTokenAction, TokenActionsHead, TokenRowActions } from './parts/TokenParts';
@@ -65,6 +65,7 @@ registerExtension({
         'history.categoryOptionsEnd': [ConfigHistoryOption, CommandHistoryOption],
         'guide.notices': [NoCentralHostsNotice],
         'agentDetail.sections': [CommandSetsSection],
+        'agentDetail.ruleActions': [RemoveRuleAction],
         'commandRuns.headMiddle': [RunTriggerHead],
         'commandRuns.rowMiddle': [RunTriggerCell],
         'commandRun.summaryMiddle': [RunTriggerItem],

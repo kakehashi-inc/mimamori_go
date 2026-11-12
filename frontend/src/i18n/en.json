@@ -183,6 +183,15 @@
         "haltActionsNote": "These auditd.conf entries are set to halt or single. The host may stop when the disk runs low. See the setup guide to change them."
     },
     "agentDetail": {
+        "incompleteScans": {
+            "title": "File scans continued in the following checks",
+            "item": "The scan for \"{{kind}}\" reached its limit of {{limit}} entries per check; the rest is scanned in the following checks (this pass started {{started}}).",
+            "resumeAt": "Continues at:",
+            "kind": {
+                "writable": "Writable state",
+                "exec_files": "Executable file"
+            }
+        },
         "title": "Agent details",
         "summary": "Summary",
         "kind": "Kind",
@@ -265,7 +274,22 @@
         "target": "Target",
         "count": "Count",
         "file": "File",
-        "ackState": "Ack state"
+        "ackState": "Ack state",
+        "detail": {
+            "open": "Show details",
+            "title": "Detection details",
+            "id": "ID (agent:detection)",
+            "fileMode": "Mode",
+            "fileOwner": "Owner",
+            "fileCtime": "Changed (ctime)",
+            "suppressionId": "Suppression condition #{{id}}",
+            "notifyState": "Notification",
+            "notify": {
+                "pending": "Waiting to be notified",
+                "sent": "Notified",
+                "skipped": "Not notified"
+            }
+        }
     },
     "suppressions": {
         "title": "Suppressions",

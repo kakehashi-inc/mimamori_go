@@ -105,7 +105,7 @@
         "none": "未適用",
         "pending": "適用待ち",
         "ok": "適用済み",
-        "warning": "警告あり",
+        "warning": "注意あり",
         "error": "エラー"
     },
     "category": {
@@ -183,6 +183,15 @@
         "haltActionsNote": "auditd.conf の次の項目が halt または single です。ディスクの残量不足などでホストが停止するおそれがあります。導入の案内を参照して変更してください。"
     },
     "agentDetail": {
+        "incompleteScans": {
+            "title": "次回以降の確認に続くファイルの走査",
+            "item": "「{{kind}}」の走査が 1 回の確認の上限（{{limit}} 件）に達しました。残りは次回以降の確認で走査します（この 1 巡の開始: {{started}}）。",
+            "resumeAt": "続きの位置:",
+            "kind": {
+                "writable": "書き込み可能な状態",
+                "exec_files": "実行されるファイル"
+            }
+        },
         "title": "エージェントの詳細",
         "summary": "概要",
         "kind": "種類",
@@ -207,7 +216,7 @@
         "applyVersion": "適用した版",
         "applyAt": "適用した日時",
         "applyMessage": "メッセージ",
-        "applyWarnings": "適用時の警告",
+        "applyWarnings": "適用時の注意",
         "hostInfo": "ホストの情報",
         "noHostInfo": "エージェントからホストの情報がまだ報告されていません。",
         "collectedAt": "収集した日時",
@@ -265,7 +274,22 @@
         "target": "対象",
         "count": "回数",
         "file": "ファイル",
-        "ackState": "確認の状態"
+        "ackState": "確認の状態",
+        "detail": {
+            "open": "詳細を表示",
+            "title": "検知の詳細",
+            "id": "ID（エージェント:検知）",
+            "fileMode": "パーミッション",
+            "fileOwner": "所有者",
+            "fileCtime": "変更日時（ctime）",
+            "suppressionId": "抑止条件 #{{id}}",
+            "notifyState": "通知",
+            "notify": {
+                "pending": "通知待ち",
+                "sent": "通知済み",
+                "skipped": "通知なし"
+            }
+        }
     },
     "suppressions": {
         "title": "抑止条件",
@@ -294,7 +318,7 @@
     "ruleEditor": {
         "general": "共通",
         "ifMissing": "存在しない場合",
-        "ifMissingWarn": "警告する",
+        "ifMissingWarn": "注意を報告する",
         "unspecified": "指定なし",
         "excludeTrue": "対象外にする（cron も含む）",
         "excludeFalse": "対象にする"

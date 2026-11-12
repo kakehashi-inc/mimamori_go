@@ -237,6 +237,10 @@ export function listDetections(q: DetectionQuery): Promise<Paged<Detection>> {
     return request<Paged<Detection>>(`/detections${query({ ...q })}`);
 }
 
+export function getDetection(agentId: number, id: number): Promise<Detection> {
+    return request<Detection>(`/detections/${agentId}/${id}`);
+}
+
 // --- Suppressions ---
 
 export function listSuppressions(): Promise<Suppression[]> {

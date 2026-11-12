@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { DetectionType, LegitLocation, RuleContent } from '../../types';
 import { enabledTypes, normalizeRuleContent } from '../../utils/ruleContent';
@@ -7,15 +8,18 @@ import { Button } from '../../components/Button';
 import { inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
 import { CategorySelect, CommaListInput, ElementListEditor, RemoveButton, StringListEditor } from './ListEditors';
 import { Tabs } from '../../components/Tabs';
+import { ruleContentProblems, type ContentProblem } from './ruleContentCheck';
 
 interface RuleContentEditorProps {
     value: RuleContent;
     onChange: (v: RuleContent) => void;
     disabled?: boolean;
     /**
-     * Called with true while the JSON tab holds text that does not parse, and
-     * with false once it parses again or the tab is left. While it is invalid,
-     * `value` is the last valid content, not what the tab shows.
+     * Called with true while the JSON tab holds text that is not valid rule
+     * content (it does not parse, or it has unknown keys, values of the wrong
+     * type or unknown categories), and with false once it is valid again.
+     * While it is invalid, `value` is the last valid content, not what the
+     * tab shows, and the tab cannot be left.
      */
     onJsonInvalidChange?: (invalid: boolean) => void;
 }
@@ -24,14 +28,16 @@ interface RuleContentEditorProps {
 export function RuleContentEditor({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<'form' | 'json'>('form');
+    // Invalid text of the JSON tab is kept until it is corrected: leaving the
+    // tab would drop it silently.
+    const [jsonInvalid, setJsonInvalid] = useState(false);
     return (
         <div className='flex flex-col gap-4'>
             <Tabs
                 value={tab}
                 onChange={v => {
+                    if (jsonInvalid) return;
                     setTab(v);
-                    // Leaving the JSON tab drops its text; the form shows the last valid content.
-                    onJsonInvalidChange?.(false);
                 }}
                 items={[
                     { value: 'form', label: t('ruleEditor.tabForm'), icon: 'tune' },
@@ -45,7 +51,10 @@ export function RuleContentEditor({ value, onChange, disabled, onJsonInvalidChan
                     value={value}
                     onChange={onChange}
                     disabled={disabled}
-                    onJsonInvalidChange={onJsonInvalidChange}
+                    onJsonInvalidChange={invalid => {
+                        setJsonInvalid(invalid);
+                        onJsonInvalidChange?.(invalid);
+                    }}
                 />
             )}
         </div>
@@ -288,6 +297,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                                         onChange={category => setLegit(i, { category })}
                                         disabled={disabled}
                                         aria-label={t('rule.category')}
+                                        required
                                     />
                                     <RemoveButton
                                         disabled={disabled}
@@ -312,7 +322,11 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                                     set({
                                         exec_files: {
                                             ...c.exec_files,
-                                            legit: [...c.exec_files.legit, { path: '', extensions: [], category: '' }],
+                                            // A legitimate location needs a category; normal is the usual one.
+                                            legit: [
+                                                ...c.exec_files.legit,
+                                                { path: '', extensions: [], category: 'normal' },
+                                            ],
                                         },
                                     })
                                 }
@@ -364,10 +378,18 @@ function NumberInput({
     );
 }
 
+/** Text of one problem found by ruleContentProblems. */
+function problemText(t: TFunction, p: ContentProblem): string {
+    const path = p.path || t('ruleEditor.jsonRoot');
+    if (p.problem === 'unknown') return t('ruleEditor.jsonUnknownKey', { path });
+    return t('ruleEditor.jsonWrongValue', { path, expected: t(`ruleEditor.jsonExpected.${p.expected}`) });
+}
+
 function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
     const { t } = useTranslation();
     const [text, setText] = useState(() => JSON.stringify(value, null, 2));
     const [parseError, setParseError] = useState<string | null>(null);
+    const [problems, setProblems] = useState<ContentProblem[]>([]);
 
     // Re-render the text when the content changes from outside while it parses cleanly.
     useEffect(() => {
@@ -381,6 +403,29 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
         });
     }, [value]);
 
+    function change(next: string) {
+        setText(next);
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(next);
+        } catch (e) {
+            setParseError(e instanceof Error ? e.message : String(e));
+            setProblems([]);
+            onJsonInvalidChange?.(true);
+            return;
+        }
+        setParseError(null);
+        // The text is taken only as written: anything the conversion would drop blocks it.
+        const found = ruleContentProblems(parsed);
+        setProblems(found);
+        if (found.length > 0) {
+            onJsonInvalidChange?.(true);
+            return;
+        }
+        onChange(normalizeRuleContent(parsed));
+        onJsonInvalidChange?.(false);
+    }
+
     return (
         <div className='flex flex-col gap-2'>
             <textarea
@@ -388,23 +433,26 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
                 value={text}
                 disabled={disabled}
                 spellCheck={false}
-                onChange={ev => {
-                    setText(ev.target.value);
-                    try {
-                        onChange(normalizeRuleContent(JSON.parse(ev.target.value)));
-                        setParseError(null);
-                        onJsonInvalidChange?.(false);
-                    } catch (e) {
-                        setParseError(e instanceof Error ? e.message : String(e));
-                        onJsonInvalidChange?.(true);
-                    }
-                }}
+                onChange={ev => change(ev.target.value)}
                 aria-label={t('ruleEditor.tabJson')}
+                aria-invalid={parseError !== null || problems.length > 0}
             />
             {parseError ? (
                 <p className='text-xs text-danger'>{t('ruleEditor.jsonError', { message: parseError })}</p>
+            ) : problems.length > 0 ? (
+                <div className='flex flex-col gap-1 text-xs text-danger' role='alert'>
+                    <p>{t('ruleEditor.jsonProblems')}</p>
+                    <ul className='list-disc pl-5 break-words'>
+                        {problems.map((p, i) => (
+                            <li key={i}>{problemText(t, p)}</li>
+                        ))}
+                    </ul>
+                </div>
             ) : (
                 <p className='text-xs text-muted'>{t('ruleEditor.jsonHint')}</p>
+            )}
+            {(parseError || problems.length > 0) && (
+                <p className='text-xs text-danger'>{t('ruleEditor.jsonBlocked')}</p>
             )}
         </div>
     );

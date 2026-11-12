@@ -86,6 +86,20 @@
         "legitHint": "Path (directory names relative to the scan base, e.g. app/cache), extensions (comma separated, at least one) and category (required).",
         "jsonHint": "Edit the JSON directly. Changes reach the form as soon as the JSON is valid.",
         "jsonError": "Invalid JSON: {{message}}",
+        "jsonProblems": "These parts are not valid rule content. They would be lost, so the JSON is not taken over:",
+        "jsonUnknownKey": "{{path}}: unknown key",
+        "jsonWrongValue": "{{path}}: must be {{expected}}",
+        "jsonRoot": "(the whole content)",
+        "jsonExpected": {
+            "object": "an object",
+            "list": "a list",
+            "string": "a string",
+            "int": "a whole number",
+            "bool": "true, false or null",
+            "category": "\"alert\", \"normal\" or \"\" (unspecified)",
+            "ifMissing": "\"ignore\" or \"warn\""
+        },
+        "jsonBlocked": "Saving and switching to the form are not possible until the JSON is corrected.",
         "validate": "Validate",
         "valid": "The content is valid.",
         "invalid": "The content has errors"
@@ -99,6 +113,11 @@
         "applyAgents": "Agents",
         "applyNoAgents": "Select at least one agent.",
         "applied": "Applied to {{count}} agent(s)",
+        "applyBuiltinDisabled": "The built-in agent (central) is not listed because it is disabled in the configuration.",
+        "unassign": "Remove rule",
+        "unassignTitle": "Remove the monitoring rule",
+        "unassignConfirm": "Take the monitoring rule \"{{rule}}\" away from {{agent}}? At its next check the agent removes the audit rules it loaded and its rules file, and reports that nothing is applied. The host is not monitored until a rule is applied again.",
+        "unassigned": "The rule was removed. The agent removes its audit rules at its next check.",
         "toTemplate": "Save as template",
         "toTemplateTitle": "Save as template",
         "deleteTitle": "Delete rule",
@@ -286,7 +305,7 @@
             },
             "smtp_host": {
                 "label": "SMTP server",
-                "hint": "While empty, no notifications are sent and no verification codes are used (login, e-mail address changes and changes of command sets). Notifications are sent only when the server and sender are set and there is at least one recipient (accounts chosen as notification recipients or additional recipients)."
+                "hint": "While empty, no notifications are sent and no verification codes are used (login, e-mail address changes and changes of command sets). Notifications are sent only when the server and sender are set and at least one account is chosen as a notification recipient."
             },
             "smtp_port": {
                 "label": "Port",
@@ -312,10 +331,6 @@
                 "label": "Sender",
                 "hint": "Sender address. Required for notifications and verification codes."
             },
-            "smtp_to": {
-                "label": "Additional recipients",
-                "hint": "Additional recipient addresses of the notification mails, such as a shared mailbox, besides the accounts chosen as notification recipients."
-            },
             "smtp_timeout_sec": {
                 "label": "Timeout (seconds)",
                 "hint": "Timeout of the SMTP connection."
@@ -327,9 +342,9 @@
         },
         "recipients": {
             "title": "Notification recipients",
-            "hint": "Choose the accounts that receive the notification mails. The addresses of the setting \"Additional recipients\" below also receive them.",
+            "hint": "Choose the accounts that receive the notification mails. The mails are sent to the e-mail addresses of the chosen accounts.",
             "count": "Accounts that receive the notification mails: {{count}}",
-            "none": "No account receives the notification mails. Mails are sent only to the addresses of \"Additional recipients\", if any.",
+            "none": "No account receives the notification mails, so no notification mails are sent.",
             "disabledTitle": "Disabled accounts keep the choice but receive nothing while they are disabled.",
             "unsaved": "Not saved"
         }

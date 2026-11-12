@@ -73,15 +73,22 @@ export function Header() {
     return (
         <header className='sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur'>
             <div className='mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5'>
+                {/* Below the sm width only the icon is shown, to leave room for the account name. */}
                 <Link
                     to='/'
+                    aria-label={t('app.title')}
+                    title={t('app.title')}
                     className='flex shrink-0 items-center gap-2 rounded text-base font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
                 >
                     <span className='material-icons-outlined text-xl text-accent' aria-hidden='true'>
                         visibility
                     </span>
-                    {t('app.title')}
-                    {health && <span className='text-xs font-normal text-muted'>{formatVersion(health.version)}</span>}
+                    <span className='hidden sm:inline'>{t('app.title')}</span>
+                    {health && (
+                        <span className='hidden text-xs font-normal text-muted sm:inline'>
+                            {formatVersion(health.version)}
+                        </span>
+                    )}
                 </Link>
                 <div className='flex min-w-0 items-center gap-1 sm:gap-2'>
                     {me && <AccountMenu displayName={me.display_name} role={me.role} />}
@@ -151,7 +158,7 @@ function AccountMenu({ displayName, role }: { displayName: string; role: Role })
                 <span className='material-icons-outlined shrink-0 text-lg text-muted' aria-hidden='true'>
                     account_circle
                 </span>
-                <span className='max-w-32 min-w-0 truncate' title={displayName}>
+                <span className='max-w-44 min-w-0 truncate sm:max-w-32' title={displayName}>
                     {displayName}
                 </span>
                 <span className='hidden shrink-0 sm:inline'>

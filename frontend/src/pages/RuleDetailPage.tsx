@@ -6,6 +6,7 @@ import { AppliedAgentsList } from '../components/AppliedAgentsList';
 import { Button } from '../components/Button';
 import { DiffView } from '../components/DiffView';
 import { inputSmAutoClass } from '../components/FormControls';
+import { NotFoundPage } from '../components/NotFoundPage';
 import { Card, PageHeader } from '../components/PageHeader';
 import { RuleContentView } from '../components/RuleContentView';
 import { Slot } from '../components/Slot';
@@ -24,8 +25,15 @@ export function sortedVersions(rule: RuleDetail): RuleVersionInfo[] {
 }
 
 export function RuleDetailPage() {
-    const { t } = useTranslation();
     const { id = '' } = useParams();
+    // Rule IDs are positive numbers; any other path below /rules (such as
+    // /rules/new for an account without the page to create rules) does not exist.
+    if (!/^[1-9][0-9]*$/.test(id)) return <NotFoundPage />;
+    return <RuleDetailView id={id} />;
+}
+
+function RuleDetailView({ id }: { id: string }) {
+    const { t } = useTranslation();
     const { data: rule, error, loading, reload } = useApi(() => getRule(id), [id]);
     const [tab, setTab] = useState<Tab>('content');
     const [viewVersion, setViewVersion] = useState(0);

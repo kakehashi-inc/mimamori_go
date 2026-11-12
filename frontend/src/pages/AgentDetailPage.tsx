@@ -5,12 +5,12 @@ import { getAgent } from '../api/client';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
-import { Slot } from '../components/Slot';
+import { Slot, useSlotFilled } from '../components/Slot';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
-import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo } from '../types';
+import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo, IncompleteScan } from '../types';
 import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
 import { AgentCommandResults } from './AgentCommandResults';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
@@ -57,15 +57,16 @@ export function AgentDetailPage() {
                 }
             />
             <ErrorAlert error={error} onRetry={reload} />
-            {loading && !agent ? <Loading /> : agent && <AgentDetailBody agent={agent} />}
+            {loading && !agent ? <Loading /> : agent && <AgentDetailBody agent={agent} reloadAgent={reload} />}
         </>
     );
 }
 
-function AgentDetailBody({ agent }: { agent: AgentDetail }) {
+function AgentDetailBody({ agent, reloadAgent }: { agent: AgentDetail; reloadAgent: () => void }) {
     const { t } = useTranslation();
     // Changed by the parts of the slot below to show their changes in the sections above.
     const [refresh, setRefresh] = useState(0);
+    const ruleActions = useSlotFilled('agentDetail.ruleActions');
     const host = agent.host_info;
     const auditd = agent.auditd ?? host?.auditd ?? null;
 
@@ -148,6 +149,11 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                     <div className='mt-4 border-t border-line pt-4'>
                         <ApplyResultView apply={agent.apply} />
                     </div>
+                    {ruleActions && (
+                        <div className='mt-4 flex flex-wrap justify-end gap-2 border-t border-line pt-4'>
+                            <Slot name='agentDetail.ruleActions' agent={agent} reload={reloadAgent} />
+                        </div>
+                    )}
                 </Card>
             </div>
 
@@ -222,6 +228,7 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
     const { t } = useTranslation();
     const dirs = host.directories ?? [];
     const cas = host.trusted_cas ?? [];
+    const incomplete = host.incomplete_scans ?? [];
 
     return (
         <>
@@ -251,6 +258,8 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
                 </Card>
                 {auditd && <AuditdView auditd={auditd} />}
             </div>
+
+            {incomplete.length > 0 && <IncompleteScansView scans={incomplete} />}
 
             <Card title={t('agentDetail.directories')}>
                 {host.directories_truncated && (
@@ -307,6 +316,28 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
                 )}
             </Card>
         </>
+    );
+}
+
+/** File scans that reached their entry limit and continue in the following checks. */
+function IncompleteScansView({ scans }: { scans: IncompleteScan[] }) {
+    const { t } = useTranslation();
+    return (
+        <Alert tone='info' title={t('agentDetail.incompleteScans.title')}>
+            <ul className='flex flex-col gap-1'>
+                {scans.map(s => (
+                    <li key={s.kind} className='break-words'>
+                        {t('agentDetail.incompleteScans.item', {
+                            kind: t(`agentDetail.incompleteScans.kind.${s.kind}`, { defaultValue: s.kind }),
+                            limit: s.limit.toLocaleString(),
+                            started: formatDateTime(s.started_at),
+                        })}{' '}
+                        <span className='text-muted'>{t('agentDetail.incompleteScans.resumeAt')}</span>{' '}
+                        <code className='font-mono text-xs break-all'>{s.resume_at || '-'}</code>
+                    </li>
+                ))}
+            </ul>
+        </Alert>
     );
 }
 

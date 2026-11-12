@@ -9,12 +9,26 @@ import { Modal } from '../../components/Modal';
 import { Alert, EmptyState, Loading } from '../../components/StateViews';
 import { useToast } from '../../context/ToastContext';
 import { sortedVersions, VersionSelect } from '../../pages/RuleDetailPage';
-import type { AgentSummary, RuleDetail } from '../../types';
+import type { AgentDetail, AgentSummary, CentralConfig, RuleDetail } from '../../types';
 import { errorMessage } from '../../utils/format';
-import { applyRule, deleteRule, ruleToTemplate } from '../api';
+import { applyRule, deleteRule, getConfig, ruleToTemplate, unassignRule } from '../api';
 
-// Parts placed in the rule list and the rule page (slots rules.* and
-// ruleDetail.*).
+// Parts placed in the rule list, the rule page and the agent page (slots
+// rules.*, ruleDetail.* and agentDetail.ruleActions).
+
+/**
+ * Whether the built-in agent is disabled in the configuration the central
+ * runs with: a restart item that is pending runs with the other value.
+ * Without the configuration, a built-in agent that does not run is taken as
+ * disabled.
+ */
+function builtinDisabled(config: CentralConfig | null, agent: AgentSummary): boolean {
+    if (agent.kind !== 'builtin') return false;
+    const item = config?.items.find(i => i.name === 'builtin_agent');
+    if (!item) return agent.builtin_running === false;
+    const enabled = item.value === 'true';
+    return item.pending ? enabled : !enabled;
+}
 
 /** Link to the rule creation page. */
 export function CreateRuleAction() {
@@ -104,23 +118,38 @@ function ApplyRuleModal({
     const { t } = useTranslation();
     const [version, setVersion] = useState(rule.latest_version);
     const [agents, setAgents] = useState<AgentSummary[] | null>(null);
+    // The built-in agent is not offered while it is disabled (it would never apply the rule).
+    const [hiddenBuiltin, setHiddenBuiltin] = useState(false);
     const [selected, setSelected] = useState<Set<number>>(new Set());
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!open) return;
+        let active = true;
         setVersion(rule.latest_version);
         setError(null);
         setAgents(null);
-        // Agents already using this rule are preselected so they can be upgraded in one step.
-        setSelected(new Set((rule.applied_agents ?? []).map(a => a.agent_id)));
-        listAgents()
-            .then(setAgents)
+        setHiddenBuiltin(false);
+        setSelected(new Set());
+        Promise.all([listAgents(), getConfig().catch(() => null)])
+            .then(([list, config]) => {
+                if (!active) return;
+                const offered = list.filter(a => !builtinDisabled(config, a));
+                const ids = new Set(offered.map(a => a.id));
+                setAgents(offered);
+                setHiddenBuiltin(offered.length < list.length);
+                // Agents already using this rule are preselected so they can be upgraded in one step.
+                setSelected(new Set((rule.applied_agents ?? []).map(a => a.agent_id).filter(id => ids.has(id))));
+            })
             .catch(e => {
+                if (!active) return;
                 setAgents([]);
                 setError(errorMessage(t, e));
             });
+        return () => {
+            active = false;
+        };
     }, [open, rule, t]);
 
     function toggle(id: number) {
@@ -207,10 +236,40 @@ function ApplyRuleModal({
                             ))}
                         </ul>
                     )}
+                    {hiddenBuiltin && <p className='text-xs text-muted'>{t('rules.applyBuiltinDisabled')}</p>}
                 </div>
                 {error && <Alert tone='danger'>{error}</Alert>}
             </form>
         </Modal>
+    );
+}
+
+/** Button on the agent page that takes the rule away from the agent, with its confirmation. */
+export function RemoveRuleAction({ agent, reload }: { agent: AgentDetail; reload: () => void }) {
+    const { t } = useTranslation();
+    const { showToast } = useToast();
+    const [open, setOpen] = useState(false);
+    if (!agent.rule) return null;
+    const ruleName = agent.rule.name;
+    return (
+        <>
+            <Button icon='link_off' variant='danger' onClick={() => setOpen(true)}>
+                {t('rules.unassign')}
+            </Button>
+            <ConfirmDialog
+                open={open}
+                title={t('rules.unassignTitle')}
+                message={t('rules.unassignConfirm', { rule: ruleName, agent: agent.display_name })}
+                confirmLabel={t('rules.unassign')}
+                danger
+                onClose={() => setOpen(false)}
+                onConfirm={async () => {
+                    await unassignRule([agent.id]);
+                    showToast(t('rules.unassigned'));
+                    reload();
+                }}
+            />
+        </>
     );
 }
 

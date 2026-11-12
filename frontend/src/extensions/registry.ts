@@ -65,6 +65,8 @@ export interface SlotProps {
     'history.categoryOptionsEnd': NoProps;
     'guide.notices': { guide: Guide };
     'agentDetail.sections': { agent: AgentDetail; reload: () => void };
+    // Actions on the rule of the agent, in the card of the rule and application.
+    'agentDetail.ruleActions': { agent: AgentDetail; reload: () => void };
     'commandRuns.headMiddle': NoProps;
     'commandRuns.rowMiddle': { run: CommandRun };
     // Parts of these two slots render DescriptionItem (components/PageHeader).

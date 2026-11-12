@@ -8,12 +8,15 @@ import { Slot } from '../components/Slot';
 import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
+import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { formatDateTime, formatOperator } from '../utils/format';
 
 export function TokensPage() {
     const { t } = useTranslation();
     const { data, error, loading, reload } = useApi(listTokens, []);
+    // Viewers receive no token value (the server leaves the key out).
+    const { isAdmin } = useAuth();
 
     return (
         <>
@@ -40,7 +43,7 @@ export function TokensPage() {
                         <Table>
                             <THead>
                                 <Th>{t('tokens.name')}</Th>
-                                <Th>{t('tokens.value')}</Th>
+                                {isAdmin && <Th>{t('tokens.value')}</Th>}
                                 <Th>{t('tokens.status')}</Th>
                                 <Th>{t('tokens.expiresAt')}</Th>
                                 <Th>{t('tokens.instanceId')}</Th>
@@ -62,7 +65,9 @@ export function TokensPage() {
                                                 </Link>
                                             )}
                                         </Td>
-                                        <Td className='font-mono text-xs whitespace-nowrap'>{tk.value || '-'}</Td>
+                                        {isAdmin && (
+                                            <Td className='font-mono text-xs whitespace-nowrap'>{tk.value || '-'}</Td>
+                                        )}
                                         <Td>
                                             <div className='flex flex-col items-start gap-1'>
                                                 <TokenStatusBadge status={tk.status} />

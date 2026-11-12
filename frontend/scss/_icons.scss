@@ -2,7 +2,6 @@
 %material-icon-base {
   font-weight: normal;
   font-style: normal;
-  font-size: 24px;
   line-height: 1;
   letter-spacing: normal;
   text-transform: none;
@@ -39,4 +38,19 @@
 .material-icons-two-tone {
   font-family: "Material Icons Two Tone";
   @extend %material-icon-base;
+}
+
+// Default size of the icons. It is in Tailwind's components layer, below the
+// utilities layer, so that a size class written on an icon (text-sm,
+// text-base, text-xl, ...) takes precedence; icons without one stay 24px.
+// The other declarations above are outside the layers and keep line-height 1
+// whatever size class is used.
+@layer components {
+  .material-icons,
+  .material-icons-outlined,
+  .material-icons-round,
+  .material-icons-sharp,
+  .material-icons-two-tone {
+    font-size: 24px;
+  }
 }

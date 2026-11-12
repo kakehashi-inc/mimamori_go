@@ -135,6 +135,19 @@ export interface HostInfo {
     rule: { id: number; version: number } | null;
     last_apply: ApplyResult;
     trusted_cas: { fingerprint: string; not_after: string }[] | null;
+    /** File scans whose pass is split over several checks and not complete yet. */
+    incomplete_scans?: IncompleteScan[] | null;
+}
+
+/** A file scan that reached its entry limit; the rest is scanned in the following checks. */
+export interface IncompleteScan {
+    kind: 'writable' | 'exec_files';
+    /** Path where the next check continues. */
+    resume_at: string;
+    /** Entries scanned per check. */
+    limit: number;
+    /** Start of the split pass. */
+    started_at: string | null;
 }
 
 export interface AgentDetail extends AgentSummary {
@@ -148,8 +161,11 @@ export interface AgentDetail extends AgentSummary {
 export interface Token {
     id: number;
     name: string;
-    /** Shortened value ("mmr_AbCd...WxYz"); the full value is only in the issue/reissue response. */
-    value: string;
+    /**
+     * Shortened value ("mmr_AbCd...WxYz"); the full value is only in the
+     * issue/reissue response. Absent for viewers.
+     */
+    value?: string;
     status: TokenStatus;
     expires_at: string;
     created_at: string;
@@ -312,7 +328,8 @@ export interface Detection {
     count: number;
     first_at: string;
     last_at: string;
-    file: { ctime: string; owner: string; mode: string } | null;
+    /** writable and exec_file only; ctime is null when unknown. */
+    file: { ctime: string | null; owner: string; mode: string } | null;
     suppressed: boolean;
     suppression_id: number | null;
     acknowledged_at: string | null;

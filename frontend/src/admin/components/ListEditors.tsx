@@ -154,6 +154,7 @@ export function CategorySelect({
     disabled,
     id,
     'aria-label': ariaLabel,
+    required,
 }: {
     value: Category;
     onChange: (v: Category) => void;
@@ -161,6 +162,8 @@ export function CategorySelect({
     id?: string;
     /** Accessible name when no <label> points at the select. */
     'aria-label'?: string;
+    /** "Not specified" cannot be chosen (it is shown, disabled, only while it is the value). */
+    required?: boolean;
 }) {
     const { t } = useTranslation();
     return (
@@ -172,7 +175,11 @@ export function CategorySelect({
             disabled={disabled}
             onChange={ev => onChange(ev.target.value as Category)}
         >
-            <option value=''>{t('category.none')}</option>
+            {(!required || value === '') && (
+                <option value='' disabled={required}>
+                    {t('category.none')}
+                </option>
+            )}
             <option value='alert'>{t('category.alert')}</option>
             <option value='normal'>{t('category.normal')}</option>
         </select>

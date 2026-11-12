@@ -156,6 +156,8 @@ function IssuedTokenHelp({ issued, reissued }: { issued: TokenWithValue; reissue
     // Only names in the server certificate work for --central-host; without any, show a placeholder.
     const hosts = guide?.central_hosts?.length ? guide.central_hosts : ['<host>'];
     const port = guide?.central_port || '<port>';
+    // The fingerprint of the guide page; the option is left out while it is not known.
+    const fp = guide?.ca_fingerprint || undefined;
     return (
         <div className='flex flex-col gap-4'>
             <Alert tone='warning'>{t('tokens.fullValueNote')}</Alert>
@@ -168,7 +170,7 @@ function IssuedTokenHelp({ issued, reissued }: { issued: TokenWithValue; reissue
                 <p className='text-sm font-medium'>{t('tokens.initCommand')}</p>
                 <p className='text-xs text-muted'>{t('tokens.initCommandHint')}</p>
                 {hosts.map(host => (
-                    <CodeBlock key={host} code={agentInitCommand(host, port, undefined, reissued)} />
+                    <CodeBlock key={host} code={agentInitCommand(host, port, fp, reissued)} />
                 ))}
                 <p className='text-xs text-muted'>
                     {t('tokens.initThenStart')} <code className='font-mono'>./mimamori agent start</code>

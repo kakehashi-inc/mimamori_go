@@ -42,7 +42,6 @@ const GROUPS: { key: GroupKey; items: string[] }[] = [
             'smtp.username',
             'smtp.password',
             'smtp.from',
-            'smtp.to',
             'smtp.timeout_sec',
             'smtp.helo_name',
         ],

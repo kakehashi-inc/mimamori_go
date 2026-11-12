@@ -58,6 +58,11 @@ export function applyRule(id: number | string, version: number, agentIds: number
     return send('POST', `/rules/${encodeURIComponent(id)}/apply`, { version, agent_ids: agentIds });
 }
 
+/** Takes the rule away from agents; agents without a rule are not counted. */
+export function unassignRule(agentIds: number[]): Promise<{ unassigned: number }> {
+    return send('POST', '/rules/unassign', { agent_ids: agentIds });
+}
+
 export function ruleToTemplate(
     id: number | string,
     body: { version: number; name: string; description: string }
