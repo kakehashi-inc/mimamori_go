@@ -110,7 +110,7 @@ Management commands. Run them on the central host while the central is running. 
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is RFC3339 or `YYYY-MM-DD[THH:MM[:SS]]` (local time); a value that cannot be parsed is an error |
 | `ctl detections show AGENT_ID ID` | Show a detection |
 | `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged |
 

@@ -118,8 +118,10 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		var fps []string
 		_ = json.Unmarshal([]byte(a.CAFingerprints), &fps)
 		s.CAUpToDate = true
+		// An agent that never synchronized has reported no CA yet; like the
+		// certificate status, it is not flagged as missing the new CA.
 		for _, fp := range latestCAs {
-			if !slices.Contains(fps, fp) {
+			if a.LastSyncAt > 0 && !slices.Contains(fps, fp) {
 				s.CAUpToDate = false
 			}
 		}
@@ -397,6 +399,11 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	agent.TokenID = sql.NullInt64{Int64: tok.ID, Valid: true}
 	if err := c.createAgent(agent); err != nil {
+		// Undo the token, so no token is left without its agent (the agent
+		// row, if it was created, goes with it).
+		if derr := models.DeleteToken(c.db, tok.ID); derr != nil {
+			c.logger.Printf("token %d: undo after a failed issue: %v", tok.ID, derr)
+		}
 		c.internalError(w, r, err)
 		return
 	}

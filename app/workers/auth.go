@@ -133,8 +133,11 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		return nil, nil, errAgentAuth
 	}
 	v := bearer(r)
-	if !strings.HasPrefix(v, modules.TokenPrefix) {
+	if v == "" {
 		return reject("missing token", "")
+	}
+	if !strings.HasPrefix(v, modules.TokenPrefix) {
+		return reject("invalid token", "")
 	}
 	h := modules.HashSecret(v)
 	t, err := models.FindTokenByHash(c.db, h)
@@ -155,6 +158,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	if t.InstanceID != "" && t.InstanceID != instance {
 		return reject("instance id mismatch", t.Name)
 	}
+	prev := *t
 	usedPending := t.PendingHash != "" && h == t.PendingHash
 	if usedPending {
 		if t.PendingExpiresAt <= now {
@@ -164,20 +168,29 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		t.Hash, t.Value, t.ExpiresAt = t.PendingHash, v, t.PendingExpiresAt
 		t.PendingHash, t.PendingExpiresAt = "", 0
 		t.RenewedAt = now
-		c.history(nil, models.HistToken, "renewed", t.Name, "agent switched to the renewed token; the previous value is no longer accepted")
 	} else if t.ExpiresAt <= now {
 		return reject("expired token", t.Name)
 	}
-	if t.InstanceID == "" {
+	bound := t.InstanceID == ""
+	if bound {
 		t.InstanceID, t.BoundAt = instance, now
-		c.history(nil, models.HistToken, "bound", t.Name, "bound to agent instance "+instance)
 	}
 	if t.UsedAt == 0 {
 		t.UsedAt = now
 	}
 	t.LastSeenAt = now
-	if err := models.SaveToken(c.db, t); err != nil {
+	// Only the columns changed here are written, and only while the token is
+	// unchanged since it was read: a concurrent revoke, reissue or unbind wins.
+	if err := models.RecordTokenUse(c.db, t, &prev); errors.Is(err, sql.ErrNoRows) {
+		return reject("invalid token", t.Name)
+	} else if err != nil {
 		return nil, nil, err
+	}
+	if usedPending {
+		c.history(nil, models.HistToken, "renewed", t.Name, "agent switched to the renewed token; the previous value is no longer accepted")
+	}
+	if bound {
+		c.history(nil, models.HistToken, "bound", t.Name, "bound to agent instance "+instance)
 	}
 	a, err := models.GetAgentByToken(c.db, t.ID)
 	if err != nil {

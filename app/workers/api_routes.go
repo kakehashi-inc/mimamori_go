@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -93,15 +94,17 @@ func ts(t int64) *string {
 	return &s
 }
 
-// parseTime accepts RFC3339 or a datetime-local value ("2006-01-02T15:04").
-func parseTime(s string) int64 {
+// parseTime accepts RFC3339 or a datetime-local value ("2006-01-02T15:04")
+// for the query parameter name. An empty value gives 0 (not given); any
+// other value that cannot be parsed is an error.
+func parseTime(name, s string) (int64, error) {
 	if s == "" {
-		return 0
+		return 0, nil
 	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02"} {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t.Unix()
+			return t.Unix(), nil
 		}
 	}
-	return 0
+	return 0, fmt.Errorf("invalid %s %q: use RFC3339 or YYYY-MM-DD[THH:MM[:SS]]", name, s)
 }

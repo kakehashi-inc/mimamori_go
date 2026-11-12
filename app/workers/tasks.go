@@ -83,19 +83,28 @@ type pendingGroup struct {
 	hostname string
 }
 
-// notify composes at most one mail per minimum interval from new
-// detections, then (re)sends every undelivered mail.
+// notify (re)sends an undelivered mail, or composes a new one from new
+// detections when none is left and the minimum interval has passed since the
+// last delivered mail. While a mail is undelivered, new detections stay
+// pending and go into the next mail, so at most one mail is sent per minimum
+// interval even after a delivery outage.
 func (c *core) notify(now time.Time) {
 	if !c.conf().SMTP.Enabled() {
 		return
 	}
-	minInterval := int64(c.conf().Notify.MinIntervalMin) * 60
-	if now.Unix()-c.settingInt(settingLastNotifyAt) >= minInterval {
-		c.composeNotification(now)
-	}
 	unsent, err := models.ListUnsentNotifications(c.db)
 	if err != nil {
 		return
+	}
+	if len(unsent) == 0 {
+		minInterval := int64(c.conf().Notify.MinIntervalMin) * 60
+		if now.Unix()-c.settingInt(settingLastNotifyAt) < minInterval {
+			return
+		}
+		c.composeNotification(now)
+		if unsent, err = models.ListUnsentNotifications(c.db); err != nil {
+			return
+		}
 	}
 	for _, n := range unsent {
 		err := modules.SendMail(c.conf().SMTP, n.Subject, n.Body)
@@ -104,7 +113,9 @@ func (c *core) notify(now time.Time) {
 			c.logger.Printf("notification %d: send failed (will retry): %v", n.ID, err)
 			return
 		}
-		_ = models.MarkNotificationAttempt(c.db, n.ID, time.Now().Unix(), "")
+		sent := time.Now().Unix()
+		_ = models.MarkNotificationAttempt(c.db, n.ID, sent, "")
+		_ = models.SetSetting(c.db, settingLastNotifyAt, strconv.FormatInt(sent, 10))
 	}
 }
 
@@ -173,7 +184,6 @@ func (c *core) composeNotification(now time.Time) {
 			_ = models.MarkNotified(tdb, g.tdbIDs, now.Unix())
 		}
 	}
-	_ = models.SetSetting(c.db, settingLastNotifyAt, strconv.FormatInt(now.Unix(), 10))
 }
 
 // summarizeDetection renders one detection as one line.

@@ -20,6 +20,7 @@
 ### 1.2 形式
 
 - 要求・応答は JSON（`Content-Type: application/json`）。日時は RFC3339（UTC）の文字列、未設定は `null`。
+- 要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。
 - エラー時は 4xx/5xx と `{"error": "<message>"}` を返します。
   - 400: 入力の誤り、401: 未認証、403: 権限なし、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、423: ログインの一時停止、503: 混雑。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
@@ -85,7 +86,7 @@ interface AgentSummary {
   apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[] };
   unacked_alerts: number;
   auditd: AuditdStatus | null;
-  ca_up_to_date: boolean;            // 最新の独自CAを受け取っているか
+  ca_up_to_date: boolean;            // 最新の独自CAを受け取っているか（一度も同期していないエージェントは true）
   builtin_running: boolean | null;   // 内蔵エージェントのみ
 }
 interface TokenRef { id: number; name: string; status: TokenStatus; expires_at: string }
@@ -231,6 +232,8 @@ interface TemplateDetail extends TemplateSummary { content: RuleContent }
 
 クエリ: `agent_id`、`category`（alert/normal）、`type`、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`。
 
+`from` と `to` は RFC3339、または `YYYY-MM-DD`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DDTHH:MM:SS`（ローカル時間）です。`acknowledged` と `suppressed` は `true` / `false`（`1` / `0` も可）です。`agent_id`、`limit`、`offset` は整数で、`limit` と `offset` は範囲外なら範囲内に丸めます。空の値は指定なしとして扱います。解釈できない値は、その項目名を示すメッセージとともに 400 を返します。
+
 ```ts
 type DetectionType = 'exec' | 'denied' | 'read' | 'network' | 'writable' | 'exec_file';
 interface Detection {
@@ -263,6 +266,8 @@ interface Suppression {
 }
 ```
 
+作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
+
 ## 10. 証明書
 
 | GET | `/certificates` | V | - | `CertStatus` |
@@ -274,7 +279,7 @@ interface CertStatus {
   cas: CertInfo[];
   server: CertInfo & { names: string[]; issuer_fingerprint: string };
   rotation: { state: 'none' | 'distributing' | 'switched'; next_ca_created_at: string | null; switch_after: string | null };
-  agents_missing_new_ca: { agent_id: number; display_name: string }[];
+  agents_missing_new_ca: { agent_id: number; display_name: string }[];   // 一度も同期していないエージェントは含めない
 }
 ```
 
@@ -282,6 +287,8 @@ interface CertStatus {
 
 | GET | `/history?category=&limit=&offset=` | V | - | `{"items":HistoryItem[],"total":N}` |
 | --- | --- | --- | --- | --- |
+
+`limit`（既定 100、最大 500）と `offset` は整数です。整数として解釈できない値は 400 を返します。
 
 ```ts
 type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected' | 'template' | 'suppression' | 'detection' | 'config';
@@ -311,7 +318,7 @@ interface Account {
 }
 ```
 
-- 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です。
+- 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です（確認と変更は 1 つの書き込みのトランザクションで行うため、同時の要求でも有効な管理者が 0 人になることはありません）。
 - パスワードは 10 文字以上です。
 
 ## 12.1 システム設定

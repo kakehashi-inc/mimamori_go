@@ -92,3 +92,34 @@ func SaveToken(db Execer, t *Token) error {
 		t.Hash, t.Value, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.InstanceID, t.BoundAt, t.UsedAt,
 		t.LastSeenAt, t.RevokedAt, t.ReissuedAt, t.RenewedAt, t.ID)
 }
+
+// RecordTokenUse stores what one authenticated agent request changes on its
+// token: the switch to the renewed value (when the agent used it), the
+// binding to the agent instance and the usage times. Only these columns are
+// written, and only while the row still holds the values the request was
+// checked against (prev) and is not revoked, so a revoke, reissue or unbind
+// done at the same time is never undone. It returns sql.ErrNoRows when the
+// token changed in the meantime.
+func RecordTokenUse(db Execer, t, prev *Token) error {
+	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renewed_at = ?,
+		instance_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?
+		WHERE id = ? AND revoked_at = 0 AND hash = ? AND pending_hash = ? AND instance_id = ?`,
+		t.Hash, t.Value, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewedAt, t.InstanceID, t.BoundAt, t.UsedAt, t.LastSeenAt,
+		t.ID, prev.Hash, prev.PendingHash, prev.InstanceID)
+}
+
+// SetTokenRenewal stores a new renewal value (its hash, expiry and counter)
+// of the token, only while the token is not revoked and still holds the
+// current value, pending value and counter it was read with. It returns
+// sql.ErrNoRows when the token changed in the meantime.
+func SetTokenRenewal(db Execer, t *Token, prevPendingHash string, prevCounter int) error {
+	return execOne(db, `UPDATE tokens SET renew_counter = ?, pending_hash = ?, pending_expires_at = ?
+		WHERE id = ? AND revoked_at = 0 AND hash = ? AND pending_hash = ? AND renew_counter = ?`,
+		t.RenewCounter, t.PendingHash, t.PendingExpiresAt, t.ID, t.Hash, prevPendingHash, prevCounter)
+}
+
+// DeleteToken removes a token; its agent row, if any, is removed with it
+// (ON DELETE CASCADE).
+func DeleteToken(db Execer, id int64) error {
+	return execOne(db, `DELETE FROM tokens WHERE id = ?`, id)
+}

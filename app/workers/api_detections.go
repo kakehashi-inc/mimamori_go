@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
@@ -62,36 +65,54 @@ func (c *core) detectionOut(a *models.Agent, name string, d *models.Detection) d
 	return out
 }
 
-func boolQuery(r *http.Request, name string) *bool {
-	switch r.URL.Query().Get(name) {
+// boolQuery reads an optional true/false query parameter. An empty or
+// absent value means "not given"; any other unknown value is an error.
+func boolQuery(r *http.Request, name string) (*bool, error) {
+	switch v := r.URL.Query().Get(name); v {
+	case "":
+		return nil, nil
 	case "true", "1":
-		v := true
-		return &v
+		b := true
+		return &b, nil
 	case "false", "0":
-		v := false
-		return &v
+		b := false
+		return &b, nil
+	default:
+		return nil, fmt.Errorf("invalid %s %q: use true or false", name, v)
 	}
-	return nil
 }
 
 // handleListDetections merges detections from the per-target databases.
 func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := models.DetectionFilter{
-		Category: q.Get("category"), Type: q.Get("type"),
-		From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
-		Acknowledged: boolQuery(r, "acknowledged"), Suppressed: boolQuery(r, "suppressed"),
+	f := models.DetectionFilter{Category: q.Get("category"), Type: q.Get("type")}
+	var errs [7]error
+	f.From, errs[0] = parseTime("from", q.Get("from"))
+	f.To, errs[1] = parseTime("to", q.Get("to"))
+	f.Acknowledged, errs[2] = boolQuery(r, "acknowledged")
+	f.Suppressed, errs[3] = boolQuery(r, "suppressed")
+	var limit, offset int
+	limit, errs[4] = queryInt(r, "limit", 100, 1, 500)
+	offset, errs[5] = queryInt(r, "offset", 0, 0, 1000000)
+	var agentID int64
+	if v := q.Get("agent_id"); v != "" {
+		if agentID, errs[6] = strconv.ParseInt(v, 10, 64); errs[6] != nil {
+			errs[6] = fmt.Errorf("invalid agent_id %q: not an integer", v)
+		}
 	}
-	limit := queryInt(r, "limit", 100, 1, 500)
-	offset := queryInt(r, "offset", 0, 0, 1000000)
+	for _, err := range errs {
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	agents, err := models.ListAgents(c.db)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
 	}
-	if v := q.Get("agent_id"); v != "" {
-		id, _ := strconv.ParseInt(v, 10, 64)
-		agents = slices.DeleteFunc(agents, func(a *models.Agent) bool { return a.ID != id })
+	if q.Get("agent_id") != "" {
+		agents = slices.DeleteFunc(agents, func(a *models.Agent) bool { return a.ID != agentID })
 	}
 	var items []detectionJSON
 	total := 0
@@ -252,6 +273,10 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "at least one condition is required")
 		return
 	}
+	if err := validateSuppressionFields(s); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var agentName = "all agents"
 	if in.AgentID != nil && *in.AgentID > 0 {
 		a, err := models.GetAgent(c.db, *in.AgentID)
@@ -270,6 +295,39 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 	c.history(principalFrom(r), models.HistSuppression, "created", agentName,
 		describeSuppression(s)+"; "+strconv.Itoa(n)+" open detection(s) now suppressed")
 	writeJSON(w, http.StatusOK, c.suppressionOut(s))
+}
+
+// Limits of the text fields of a suppression condition.
+const (
+	suppressionMaxPathBytes     = 4096 // exe and target
+	suppressionMaxOSUserBytes   = 256
+	suppressionMaxCommentLength = 1000 // characters
+)
+
+// validateSuppressionFields rejects control characters (NUL, CR, LF, tab and
+// the like) and over-long values in the text fields of a suppression.
+func validateSuppressionFields(s *models.Suppression) error {
+	for _, f := range []struct {
+		name, value string
+		max         int
+		chars       bool
+	}{
+		{"os_user", s.OSUser, suppressionMaxOSUserBytes, false},
+		{"exe", s.Exe, suppressionMaxPathBytes, false},
+		{"target", s.Target, suppressionMaxPathBytes, false},
+		{"comment", s.Comment, suppressionMaxCommentLength, true},
+	} {
+		if strings.IndexFunc(f.value, unicode.IsControl) >= 0 {
+			return fmt.Errorf("%s must not contain control characters", f.name)
+		}
+		if f.chars && utf8.RuneCountInString(f.value) > f.max {
+			return fmt.Errorf("%s is longer than %d characters", f.name, f.max)
+		}
+		if !f.chars && len(f.value) > f.max {
+			return fmt.Errorf("%s is longer than %d bytes", f.name, f.max)
+		}
+	}
+	return nil
 }
 
 func describeSuppression(s *models.Suppression) string {
@@ -307,11 +365,7 @@ func (c *core) applySuppression(s *models.Suppression) int {
 			if !matchSuppression(s, a.ID, d.Type, d.OSUser, d.Exe, d.Target) {
 				continue
 			}
-			d.Suppressed, d.SuppressionID = true, s.ID
-			if d.NotifyState == models.NotifyPending {
-				d.NotifyState = models.NotifySkipped
-			}
-			if models.UpdateDetectionOccurrence(tdb, d) == nil {
+			if models.MarkDetectionSuppressed(tdb, d.ID, s.ID) == nil {
 				n++
 			}
 		}
@@ -428,8 +482,16 @@ func historyOut(h *models.HistoryItem) historyJSON {
 }
 
 func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
-	limit := queryInt(r, "limit", 100, 1, 500)
-	offset := queryInt(r, "offset", 0, 0, 10000000)
+	limit, err := queryInt(r, "limit", 100, 1, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	offset, err := queryInt(r, "offset", 0, 0, 10000000)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	items, total, err := models.ListHistory(c.db, r.URL.Query().Get("category"), "", limit, offset)
 	if err != nil {
 		c.internalError(w, r, err)

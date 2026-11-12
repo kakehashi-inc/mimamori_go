@@ -87,6 +87,16 @@ func UpdateDetectionOccurrence(db Execer, d *Detection) error {
 		d.Category, d.Count, d.FirstAt, d.LastAt, d.FileCtime, d.FileOwner, d.FileMode, boolToInt(d.Suppressed), d.SuppressionID, d.NotifyState, d.ID)
 }
 
+// MarkDetectionSuppressed marks an unsuppressed detection as suppressed by
+// suppressionID; a detection still waiting for notification is not notified.
+// Only these columns are written, so occurrences merged at the same time are
+// kept. It returns sql.ErrNoRows when the row is gone or already suppressed.
+func MarkDetectionSuppressed(db Execer, id, suppressionID int64) error {
+	return execOne(db, `UPDATE detections SET suppressed = 1, suppression_id = ?,
+		notify_state = CASE WHEN notify_state = ? THEN ? ELSE notify_state END WHERE id = ? AND suppressed = 0`,
+		suppressionID, NotifyPending, NotifySkipped, id)
+}
+
 // GetDetection returns one detection.
 func GetDetection(db Execer, id int64) (*Detection, error) {
 	return scanDetection(db.QueryRow(`SELECT `+detectionCols+` FROM detections WHERE id = ?`, id))

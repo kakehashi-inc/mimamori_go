@@ -105,21 +105,33 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	resp.TokenExpiresAt = tok.ExpiresAt
 	renewBefore := int64(c.conf().TokenRenewBeforeDays) * 86400
 	if tok.ExpiresAt-now < renewBefore {
+		offer := true
 		if tok.PendingHash == "" || tok.PendingExpiresAt <= now {
+			prevPending, prevCounter := tok.PendingHash, tok.RenewCounter
 			tok.RenewCounter++
 			v := modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter)
 			tok.PendingHash = modules.HashSecret(v)
 			tok.PendingExpiresAt = now + int64(c.conf().TokenValidDays)*86400
-			if err := models.SaveToken(c.db, tok); err != nil {
+			// Stored only while the token is unchanged since it was read; when
+			// it was revoked, reissued or renewed meanwhile, no value is handed
+			// out this time.
+			err := models.SetTokenRenewal(c.db, tok, prevPending, prevCounter)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				offer = false
+			case err != nil:
 				return nil, err
+			default:
+				c.history(nil, models.HistToken, "renewal_issued", tok.Name,
+					"new token value handed to the agent; expires "+time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339))
 			}
-			c.history(nil, models.HistToken, "renewal_issued", tok.Name,
-				"new token value handed to the agent; expires "+time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339))
 		}
 		// The same value is handed out again until the agent uses it.
-		resp.TokenRenewal = &modules.TokenRenewal{
-			Token:     modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter),
-			ExpiresAt: tok.PendingExpiresAt,
+		if offer {
+			resp.TokenRenewal = &modules.TokenRenewal{
+				Token:     modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter),
+				ExpiresAt: tok.PendingExpiresAt,
+			}
 		}
 	}
 	missing := false

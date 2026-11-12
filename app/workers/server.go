@@ -110,11 +110,18 @@ func startCentral() error {
 	}
 	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, workers %d",
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen, cfg.Workers)
-	if running, msg := c.builtinStatus(); !running {
+	// Nothing about the built-in agent is logged while it is disabled.
+	builtinEnabled := *c.conf().BuiltinAgent
+	builtinRunning, msg := c.builtinStatus()
+	if builtinEnabled && !builtinRunning {
 		logger.Printf("built-in agent is not running: %s", msg)
 	}
 	srv.run(stopping, tick)
-	logger.Printf("shutting down; waiting for the built-in agent to finish its cycle")
+	if builtinRunning {
+		logger.Printf("shutting down; waiting for the built-in agent to finish its cycle")
+	} else {
+		logger.Printf("shutting down")
+	}
 	close(stopBuiltin)
 	waitBuiltin()
 	logger.Printf("stopped")

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -270,6 +271,10 @@ func readJSON(r *http.Request, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid request body: %v", err)
 	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("invalid request body: unexpected data after the JSON value")
+	}
 	return nil
 }
 
@@ -278,18 +283,25 @@ func pathID(r *http.Request, name string) (int64, bool) {
 	return v, err == nil && v > 0
 }
 
-func queryInt(r *http.Request, name string, def, min, max int) int {
-	v, err := strconv.Atoi(r.URL.Query().Get(name))
+// queryInt reads an optional integer query parameter, clamped to [min, max].
+// An empty or absent value gives def; a value that is not an integer is an
+// error.
+func queryInt(r *http.Request, name string, def, min, max int) (int, error) {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return def, nil
+	}
+	v, err := strconv.Atoi(s)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("invalid %s %q: not an integer", name, s)
 	}
 	if v < min {
-		return min
+		return min, nil
 	}
 	if v > max {
-		return max
+		return max, nil
 	}
-	return v
+	return v, nil
 }
 
 func isUniqueErr(err error) bool {

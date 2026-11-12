@@ -68,14 +68,10 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.Disabled || !modules.VerifyPassword(a.PasswordHash, in.Password) {
-		failed := a.FailedLogins + 1
-		var lock int64
-		if failed >= modules.LoginMaxFailures {
-			lock = now + int64(modules.LoginLockDuration/time.Second)
-			failed = 0
+		lock := now + int64(modules.LoginLockDuration/time.Second)
+		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
 			c.history(&principal{Name: a.Name}, models.HistAccount, "login_locked", a.Name, "too many failed logins from "+remoteHost(r.RemoteAddr))
 		}
-		_ = models.RecordLoginFailure(c.db, a.ID, failed, lock)
 		writeError(w, http.StatusUnauthorized, "invalid account name or password")
 		return
 	}
@@ -256,13 +252,30 @@ func (c *core) loadAccount(w http.ResponseWriter, r *http.Request) *models.Accou
 	return a
 }
 
-// isLastAdmin reports whether a is the only enabled administrator.
-func (c *core) isLastAdmin(a *models.Account) bool {
-	if a.Role != models.RoleAdmin || a.Disabled {
-		return false
+// changeKeepingAdmin applies change to account a in one write transaction
+// and undoes it (lastAdmin true) when a was an enabled administrator and no
+// enabled administrator would remain. The change is written before the
+// count, so the transaction already holds the write lock while it counts and
+// concurrent changes of two administrators cannot both pass the check.
+func (c *core) changeKeepingAdmin(a *models.Account, change func(models.Execer) error) (lastAdmin bool, err error) {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return false, err
 	}
-	n, err := models.CountActiveAdmins(c.db)
-	return err == nil && n <= 1
+	defer func() { _ = tx.Rollback() }()
+	if err := change(tx); err != nil {
+		return false, err
+	}
+	if a.Role == models.RoleAdmin && !a.Disabled {
+		n, err := models.CountActiveAdmins(tx)
+		if err != nil {
+			return false, err
+		}
+		if n == 0 {
+			return true, nil
+		}
+	}
+	return false, tx.Commit()
 }
 
 func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
@@ -285,12 +298,13 @@ func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.accountOut(a))
 		return
 	}
-	if in.Role == models.RoleViewer && c.isLastAdmin(a) {
-		writeError(w, http.StatusConflict, "the last enabled administrator cannot be changed to viewer")
+	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.UpdateAccountRole(db, a.ID, in.Role) })
+	if err != nil {
+		c.internalError(w, r, err)
 		return
 	}
-	if err := models.UpdateAccountRole(c.db, a.ID, in.Role); err != nil {
-		c.internalError(w, r, err)
+	if last {
+		writeError(w, http.StatusConflict, "the last enabled administrator cannot be changed to viewer")
 		return
 	}
 	c.invalidateAccount(a.ID, "")
@@ -335,12 +349,13 @@ func (c *core) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool
 	if a == nil {
 		return
 	}
-	if disabled && c.isLastAdmin(a) {
-		writeError(w, http.StatusConflict, "the last enabled administrator cannot be disabled")
+	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.SetAccountDisabled(db, a.ID, disabled) })
+	if err != nil {
+		c.internalError(w, r, err)
 		return
 	}
-	if err := models.SetAccountDisabled(c.db, a.ID, disabled); err != nil {
-		c.internalError(w, r, err)
+	if last {
+		writeError(w, http.StatusConflict, "the last enabled administrator cannot be disabled")
 		return
 	}
 	action := "enabled"
@@ -365,15 +380,16 @@ func (c *core) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	if c.isLastAdmin(a) {
+	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.DeleteAccount(db, a.ID) })
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	if last {
 		writeError(w, http.StatusConflict, "the last enabled administrator cannot be deleted")
 		return
 	}
 	c.invalidateAccount(a.ID, "")
-	if err := models.DeleteAccount(c.db, a.ID); err != nil {
-		c.internalError(w, r, err)
-		return
-	}
 	c.history(principalFrom(r), models.HistAccount, "deleted", a.Name, "")
 	writeJSON(w, http.StatusOK, map[string]any{})
 }

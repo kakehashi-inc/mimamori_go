@@ -110,7 +110,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧 |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` は RFC3339 または `YYYY-MM-DD[THH:MM[:SS]]`（ローカル時間）。解釈できない値はエラー |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
 | `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする |
 

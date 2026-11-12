@@ -113,10 +113,18 @@ func SetAccountDisabled(db Execer, id int64, disabled bool) error {
 	return execOne(db, `UPDATE accounts SET disabled = ?, updated_at = ? WHERE id = ?`, boolToInt(disabled), Now(), id)
 }
 
-// RecordLoginFailure increments the failure counter and sets the lock.
-func RecordLoginFailure(db Execer, id int64, failed int, lockedUntil int64) error {
-	_, err := db.Exec(`UPDATE accounts SET failed_logins = ?, locked_until = ? WHERE id = ?`, failed, lockedUntil, id)
-	return err
+// RecordLoginFailure counts one failed login in a single statement (no
+// read-modify-write, so concurrent failures are all counted). When the count
+// reaches maxFailures, the counter is reset and the account is locked until
+// lockUntil (an existing later lock is kept); locked reports that this call
+// set the lock. A lock is never cleared here.
+func RecordLoginFailure(db Execer, id int64, maxFailures int, lockUntil int64) (locked bool, err error) {
+	var failed int
+	err = db.QueryRow(`UPDATE accounts SET
+		locked_until = CASE WHEN failed_logins + 1 >= ? THEN MAX(locked_until, ?) ELSE locked_until END,
+		failed_logins = CASE WHEN failed_logins + 1 >= ? THEN 0 ELSE failed_logins + 1 END
+		WHERE id = ? RETURNING failed_logins`, maxFailures, lockUntil, maxFailures, id).Scan(&failed)
+	return err == nil && failed == 0, err
 }
 
 // ResetLoginFailures clears the failure counter after a successful login.

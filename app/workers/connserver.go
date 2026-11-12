@@ -184,7 +184,7 @@ func (s *connServer) expireQueue() {
 func (s *connServer) reject(j job) {
 	if j.spec.tls == nil {
 		_ = j.conn.SetDeadline(time.Now().Add(time.Second))
-		_, _ = io.WriteString(j.conn, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 21\r\n\r\n{\"error\":\"busy\"}\r\n\r\n")
+		_, _ = io.WriteString(j.conn, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"error\":\"busy\"}")
 	}
 	_ = j.conn.Close()
 }

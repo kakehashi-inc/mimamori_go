@@ -39,7 +39,8 @@ func (t *inProcessTransport) Report(req *modules.ReportRequest) error {
 // startBuiltinAgent checks the prerequisites and, when they hold, starts the
 // built-in agent on its own flow. It returns a function that waits for the
 // flow to finish after stop was closed. When the prerequisites fail, only the
-// central functions run and the reason is shown in the log and on screen.
+// central functions run and the reason is shown on screen (the caller logs
+// it once).
 func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func() {
 	none := func() {}
 	if !*c.conf().BuiltinAgent {
@@ -48,13 +49,11 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	}
 	if err := modules.CheckAuditd(); err != nil {
 		c.setBuiltinStatus(false, "auditd is not usable: "+err.Error())
-		c.logger.Printf("built-in agent stopped: %v", err)
 		return none
 	}
 	db, err := modules.OpenSQLite(filepath.Join(c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	if err != nil {
 		c.setBuiltinStatus(false, "local database: "+err.Error())
-		c.logger.Printf("built-in agent stopped: %v", err)
 		return none
 	}
 	logger := log.New(c.logger.Writer(), "[builtin-agent] ", log.LstdFlags)
