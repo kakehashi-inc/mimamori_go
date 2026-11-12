@@ -91,6 +91,7 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 | `/auth/email` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}` |
 | `/auth/email/verify` | 200 | `Me`（変更後）。同じアカウントの他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる |
 | `/auth/email/verify` | 400 | `{"error":"invalid code"}`（401 は使わない。ログインの失敗の回数にも数えない） |
+| `/auth/email/verify` | 409 | 確認の間にほかのアカウントが同じアドレスを使った |
 | `/auth/email/verify` | 410 | 依頼が無い、期限切れ、または誤りが 5 回になって依頼を破棄した |
 
 - 現在のパスワードは求めません。確定できるのは、依頼したのと同じセッションだけです。新しい依頼は、確定していない古い依頼を置き換えます。
