@@ -76,6 +76,20 @@ func RecordAuthCodeAttempt(db Execer, id int64) (int, error) {
 	return n, err
 }
 
+// ConsumeAuthCode removes a code that was entered correctly, in a single
+// statement, and reports whether this call removed it. It reports false when
+// the code is gone (used, replaced or discarded by a concurrent request),
+// has expired or has reached maxAttempts wrong entries, so one code admits
+// at most one request and concurrent guesses cannot pass the attempt limit.
+func ConsumeAuthCode(db Execer, id int64, maxAttempts int, now int64) (bool, error) {
+	res, err := db.Exec(`DELETE FROM auth_codes WHERE id = ? AND attempts < ? AND expires_at > ?`, id, maxAttempts, now)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // DeleteAuthCode removes one code (used, expired or failed too often).
 func DeleteAuthCode(db Execer, id int64) error {
 	_, err := db.Exec(`DELETE FROM auth_codes WHERE id = ?`, id)

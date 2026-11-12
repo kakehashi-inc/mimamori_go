@@ -149,7 +149,17 @@ func (c *core) handleOwnEmailVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, invalidCode)
 		return
 	}
-	_ = models.DeleteAuthCode(c.db, row.ID)
+	// Used up atomically, so a code admits one confirmation and concurrent
+	// guesses cannot pass the attempt limit.
+	consumed, err := models.ConsumeAuthCode(c.db, row.ID, modules.AuthCodeMaxAttempts, time.Now().Unix())
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	if !consumed {
+		writeError(w, http.StatusGone, emailCodeExpired)
+		return
+	}
 	if !c.applyOwnEmail(w, r, p, row.NewEmail) {
 		return
 	}

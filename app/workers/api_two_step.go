@@ -204,7 +204,28 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, invalidCode)
 		return
 	}
-	_ = models.DeleteAuthCode(c.db, row.ID)
+	// The code is used up atomically: a concurrent request with the same
+	// code, or one that read the row before concurrent wrong entries
+	// discarded it, gets 410.
+	consumed, err := models.ConsumeAuthCode(c.db, row.ID, modules.AuthCodeMaxAttempts, now)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
+	if !consumed {
+		writeError(w, http.StatusGone, loginCodeExpired)
+		return
+	}
+	// Concurrent wrong entries may have locked the account (or an
+	// administrator disabled it) after it was read above.
+	if a, err = models.GetAccount(c.db, row.AccountID); err != nil || a.Disabled {
+		writeError(w, http.StatusGone, loginCodeExpired)
+		return
+	}
+	if a.LockedUntil > now {
+		writeError(w, http.StatusLocked, "login is temporarily locked after repeated failures")
+		return
+	}
 	if err := c.rememberBrowser(w, r, a.ID, in.Trust, now); err != nil {
 		c.internalError(w, r, err)
 		return

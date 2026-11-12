@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -634,4 +635,70 @@ func TestOwnEmailChangeDevelopmentMode(t *testing.T) {
 		t.Fatal("the change must revoke the verifications and codes")
 	}
 	login(t, e, "dev@example.com", "Admin-pass-123")
+}
+
+// TestCodeUsedOnce sends the right code in many concurrent requests: one
+// code admits exactly one login and one e-mail address change, and a code
+// that reached the attempt limit is refused even when it is right.
+func TestCodeUsedOnce(t *testing.T) {
+	e := newTestEnv(t)
+	mb := useMailbox(e)
+	const n = 8
+	parallel := func(f func() int) map[int]int {
+		codes := make(chan int, n)
+		var wg sync.WaitGroup
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				codes <- f()
+			}()
+		}
+		wg.Wait()
+		close(codes)
+		got := map[int]int{}
+		for c := range codes {
+			got[c]++
+		}
+		return got
+	}
+
+	ch := challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", "", false))
+	code := mb.lastCode(t)
+	got := parallel(func() int { return loginVerify(e, ch, code, false, "").Code })
+	if got[200] != 1 || got[http.StatusGone] != n-1 {
+		t.Fatalf("concurrent login verifications: %v, want one 200 and %d 410", got, n-1)
+	}
+	if countAll(t, e, "sessions") != 1 {
+		t.Fatalf("sessions: %d, want 1", countAll(t, e, "sessions"))
+	}
+
+	// A login code whose wrong entries reached the limit (counted by
+	// concurrent requests) no longer admits the right code.
+	ch = challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", "", false))
+	code = mb.lastCode(t)
+	if _, err := e.c.db.Exec(`UPDATE auth_codes SET attempts = ?`, modules.AuthCodeMaxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if rec := loginVerify(e, ch, code, false, ""); rec.Code != http.StatusGone {
+		t.Fatalf("right code after the attempt limit: %d", rec.Code)
+	}
+
+	// The same for the own e-mail address change.
+	sess, _ := twoStepLogin(t, e, mb, testAdminEmail, "Admin-pass-123", false)
+	h := browserHeaders(sess.Value)
+	if rec := e.do(e.web, "POST", "/api/v1/auth/email", map[string]any{"email": "new@example.com"}, h, "192.0.2.7:1"); rec.Code != http.StatusAccepted {
+		t.Fatalf("e-mail change request: %d %s", rec.Code, rec.Body.String())
+	}
+	code = mb.lastCode(t)
+	got = parallel(func() int {
+		return e.do(e.web, "POST", "/api/v1/auth/email/verify", map[string]any{"code": code}, h, "192.0.2.7:1").Code
+	})
+	if got[200] != 1 || got[http.StatusGone] != n-1 {
+		t.Fatalf("concurrent e-mail change confirmations: %v, want one 200 and %d 410", got, n-1)
+	}
+	var history int
+	if err := e.c.db.QueryRow(`SELECT COUNT(*) FROM history WHERE action = 'email_changed'`).Scan(&history); err != nil || history != 1 {
+		t.Fatalf("email_changed entries: %d %v, want 1", history, err)
+	}
 }

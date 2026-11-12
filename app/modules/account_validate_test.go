@@ -251,6 +251,17 @@ func TestRevokeAccountAuth(t *testing.T) {
 			t.Fatalf("attempt %d: %d %v", want, n, err)
 		}
 	}
+	// A right code is used up once, and not after the attempt limit or
+	// its expiry.
+	for _, tc := range []struct {
+		max  int
+		now  int64
+		want bool
+	}{{2, now, false}, {3, now + 60, false}, {3, now, true}, {3, now, false}} {
+		if ok, err := models.ConsumeAuthCode(db, c.ID, tc.max, tc.now); err != nil || ok != tc.want {
+			t.Fatalf("consume (max %d, now %d): %v %v, want %v", tc.max, tc.now-now, ok, err, tc.want)
+		}
+	}
 	if err := models.DeleteExpiredAuthCodes(db, now+61); err != nil {
 		t.Fatal(err)
 	}
