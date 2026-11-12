@@ -85,12 +85,35 @@ func ListTokens(db Execer) ([]*Token, error) {
 	return collect(rows, err, scanToken)
 }
 
-// SaveToken writes every mutable column of the token.
-func SaveToken(db Execer, t *Token) error {
-	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renew_counter = ?,
-		instance_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?, revoked_at = ?, reissued_at = ?, renewed_at = ? WHERE id = ?`,
-		t.Hash, t.Value, t.ExpiresAt, t.PendingHash, t.PendingExpiresAt, t.RenewCounter, t.InstanceID, t.BoundAt, t.UsedAt,
-		t.LastSeenAt, t.RevokedAt, t.ReissuedAt, t.RenewedAt, t.ID)
+// The administrator operations below write only their own columns, so that
+// they never write back values an agent request changed at the same time.
+
+// ReissueToken stores a new value of the token (t.Hash, t.Value,
+// t.ExpiresAt, t.ReissuedAt): the pending renewal is dropped, and the token
+// is unused and not revoked again. The binding to the agent instance stays.
+func ReissueToken(db Execer, t *Token) error {
+	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = '', pending_expires_at = 0,
+		used_at = 0, revoked_at = 0, reissued_at = ? WHERE id = ?`,
+		t.Hash, t.Value, t.ExpiresAt, t.ReissuedAt, t.ID)
+}
+
+// RevokeToken marks the token as revoked at now and drops its pending
+// renewal.
+func RevokeToken(db Execer, id, now int64) error {
+	return execOne(db, `UPDATE tokens SET revoked_at = ?, pending_hash = '', pending_expires_at = 0 WHERE id = ?`, now, id)
+}
+
+// UnbindToken removes the binding of the token to an agent instance.
+func UnbindToken(db Execer, id int64) error {
+	return execOne(db, `UPDATE tokens SET instance_id = '', bound_at = 0 WHERE id = ?`, id)
+}
+
+// DropExpiredTokenRenewal drops the pending renewal of the token when it was
+// not used before its expiry (it is left alone when it changed meanwhile).
+func DropExpiredTokenRenewal(db Execer, id, now int64) error {
+	_, err := db.Exec(`UPDATE tokens SET pending_hash = '', pending_expires_at = 0
+		WHERE id = ? AND pending_hash <> '' AND pending_expires_at <= ?`, id, now)
+	return err
 }
 
 // RecordTokenUse stores what one authenticated agent request changes on its

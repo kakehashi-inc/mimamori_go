@@ -90,6 +90,8 @@ func TestCtlParseTime(t *testing.T) {
 		"2026-11-12 13:30:05":       "2026-11-12T04:30:05Z",
 		"2026-11-12 13:30":          "2026-11-12T04:30:00Z",
 		"2026-11-12":                "2026-11-11T15:00:00Z",
+		"2026-11-12T13:30:05":       "2026-11-12T04:30:05Z",
+		"2026-11-12T13:30":          "2026-11-12T04:30:00Z",
 		"2026-11-12T13:30:00+09:00": "2026-11-12T04:30:00Z",
 		"2026-11-12T04:30:00Z":      "2026-11-12T04:30:00Z",
 	}
@@ -99,7 +101,7 @@ func TestCtlParseTime(t *testing.T) {
 			t.Errorf("parseCtlTime(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"garbage", "2026-11-12T13:30", "2026/11/12", "13:30"} {
+	for _, in := range []string{"garbage", "2026/11/12", "13:30"} {
 		_, err := parseCtlTime("from", in)
 		var ee *ExitError
 		if err == nil || !errors.As(err, &ee) || ee.Code != ExitArgument {

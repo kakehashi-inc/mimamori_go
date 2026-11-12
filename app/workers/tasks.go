@@ -42,8 +42,7 @@ func (c *core) processTokenExpiry(now time.Time) {
 			c.history(nil, models.HistToken, "expired", t.Name, "the token expired; connections with it are refused")
 		}
 		if t.PendingHash != "" && t.PendingExpiresAt <= n {
-			t.PendingHash, t.PendingExpiresAt = "", 0
-			_ = models.SaveToken(c.db, t)
+			_ = models.DropExpiredTokenRenewal(c.db, t.ID, n)
 		}
 	}
 	_ = models.SetSetting(c.db, settingLastTokenCheck, strconv.FormatInt(n, 10))

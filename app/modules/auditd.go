@@ -265,6 +265,9 @@ func globalSettingLines() []string {
 // existing file is overwritten in place; with no rules the file is removed.
 func writeAuditRulesFile(content []byte) (string, error) {
 	if content == nil {
+		if fi, err := os.Lstat(AuditRulesFile); err == nil && fi.IsDir() {
+			return "", fmt.Errorf("%s is a directory", AuditRulesFile)
+		}
 		if err := os.Remove(AuditRulesFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}

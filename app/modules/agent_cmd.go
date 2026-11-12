@@ -163,7 +163,7 @@ func AgentInit(o AgentInitOptions) error {
 	}
 
 	for _, h := range HaltActions() {
-		fmt.Fprintf(os.Stderr, "Warning: %s in %s halts or single-users the host on disk problems; change it (see the setup guide)\n", h, AuditdConfFile)
+		fmt.Fprintf(os.Stderr, "Warning: %s in %s halts or single-users the host on disk or queue problems; change it (see the setup guide)\n", h, AuditdConfFile)
 	}
 	fmt.Printf("Initialized.\n")
 	fmt.Printf("  token name:  %s\n", resp.AgentName)
@@ -325,7 +325,12 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	}
 	resp, err := syncCheck(tr, req)
 	if err != nil {
-		return NewExitErrorf(ExitExec, "cannot use %s: %v (nothing was changed)", cfg.CentralAddress(), err)
+		code := ExitExec
+		var ee *ExitError
+		if errors.As(err, &ee) {
+			code = ee.Code
+		}
+		return NewExitErrorf(code, "cannot use %s: %v (nothing was changed)", cfg.CentralAddress(), err)
 	}
 	cfg.applySyncResponse(resp)
 	if err := cfg.Save(db); err != nil {

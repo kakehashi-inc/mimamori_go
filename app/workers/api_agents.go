@@ -445,7 +445,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 	t.ExpiresAt = now + int64(days)*86400
 	t.PendingHash, t.PendingExpiresAt = "", 0
 	t.UsedAt, t.RevokedAt, t.ReissuedAt = 0, 0, now
-	if err := models.SaveToken(c.db, t); err != nil {
+	if err := models.ReissueToken(c.db, t); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -460,7 +460,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 	}
 	prev := t.InstanceID
 	t.InstanceID, t.BoundAt = "", 0
-	if err := models.SaveToken(c.db, t); err != nil {
+	if err := models.UnbindToken(c.db, t.ID); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -476,7 +476,7 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	if t.RevokedAt == 0 {
 		t.RevokedAt = time.Now().Unix()
 		t.PendingHash, t.PendingExpiresAt = "", 0
-		if err := models.SaveToken(c.db, t); err != nil {
+		if err := models.RevokeToken(c.db, t.ID, t.RevokedAt); err != nil {
 			c.internalError(w, r, err)
 			return
 		}

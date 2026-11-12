@@ -793,7 +793,7 @@ type CtlDetectionsAckCmd struct {
 
 // ctlTimeLayouts are the forms --from and --to accept besides RFC3339; they
 // are read in the local time zone of the CLI.
-var ctlTimeLayouts = []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02"}
+var ctlTimeLayouts = []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02"}
 
 // parseCtlTime reads a --from / --to value and returns it as RFC3339 in UTC.
 func parseCtlTime(flag, s string) (string, error) {

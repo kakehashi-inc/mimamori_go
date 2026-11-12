@@ -585,7 +585,7 @@
         },
         "reinit": {
             "title": "Re-initializing",
-            "body": "Re-initialize with a new token value and --overwrite when:",
+            "body": "Stop the agent, then re-initialize with a new token value and --overwrite when:",
             "caseExpired": "The token expired (the agent could not connect before expiry, so it was not renewed)",
             "caseReissued": "The token was reissued",
             "caseCa": "The agent missed a private CA rotation (for example because it was stopped) and can no longer connect",

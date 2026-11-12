@@ -340,6 +340,22 @@ func validHostName(s string) bool {
 	return true
 }
 
+// validMailHost reports whether s can be the name of a mail server: ASCII
+// letters, digits, hyphens, underscores and dots (a trailing dot is allowed),
+// at most 253 characters.
+func validMailHost(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, r := range s {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // validMailAddress reports whether s is exactly one mail address (without a
 // display name).
 func validMailAddress(s string) bool {
@@ -384,7 +400,7 @@ func (c *CentralConfig) validationErrors() []string {
 	default:
 		errs = append(errs, "smtp.security must be starttls, tls or none")
 	}
-	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validHostName(h) {
+	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validMailHost(h) {
 		errs = append(errs, "smtp.host must be a host name or IP address")
 	}
 	if c.SMTP.From != "" && !validMailAddress(c.SMTP.From) {

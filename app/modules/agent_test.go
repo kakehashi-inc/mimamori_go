@@ -37,12 +37,12 @@ type=EXECVE msg=audit(1700000000.100:10): argc=2 a0="tool" a1="-v"
 }
 
 func TestValidateAbsPathRejectsWhiteSpace(t *testing.T) {
-	for _, p := range []string{"/tmp/d/x\v-e\v2", "/tmp/a\fb", "/tmp/a b", "/tmp/a b", "/tmp/a\u0085b", "/tmp/a b", "/tmp/a\"b", "/tmp/a\x7fb"} {
+	for _, p := range []string{"/tmp/d/x\v-e\v2", "/tmp/a\fb", "/tmp/a\u00a0b", "/tmp/a\u2028b", "/tmp/a\u0085b", "/tmp/a b", "/tmp/a\"b", "/tmp/a\x7fb"} {
 		if ValidateAbsPath(p) == nil {
 			t.Fatalf("%q must be rejected", p)
 		}
 	}
-	for _, p := range []string{"/var/www/html", "/opt/app-1/storage_x", "/srv/日本語"} {
+	for _, p := range []string{"/var/www/html", "/opt/app-1/storage_x", "/srv/\u65e5\u672c\u8a9e"} {
 		if err := ValidateAbsPath(p); err != nil {
 			t.Fatalf("%q: %v", p, err)
 		}
