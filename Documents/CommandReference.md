@@ -50,6 +50,8 @@ Commands for the central. Run them on the central host.
 
 A running central applies a change made with `central config` at its next periodic check (every 30 seconds); a change made on the configuration screen is applied at once. `web_listen`, `agent_listen`, `workers`, `queue_timeout_sec` and `builtin_agent` take effect when the central restarts.
 
+While `smtp.host` is set, logging in on the browser screens needs a verification code sent by e-mail. When nobody can log in because the code mail cannot be sent, fix the SMTP settings with `central config set smtp.*`, or stop asking for codes with `central config unset smtp.host` (both work while the central is stopped). Fix a wrong account address with `ctl accounts email ID ADDRESS` and a password with `central reset-password --email ADDRESS`.
+
 ## agent
 
 Commands for the agent. Run them on each monitored host.

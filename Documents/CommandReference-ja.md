@@ -50,6 +50,8 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 `central config` での変更は、動作中のセントラルが次の定期的な確認（30 秒ごと）で反映します。設定画面での変更は保存した時点で反映されます。ただし `web_listen`、`agent_listen`、`workers`、`queue_timeout_sec`、`builtin_agent` はセントラルの再起動後に反映されます。
 
+`smtp.host` を設定していると、ブラウザでのログインには、メールで届く確認コードが要ります。確認コードのメールを送れずにログインできない場合は、`central config set smtp.*` で SMTP の設定を直すか、`central config unset smtp.host` で確認コードを求めない状態にします（どちらもセントラルの停止中でも使える）。アカウントのメールアドレスの誤りは `ctl accounts email ID ADDRESS` で、パスワードは `central reset-password --email ADDRESS` で直します。
+
 ## agent
 
 エージェントのコマンドです。各監視対象のホストで実行します。

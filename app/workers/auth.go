@@ -39,7 +39,7 @@ func (c *core) sessionAuth(next http.Handler) http.Handler {
 			return
 		}
 		public := (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
-			(r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login")
+			(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 		if public {
 			next.ServeHTTP(w, r)
 			return

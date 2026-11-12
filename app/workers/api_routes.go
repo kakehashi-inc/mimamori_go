@@ -17,9 +17,13 @@ func (c *core) registerAPI(mux *http.ServeMux, prefix string, cli bool) {
 	if !cli {
 		h("GET /health", c.handleHealth)
 		h("POST /auth/login", c.handleLogin)
+		h("POST /auth/login/verify", c.handleLoginVerify)
 		h("POST /auth/logout", requireAny(c.handleLogout))
 		h("POST /auth/password", requireAny(c.handleOwnPassword))
 		h("PUT /auth/language", requireAny(c.handleOwnLanguage))
+		h("PUT /auth/display-name", requireAny(c.handleOwnDisplayName))
+		h("POST /auth/email", requireAny(c.handleOwnEmail))
+		h("POST /auth/email/verify", requireAny(c.handleOwnEmailVerify))
 	}
 	h("GET /auth/me", requireAny(c.handleMe))
 	h("GET /overview", requireAny(c.handleOverview))

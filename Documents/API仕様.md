@@ -14,7 +14,8 @@
 | エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がループバックで、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
 - `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
-- 例外として、2 章の `/health`、`/auth/login`、`/auth/logout`、`/auth/password`、`/auth/language` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
+- 例外として、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
+- ブラウザ用で認証の要らない（公開の）パスは `GET /health`、`POST /auth/login`、`POST /auth/login/verify` だけです。
 - ループバック以外からの `/admin/v1/*` は 404 を返します。接続元の判定には TCP の接続元アドレスだけを使います。
 - 1 接続で 1 リクエストを処理し、応答は `Connection: close` です。
 
@@ -24,7 +25,7 @@
 - 要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。
 - ブラウザ用と管理用の API は、要求の JSON に未知のフィールドがあると 400 を返します。エージェント用の API は未知のフィールドを無視します。
 - エラー時は 4xx/5xx と `{"error": "<message>"}` を返します。
-  - 400: 入力の誤り、401: 未認証、403: 権限なし、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、423: ログインの一時停止、500: 内部エラー（`internal error`）、503: 混雑。
+  - 400: 入力の誤り、401: 未認証、403: 権限なし、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、410: 確認コードの期限切れなど（2 章）、423: ログインの一時停止、500: 内部エラー（`internal error`）、503: 混雑、または確認コードのメールを送れない（2 章）。
   - 503 を返すのはブラウザ用の待ち受けだけです。エージェントおよび管理用の待ち受け（HTTPS）では、混雑すると応答を返さずに接続を切ります。
 - 存在しないパスと、そのパスで対応していないメソッドへの要求は、`{"error": ...}` ではなく `text/plain` の `404 page not found` と `405 Method Not Allowed` を返します（ブラウザ用はログイン済みの場合）。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
@@ -47,16 +48,52 @@
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30,"trust_days":30}`（`remember_days` は `session_remember_days`、`trust_days` は `two_step_trust_days` の値） |
-| POST | `/auth/login` | なし | `{"email","password","remember"?}` | `Me`（Cookie を設定）。`email` はメールアドレス（大文字と小文字を区別しない）。`remember` が true なら有効期限付きの Cookie（ログインを保持）。失敗は 401 `{"error":"invalid e-mail address or password"}`、一時停止中は 423 |
+| POST | `/auth/login` | なし | `{"email","password","remember"?}` | 下の「ログイン」。`email` はメールアドレス（大文字と小文字を区別しない）。`remember` が true なら有効期限付きの Cookie（ログインを保持） |
+| POST | `/auth/login/verify` | なし | `{"challenge","code","trust"?}` | 下の「ログイン」。`trust` は「N 日間このブラウザを信頼する」（N は `trust_days`） |
 | POST | `/auth/logout` | V | - | `{}` |
 | GET | `/auth/me` | V | - | `Me`。`/admin/v1` では `{"id":0,"email":"","display_name":"cli","role":"admin","language":""}` |
 | POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる） |
 | PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更） |
+| PUT | `/auth/display-name` | V | `{"display_name"}` | `Me`（自分の表示名の変更。何も無効にならない） |
+| POST | `/auth/email` | V | `{"email"}` | 下の「自分のメールアドレスの変更」 |
+| POST | `/auth/email/verify` | V | `{"code"}` | 下の「自分のメールアドレスの変更」 |
 
 ```ts
 // language: 'auto' はブラウザの言語から自動判別（日本語なら ja、それ以外は en）
 interface Me { id: number; email: string; display_name: string; role: 'admin' | 'viewer'; language: 'auto' | 'en' | 'ja' }
 ```
+
+ログイン（`POST /auth/login` と `POST /auth/login/verify`）:
+
+| 要求 | 状態 | 応答 |
+| --- | --- | --- |
+| `/auth/login` | 200 | `Me`。ログインした（開発モード、または確認済みのブラウザ）。セッションの Cookie を設定 |
+| `/auth/login` | 202 | `{"two_step":true,"challenge":"<値>"}`。確認コードをアカウントのメールアドレスへ送った。challenge は `/auth/login/verify` に渡す値で、中身に意味は無い |
+| `/auth/login` | 401 | `{"error":"invalid e-mail address or password"}`（存在しないアドレス、パスワードの誤り、無効なアカウント） |
+| `/auth/login` | 423 | ロック中（`{"error":"login is temporarily locked after repeated failures"}`） |
+| `/auth/login` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}`。ログインは失敗し、セッションもコードも作らない |
+| `/auth/login/verify` | 200 | `Me`。ログインした。セッションの Cookie と `mimamori_verify` の Cookie を設定 |
+| `/auth/login/verify` | 401 | `{"error":"invalid code"}`。誤りはパスワードの誤りと同じ失敗の回数に数える |
+| `/auth/login/verify` | 423 | ロック中、またはこの誤りでロックした |
+| `/auth/login/verify` | 410 | `{"error":"the verification code has expired; log in again"}`。challenge が不明、期限切れ、使用済み、誤りの上限に達した、またはパスワードの入力からやり直して置き換わった。パスワードの入力からやり直す |
+
+- コードは 6 桁の数字で、有効期限は 10 分、1 つのコードで誤りは 5 回までです。再送の要求はありません（パスワードの入力からやり直す）。
+- Cookie `mimamori_verify`（HttpOnly、SameSite=Strict、Path `/api/v1/auth/login`）は、`trust` の値に関係なく `Max-Age` が `trust_days` 日です。この Cookie があるブラウザで次にログインするときにコードを省くかどうかは、セントラルが判定します（[システム仕様.md](システム仕様.md) の 12.4）。
+
+自分のメールアドレスの変更（`POST /auth/email` と `POST /auth/email/verify`）:
+
+| 要求 | 状態 | 応答 |
+| --- | --- | --- |
+| `/auth/email` | 200 | `{"applied":true}`。開発モードのため、すぐに変更した |
+| `/auth/email` | 202 | `{"applied":false}`。確認コードを新しいアドレスへ送った |
+| `/auth/email` | 400 | アドレスの誤り、または今のアドレスと同じ |
+| `/auth/email` | 409 | ほかのアカウントのアドレス（大文字と小文字を区別しない） |
+| `/auth/email` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}` |
+| `/auth/email/verify` | 200 | `Me`（変更後）。同じアカウントの他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる |
+| `/auth/email/verify` | 400 | `{"error":"invalid code"}`（401 は使わない。ログインの失敗の回数にも数えない） |
+| `/auth/email/verify` | 410 | 依頼が無い、期限切れ、または誤りが 5 回になって依頼を破棄した |
+
+- 現在のパスワードは求めません。確定できるのは、依頼したのと同じセッションだけです。新しい依頼は、確定していない古い依頼を置き換えます。
 
 ## 3. 概要
 

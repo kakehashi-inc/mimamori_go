@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -40,6 +41,27 @@ func DeriveRenewalToken(serverKey []byte, tokenID int64, counter int) string {
 	m := hmac.New(sha256.New, serverKey)
 	fmt.Fprintf(m, "token-renewal:%d:%d", tokenID, counter)
 	return TokenPrefix + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+// GenerateNumericCode returns a random code of the given number of decimal
+// digits (leading zeros kept).
+func GenerateNumericCode(digits int) (string, error) {
+	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits)), nil)
+	n, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%0*d", digits, n), nil
+}
+
+// HashAuthCode returns the keyed hash (HMAC-SHA256 with the central server
+// key, hex) under which a verification code is stored. binding ties the hash
+// to the row it belongs to (purpose, account and challenge or session), so a
+// stored hash is of no use for another request.
+func HashAuthCode(serverKey []byte, binding, code string) string {
+	m := hmac.New(sha256.New, serverKey)
+	fmt.Fprintf(m, "auth-code:%s:%s", binding, code)
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // HashPassword hashes a password with PBKDF2-SHA256 and a random salt.

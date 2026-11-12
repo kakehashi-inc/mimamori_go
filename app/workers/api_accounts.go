@@ -83,30 +83,54 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid e-mail address or password")
 		return
 	}
+	cfg := c.conf()
+	host := remoteHost(r.RemoteAddr)
+	switch {
+	case cfg.SMTP.DevelopmentMode():
+		// No SMTP server: no code could be delivered, so none is asked for.
+		c.completeLogin(w, r, a, in.Remember, "from "+host+"; two-step verification skipped (SMTP not configured)")
+	case c.browserVerified(r, a.ID, cfg, now):
+		c.completeLogin(w, r, a, in.Remember, "from "+host+"; verified browser")
+	default:
+		c.startLoginCode(w, r, a, in.Remember, now)
+	}
+}
+
+// completeLogin ends a successful login: it clears the failure counter,
+// starts a session, records the login and answers Me.
+func (c *core) completeLogin(w http.ResponseWriter, r *http.Request, a *models.Account, remember bool, detail string) {
 	_ = models.ResetLoginFailures(c.db, a.ID)
-	value, err := modules.GenerateSecret(modules.SessionPrefix)
-	if err != nil {
+	if err := c.startSession(w, a.ID, remember); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
+	c.history(&principal{Email: a.Email}, models.HistAccount, "login", a.Email, detail)
+	writeJSON(w, http.StatusOK, meJSON(a.ID, a.Email, a.DisplayName, a.Role, a.Language))
+}
+
+// startSession creates a login session and sets its cookie.
+func (c *core) startSession(w http.ResponseWriter, accountID int64, remember bool) error {
+	now := time.Now().Unix()
+	value, err := modules.GenerateSecret(modules.SessionPrefix)
+	if err != nil {
+		return err
+	}
 	// Without "keep me logged in" the session ends SessionIdleTimeout after
-	// the last operation (sessionAuth extends it).
+	// the last operation (sessionAuth extends it); the cookie has no Max-Age.
 	expires := now + int64(modules.SessionIdleTimeout/time.Second)
 	cookie := &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
-	if in.Remember {
+	if remember {
 		// "Keep me logged in": the cookie survives closing the browser and
 		// the session lasts the configured period from login.
 		maxAge := c.conf().SessionRememberDays * 86400
 		expires = now + int64(maxAge)
 		cookie.MaxAge = maxAge
 	}
-	if err := models.InsertSession(c.db, &models.Session{ID: modules.HashSecret(value), AccountID: a.ID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now, Remember: in.Remember}); err != nil {
-		c.internalError(w, r, err)
-		return
+	if err := models.InsertSession(c.db, &models.Session{ID: modules.HashSecret(value), AccountID: accountID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now, Remember: remember}); err != nil {
+		return err
 	}
 	http.SetCookie(w, cookie)
-	c.history(&principal{Email: a.Email}, models.HistAccount, "login", a.Email, "from "+remoteHost(r.RemoteAddr))
-	writeJSON(w, http.StatusOK, meJSON(a.ID, a.Email, a.DisplayName, a.Role, a.Language))
+	return nil
 }
 
 func (c *core) handleLogout(w http.ResponseWriter, r *http.Request) {

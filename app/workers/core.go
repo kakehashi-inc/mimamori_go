@@ -39,6 +39,9 @@ type core struct {
 	hostname  string
 	// cliSecret authenticates the management CLI (see writeCLISecret).
 	cliSecret string
+	// sendMail delivers one mail synchronously (verification codes). It is
+	// modules.SendMailTo; tests replace it.
+	sendMail func(cfg modules.SMTPConfig, to []string, subject, body string) error
 
 	targetsMu sync.Mutex
 	targets   map[int64]*sql.DB
@@ -52,7 +55,7 @@ type core struct {
 
 func newCore(db *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
 	h, _ := os.Hostname()
-	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*sql.DB{}}
+	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*sql.DB{}, sendMail: modules.SendMailTo}
 	c.cfg.Store(cfg)
 	return c
 }

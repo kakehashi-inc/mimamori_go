@@ -261,3 +261,26 @@ func TestRevokeAccountAuth(t *testing.T) {
 		t.Fatal("expired codes and verifications must be removed")
 	}
 }
+
+func TestVerificationCodeHelpers(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		c, err := GenerateNumericCode(AuthCodeDigits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c) != 6 || strings.Trim(c, "0123456789") != "" {
+			t.Fatalf("code %q", c)
+		}
+		seen[c] = true
+	}
+	if len(seen) < 150 {
+		t.Fatalf("codes repeat too often: %d distinct of 200", len(seen))
+	}
+	k1, k2 := []byte("key-1"), []byte("key-2")
+	h := HashAuthCode(k1, "login:1:abc", "123456")
+	if h == HashAuthCode(k2, "login:1:abc", "123456") || h == HashAuthCode(k1, "login:2:abc", "123456") ||
+		h == HashAuthCode(k1, "login:1:abc", "123457") || h != HashAuthCode(k1, "login:1:abc", "123456") || strings.Contains(h, "123456") {
+		t.Fatal("the code hash must depend on the key, the binding and the code")
+	}
+}

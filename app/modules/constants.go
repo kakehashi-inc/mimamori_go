@@ -71,6 +71,13 @@ const (
 	// TokenPrefix marks agent tokens and SessionPrefix marks browser session ids.
 	TokenPrefix   = "mmr_"
 	SessionPrefix = "mms_"
+	// ChallengePrefix marks the opaque login challenge handed to the browser
+	// with a mailed login code, and VerifyPrefix the value of the cookie that
+	// remembers a browser in which a login code was entered.
+	ChallengePrefix = "mmk_"
+	VerifyPrefix    = "mmv_"
+	// AuthCodeDigits is the number of digits of a mailed verification code.
+	AuthCodeDigits = 6
 	// SecretRandomBytes is the number of random bytes in every secret value.
 	SecretRandomBytes = 32
 )
