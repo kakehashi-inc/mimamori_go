@@ -640,44 +640,15 @@ func (c *CommandSpec) validate(purpose string) []string {
 
 // CompileCommandPattern compiles a value pattern (RE2 syntax compatibility
 // and multi-line mode: "^" and "$" match at line breaks, "." does not match
-// a line break unless "(?s)" is written). A pattern must have at least one
-// named group: only named groups give values.
+// a line break unless "(?s)" is written). Capturing groups are numbered as
+// in Python and the editors (see cmdpattern.go). A pattern must have at
+// least one named group: only named groups give values.
 func CompileCommandPattern(p string) (*regexp2.Regexp, error) {
-	if p == "" {
-		return nil, errors.New("must not be empty")
-	}
-	re, err := regexp2.Compile(p, regexp2.RE2|regexp2.Multiline)
+	cp, err := compileCommandPattern(p)
 	if err != nil {
-		return nil, fmt.Errorf("invalid regular expression: %v", err)
+		return nil, err
 	}
-	if len(namedGroups(re)) == 0 {
-		return nil, errors.New("must have at least one named group such as (?P<name>...) or (?<name>...)")
-	}
-	return re, nil
-}
-
-// namedGroups returns the names of the named groups of re (numbered groups
-// are left out).
-func namedGroups(re *regexp2.Regexp) []string {
-	var out []string
-	for _, n := range re.GetGroupNames() {
-		if !isGroupNumber(n) {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-func isGroupNumber(n string) bool {
-	if n == "" {
-		return true
-	}
-	for _, r := range n {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
+	return cp.re, nil
 }
 
 // ValidateCommandOSUser checks the OS user of a set: 1 to 256 characters, no

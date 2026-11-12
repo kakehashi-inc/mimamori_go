@@ -105,10 +105,11 @@ func extractCommandValues(patterns []string, output []byte, lineLimit int, timeo
 // (MaxCommandValueBytes, MaxCommandLineLimit lines), which bounds the
 // memory of patterns that match very often or capture much.
 func matchPattern(p, text string, timeout time.Duration, add func(ExtractedValue) bool) string {
-	re, err := CompileCommandPattern(p)
+	cp, err := compileCommandPattern(p)
 	if err != nil {
 		return PatternProblemInvalid
 	}
+	re := cp.re
 	deadline := time.Now().Add(timeout)
 	var out []ExtractedValue
 	size, lines := 0, 0
@@ -117,7 +118,9 @@ func matchPattern(p, text string, timeout time.Duration, add func(ExtractedValue
 collect:
 	for err == nil && m != nil {
 		for _, g := range m.Groups() {
-			if isGroupNumber(g.Name) || len(g.Captures) == 0 || g.Length == 0 {
+			// Only the named groups of the pattern as written give values
+			// (not the names generated for unnamed groups).
+			if !cp.names[g.Name] || len(g.Captures) == 0 || g.Length == 0 {
 				continue
 			}
 			v := g.String()
