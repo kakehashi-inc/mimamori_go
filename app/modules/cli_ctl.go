@@ -24,7 +24,7 @@ import (
 )
 
 // CtlCmd groups the management commands. They run on the central host and
-// use the management API over the loopback address.
+// use the management API on the address of agent_listen (see CtlTarget).
 type CtlCmd struct {
 	JSON bool `help:"Print raw JSON (rules export and command-sets export always print JSON; rules edit prints its messages only)"`
 

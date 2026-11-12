@@ -24,7 +24,7 @@ type CLI struct {
 
 	Central modules.CentralCmd `cmd:"" help:"Central service and its local administration"`
 	Agent   modules.AgentCmd   `cmd:"" help:"Agent initialization and service"`
-	Ctl     modules.CtlCmd     `cmd:"" help:"Management commands (run on the central host; uses the management API on the loopback address)"`
+	Ctl     modules.CtlCmd     `cmd:"" help:"Management commands (run on the central host; uses the management API on the agent_listen address, the loopback address when it listens on every address)"`
 	Version VersionCmd         `cmd:"" help:"Show version"`
 }
 
