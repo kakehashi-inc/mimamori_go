@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useClickOutside } from '../hooks/useClickOutside';
 import { useHealth } from '../hooks/useHealth';
 import { formatVersion } from '../utils/format';
+import type { Role } from '../types';
 import { LanguageSwitch } from './LanguageSwitch';
 import { RoleBadge } from './StatusBadges';
 
@@ -73,21 +75,7 @@ export function Header() {
                     {health && <span className='text-xs font-normal text-muted'>{formatVersion(health.version)}</span>}
                 </Link>
                 <div className='flex items-center gap-1 sm:gap-2'>
-                    {me && (
-                        <Link
-                            to='/settings'
-                            title={t('nav.settings')}
-                            className='flex items-center gap-2 rounded-md px-2 py-1 text-sm text-ink hover:bg-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
-                        >
-                            <span className='material-icons-outlined text-lg text-muted' aria-hidden='true'>
-                                account_circle
-                            </span>
-                            <span className='max-w-32 truncate'>{me.name}</span>
-                            <span className='hidden sm:inline'>
-                                <RoleBadge role={me.role} />
-                            </span>
-                        </Link>
-                    )}
+                    {me && <AccountMenu displayName={me.display_name} role={me.role} />}
                     <LanguageSwitch />
                     <button
                         type='button'
@@ -130,5 +118,56 @@ export function Header() {
                 </ul>
             </nav>
         </header>
+    );
+}
+
+/** The signed-in account at the top right: a button that opens the account menu. */
+function AccountMenu({ displayName, role }: { displayName: string; role: Role }) {
+    const { t } = useTranslation();
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    const close = useCallback(() => setOpen(false), []);
+    useClickOutside(ref, open, close);
+
+    return (
+        <div className='relative' ref={ref}>
+            <button
+                type='button'
+                aria-haspopup='menu'
+                aria-expanded={open}
+                title={t('nav.accountMenu')}
+                onClick={() => setOpen(v => !v)}
+                className='flex items-center gap-2 rounded-md px-2 py-1 text-sm text-ink hover:bg-line focus:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+            >
+                <span className='material-icons-outlined text-lg text-muted' aria-hidden='true'>
+                    account_circle
+                </span>
+                <span className='max-w-32 truncate'>{displayName}</span>
+                <span className='hidden sm:inline'>
+                    <RoleBadge role={role} />
+                </span>
+                <span className='material-icons-outlined text-base text-muted' aria-hidden='true'>
+                    {open ? 'expand_less' : 'expand_more'}
+                </span>
+            </button>
+            {open && (
+                <div
+                    role='menu'
+                    className='absolute right-0 z-20 mt-1 min-w-40 overflow-hidden rounded-md border border-line bg-surface py-1 shadow-xl'
+                >
+                    <Link
+                        to='/profile'
+                        role='menuitem'
+                        onClick={close}
+                        className='flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-ink hover:bg-line focus:bg-line focus:outline-none'
+                    >
+                        <span className='material-icons-outlined text-base text-muted' aria-hidden='true'>
+                            person
+                        </span>
+                        {t('nav.profile')}
+                    </Link>
+                </div>
+            )}
+        </div>
     );
 }

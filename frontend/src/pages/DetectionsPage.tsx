@@ -15,7 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { AgentSummary, Detection } from '../types';
-import { formatDateTime, localInputToRfc3339 } from '../utils/format';
+import { formatDateTime, formatOperator, localInputToRfc3339 } from '../utils/format';
 import { DETECTION_TYPES } from '../utils/ruleContent';
 
 // Rows per page and the choices offered.
@@ -378,7 +378,7 @@ export function DetectionsPage() {
                                                 <Badge
                                                     tone='success'
                                                     icon='check'
-                                                    title={`${d.acknowledged_by} ${formatDateTime(d.acknowledged_at)}`}
+                                                    title={`${formatOperator(d.acknowledged_by)} ${formatDateTime(d.acknowledged_at)}`}
                                                 >
                                                     {t('detections.ackYes')}
                                                 </Badge>

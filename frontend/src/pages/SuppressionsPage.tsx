@@ -11,7 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { Suppression } from '../types';
-import { formatDateTime } from '../utils/format';
+import { formatDateTime, formatOperator } from '../utils/format';
 
 export function SuppressionsPage() {
     const { t } = useTranslation();
@@ -73,7 +73,7 @@ export function SuppressionsPage() {
                                         <Td className='text-muted'>{s.comment || '-'}</Td>
                                         <Td className='whitespace-nowrap'>
                                             {formatDateTime(s.created_at)}
-                                            <div className='text-xs text-muted'>{s.created_by}</div>
+                                            <div className='text-xs text-muted'>{formatOperator(s.created_by)}</div>
                                         </Td>
                                         {isAdmin && (
                                             <Td className='text-right'>

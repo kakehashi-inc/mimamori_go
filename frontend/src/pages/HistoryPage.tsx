@@ -10,7 +10,7 @@ import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { HistoryCategory } from '../types';
-import { formatDateTime, localizeTimestamps } from '../utils/format';
+import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
 
 const CATEGORIES: HistoryCategory[] = [
     'account',
@@ -100,7 +100,7 @@ export function HistoryPage() {
                                 {items.map(h => (
                                     <Tr key={h.id}>
                                         <Td className='whitespace-nowrap'>{formatDateTime(h.at)}</Td>
-                                        <Td>{h.account_name}</Td>
+                                        <Td>{formatOperator(h.account_name)}</Td>
                                         <Td>
                                             <Badge tone={h.category === 'rejected' ? 'danger' : 'neutral'}>
                                                 {t(`historyCategory.${h.category}`)}

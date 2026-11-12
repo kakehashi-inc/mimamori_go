@@ -9,7 +9,7 @@ import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo } from '../types';
-import { formatDateTime, localizeTimestamps } from '../utils/format';
+import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
 
 // Token history actions recorded by the central (app/workers); others are shown as they are.
@@ -169,7 +169,7 @@ function AgentDetailBody({ agent }: { agent: AgentDetail }) {
                             {(agent.token_history ?? []).map(h => (
                                 <Tr key={h.id}>
                                     <Td className='whitespace-nowrap'>{formatDateTime(h.at)}</Td>
-                                    <Td>{h.account_name}</Td>
+                                    <Td>{formatOperator(h.account_name)}</Td>
                                     <Td>
                                         {isTokenAction(h.action) ? t(`agentDetail.tokenActions.${h.action}`) : h.action}
                                     </Td>

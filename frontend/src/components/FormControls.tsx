@@ -38,3 +38,13 @@ export function Field({ label, htmlFor, hint, error, required, children, classNa
         </div>
     );
 }
+
+// Attributes of an e-mail address input. type="email" is not used because
+// browsers rewrite or reject addresses the server accepts (for example
+// international domain names are turned into punycode).
+export const emailInputProps = {
+    type: 'text',
+    inputMode: 'email',
+    autoCapitalize: 'none',
+    spellCheck: false,
+} as const;

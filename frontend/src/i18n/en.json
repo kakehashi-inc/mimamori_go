@@ -22,7 +22,8 @@
         "history": "History",
         "accounts": "Accounts",
         "guide": "Setup guide",
-        "settings": "My settings",
+        "profile": "Profile",
+        "accountMenu": "Account menu",
         "logout": "Log out",
         "config": "System settings"
     },
@@ -78,13 +79,27 @@
     },
     "login": {
         "subtitle": "Sign in to continue",
-        "name": "Account name",
+        "email": "E-mail address",
         "password": "Password",
         "submit": "Log in",
-        "invalid": "The account name or password is incorrect.",
+        "invalid": "The e-mail address or password is incorrect.",
         "locked": "Login is temporarily locked after repeated failures. Please try again later.",
         "remember": "Keep me logged in",
-        "rememberHint": "Stay logged in for {{days}} days, even after closing the browser. Do not use this on a shared computer."
+        "rememberHint": "Stay logged in for {{days}} days, even after closing the browser. Do not use this on a shared computer.",
+        "codeSubtitle": "Enter the verification code",
+        "codeSent": "A verification code has been sent to your e-mail address. Enter it to log in.",
+        "trust": "Trust this browser for {{days}} days",
+        "trustHint": "No code is asked for on this browser during this period. Do not use this on a shared computer.",
+        "verify": "Verify and log in",
+        "startOver": "Start over",
+        "noCodeHint": "If the mail does not arrive, start over to have a new code sent.",
+        "codeExpired": "The verification code can no longer be used. Please log in again."
+    },
+    "code": {
+        "label": "Verification code",
+        "hint": "The {{digits}}-digit number in the mail.",
+        "invalid": "The code is incorrect.",
+        "mailFailed": "The verification code could not be sent by e-mail. Please contact an administrator."
     },
     "role": {
         "admin": "Administrator",
@@ -488,7 +503,10 @@
         "create": "Create account",
         "createTitle": "Create an account",
         "created": "Account created",
-        "name": "Account name",
+        "email": "E-mail address",
+        "emailHint": "Used as the login ID.",
+        "displayName": "Display name",
+        "displayNameHint": "Name shown on the screens, up to {{max}} characters.",
         "role": "Role",
         "state": "State",
         "enabled": "Enabled",
@@ -496,6 +514,13 @@
         "lockedUntil": "Locked until {{date}}",
         "createdAt": "Created",
         "you": "(you)",
+        "changeEmail": "Change e-mail address",
+        "changeEmailTitle": "Change e-mail address of {{name}}",
+        "changeEmailNote": "The change is applied at once, without a verification code. The account is logged out on every device and no browser stays trusted.",
+        "changeOwnEmailWarning": "This is your own account: you will be logged out and must log in again with the new address.",
+        "emailChanged": "E-mail address changed",
+        "changeDisplayName": "Change display name",
+        "changeDisplayNameTitle": "Change display name of {{name}}",
         "changeRole": "Change role",
         "changeRoleTitle": "Change role of {{name}}",
         "resetPassword": "Reset password",
@@ -511,6 +536,13 @@
         "deleteConfirm": "Delete {{name}}? This cannot be undone.",
         "language": "Display language"
     },
+    "accountErrors": {
+        "emailInvalid": "Enter a single e-mail address such as name@example.com (up to 254 characters, without spaces or the characters \" < > ,).",
+        "displayNameInvalid": "Enter a display name of 1 to 64 characters without control characters.",
+        "emailUnchanged": "This is already your current e-mail address.",
+        "wrongCurrentPassword": "The current password is incorrect.",
+        "emailDuplicate": "Another account already uses this e-mail address."
+    },
     "password": {
         "password": "Password",
         "current": "Current password",
@@ -520,13 +552,23 @@
         "tooShort": "The password must be at least {{min}} characters.",
         "mismatch": "The passwords do not match."
     },
-    "settings": {
-        "title": "My settings",
+    "profile": {
+        "title": "Profile",
+        "description": "Your account and the changes you can make yourself.",
         "account": "Account",
+        "changeDisplayName": "Change display name",
+        "displayNameChanged": "Display name changed",
+        "changeEmail": "Change e-mail address",
+        "newEmail": "New e-mail address",
+        "newEmailHint": "Becomes your login ID.",
+        "emailNote": "A verification code is sent to the new address, and the address changes when you enter that code. After the change, you are logged out on other devices and no browser stays trusted.",
+        "emailCodeSent": "A verification code has been sent to {{email}}. Enter it to complete the change. Until then, your e-mail address stays as it is.",
+        "confirmEmail": "Confirm the change",
+        "emailChanged": "E-mail address changed",
+        "emailCodeExpired": "The verification code can no longer be used. Please request the change again.",
         "changePassword": "Change password",
-        "changed": "Password changed",
-        "wrongCurrent": "The current password is incorrect.",
-        "otherSessionsNote": "Changing the password signs you out on other devices."
+        "passwordChanged": "Password changed",
+        "passwordNote": "Changing the password logs you out on other devices, and no browser stays trusted."
     },
     "guide": {
         "title": "Setup guide",
@@ -683,13 +725,13 @@
                 "label": "Retention (days)",
                 "hint": "Detections and records of rejected connections older than this are deleted."
             },
-            "session_hours": {
-                "label": "Session lifetime (hours)",
-                "hint": "Extended on every operation."
-            },
             "session_remember_days": {
                 "label": "Kept login (days)",
                 "hint": "Lifetime of a login with \"Keep me logged in\" (up to 365). Applies to new logins."
+            },
+            "two_step_trust_days": {
+                "label": "Trusted browser period (days)",
+                "hint": "A browser marked as trusted at the login code step needs no code for this many days (1 to 365). Applies at once."
             },
             "notify_min_interval_min": {
                 "label": "Minimum interval (minutes)",
@@ -709,7 +751,7 @@
             },
             "smtp_host": {
                 "label": "SMTP server",
-                "hint": "Notifications are sent only when the server, sender and recipients are set."
+                "hint": "While empty, no notifications are sent and no verification codes are used (login and e-mail address changes). Notifications are sent only when the server, sender and recipients are set."
             },
             "smtp_port": {
                 "label": "Port",
@@ -733,7 +775,7 @@
             },
             "smtp_from": {
                 "label": "Sender",
-                "hint": "Sender address."
+                "hint": "Sender address. Required for notifications and verification codes."
             },
             "smtp_to": {
                 "label": "Recipients",

@@ -8,6 +8,8 @@ export interface Health {
     version: string;
     /** Days a "keep me logged in" session lasts. */
     remember_days: number;
+    /** Days a browser trusted at the login code step needs no code. */
+    trust_days: number;
 }
 
 // --- Authentication ---
@@ -16,10 +18,32 @@ export type Role = 'admin' | 'viewer';
 
 export interface Me {
     id: number;
-    name: string;
+    /** Login ID. */
+    email: string;
+    display_name: string;
     role: Role;
     language: LangSetting;
 }
+
+/** POST /auth/login answers 202 with this when a code was mailed. */
+export interface LoginChallenge {
+    two_step: true;
+    /** Opaque value passed to POST /auth/login/verify. */
+    challenge: string;
+}
+
+/** POST /auth/email: applied is true when the address changed at once. */
+export interface EmailChangeStart {
+    applied: boolean;
+}
+
+/**
+ * Who did an operation (history account_name, created_by, acknowledged_by).
+ * Administrators get the recorded e-mail address; viewers get the account's
+ * current display name, or '' when no account has that address any more.
+ * Values without '@' (system, cli, local:<user>) are sent as recorded.
+ */
+export type Operator = string;
 
 // --- Overview ---
 
@@ -129,7 +153,7 @@ export interface Token {
     status: TokenStatus;
     expires_at: string;
     created_at: string;
-    created_by: string;
+    created_by: Operator;
     last_seen_at: string | null;
     instance_id: string;
     bound_at: string | null;
@@ -202,7 +226,7 @@ export interface RuleSummary {
 export interface RuleVersionInfo {
     version: number;
     created_at: string;
-    created_by: string;
+    created_by: Operator;
     comment: string;
 }
 
@@ -216,7 +240,7 @@ export interface RuleVersion {
     version: number;
     content: RuleContent;
     created_at: string;
-    created_by: string;
+    created_by: Operator;
     comment: string;
 }
 
@@ -292,7 +316,7 @@ export interface Detection {
     suppressed: boolean;
     suppression_id: number | null;
     acknowledged_at: string | null;
-    acknowledged_by: string;
+    acknowledged_by: Operator;
     notify_state: 'pending' | 'sent' | 'skipped';
 }
 
@@ -325,7 +349,7 @@ export interface Suppression {
     target: string;
     comment: string;
     created_at: string;
-    created_by: string;
+    created_by: Operator;
 }
 
 export interface SuppressionCreate {
@@ -369,7 +393,7 @@ export type HistoryCategory =
 export interface HistoryItem {
     id: number;
     at: string;
-    account_name: string;
+    account_name: Operator;
     category: HistoryCategory;
     action: string;
     target: string;
@@ -382,7 +406,9 @@ export interface HistoryItem {
 
 export interface Account {
     id: number;
-    name: string;
+    /** Login ID. */
+    email: string;
+    display_name: string;
     role: Role;
     language: LangSetting;
     disabled: boolean;

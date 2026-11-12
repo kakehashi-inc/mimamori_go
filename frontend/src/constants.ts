@@ -17,3 +17,6 @@ export type LangSetting = (typeof LANG_SETTINGS)[number];
 
 // Minimum password length enforced by the server.
 export const MIN_PASSWORD_LENGTH = 10;
+
+// Maximum length of a display name enforced by the server (characters, after trimming).
+export const MAX_DISPLAY_NAME_LENGTH = 64;

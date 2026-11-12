@@ -26,7 +26,7 @@ const GROUPS: { key: GroupKey; items: string[] }[] = [
         key: 'agents',
         items: ['token_valid_days', 'token_renew_before_days', 'default_check_interval_sec', 'retention_days'],
     },
-    { key: 'sessions', items: ['session_hours', 'session_remember_days'] },
+    { key: 'sessions', items: ['session_remember_days', 'two_step_trust_days'] },
     {
         key: 'notify',
         items: ['notify.min_interval_min', 'notify.dedupe_hours', 'notify.max_lines', 'notify.subject_prefix'],

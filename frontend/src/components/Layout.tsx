@@ -20,8 +20,10 @@ export function Layout() {
     useEffect(() => {
         if (status !== 'authenticated') return;
         let active = true;
-        const load = () => {
-            getOverview()
+        // The periodic refresh is sent as a background request so that an
+        // open but unused page does not keep the login session alive.
+        const load = (background: boolean) => {
+            getOverview(background)
                 .then(o => {
                     if (active) setOverview(o);
                 })
@@ -29,8 +31,8 @@ export function Layout() {
                     // Keep the previous state; the page itself reports errors.
                 });
         };
-        load();
-        const timer = window.setInterval(load, OVERVIEW_POLL_MS);
+        load(false);
+        const timer = window.setInterval(() => load(true), OVERVIEW_POLL_MS);
         return () => {
             active = false;
             window.clearInterval(timer);

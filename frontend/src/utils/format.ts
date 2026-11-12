@@ -64,3 +64,11 @@ export function errorMessage(t: TFunction, e: unknown): string {
     if (e instanceof Error) return e.message;
     return String(e);
 }
+
+/**
+ * Shows who did an operation (account_name, created_by, acknowledged_by).
+ * The server sends '' to viewers when the account no longer exists.
+ */
+export function formatOperator(value: string | null | undefined): string {
+    return value ? value : '-';
+}

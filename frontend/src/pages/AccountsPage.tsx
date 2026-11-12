@@ -6,13 +6,15 @@ import {
     listAccounts,
     resetAccountPassword,
     setAccountDisabled,
+    setAccountDisplayName,
+    setAccountEmail,
     setAccountRole,
 } from '../api/client';
 import { Badge } from '../components/Badge';
-import { LANG_SETTINGS, MIN_PASSWORD_LENGTH, type LangSetting } from '../constants';
+import { LANG_SETTINGS, MAX_DISPLAY_NAME_LENGTH, MIN_PASSWORD_LENGTH, type LangSetting } from '../constants';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { Field, inputClass } from '../components/FormControls';
+import { emailInputProps, Field, inputClass } from '../components/FormControls';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
@@ -22,10 +24,18 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { Account, Role } from '../types';
-import { errorMessage, formatDateTime } from '../utils/format';
+import { accountErrorMessage } from '../utils/accountErrors';
+import { formatDateTime } from '../utils/format';
+
+/** How an account is named in dialogs: display name and login ID. */
+function accountLabel(a: Account): string {
+    return `${a.display_name} (${a.email})`;
+}
 
 type Dialog =
     | { kind: 'create' }
+    | { kind: 'email'; account: Account }
+    | { kind: 'displayName'; account: Account }
     | { kind: 'role'; account: Account }
     | { kind: 'password'; account: Account }
     | { kind: 'toggle'; account: Account }
@@ -34,7 +44,7 @@ type Dialog =
 
 export function AccountsPage() {
     const { t } = useTranslation();
-    const { me } = useAuth();
+    const { me, refreshMe } = useAuth();
     const { showToast } = useToast();
     const { data, error, loading, reload } = useApi(listAccounts, []);
     const [dialog, setDialog] = useState<Dialog>(null);
@@ -70,7 +80,8 @@ export function AccountsPage() {
                     data && (
                         <Table>
                             <THead>
-                                <Th>{t('accounts.name')}</Th>
+                                <Th>{t('accounts.email')}</Th>
+                                <Th>{t('accounts.displayName')}</Th>
                                 <Th>{t('accounts.role')}</Th>
                                 <Th>{t('accounts.language')}</Th>
                                 <Th>{t('accounts.state')}</Th>
@@ -80,12 +91,15 @@ export function AccountsPage() {
                             <TBody>
                                 {data.map(a => (
                                     <Tr key={a.id}>
-                                        <Td className='font-medium'>
-                                            {a.name}
+                                        <Td className='font-medium break-all'>
+                                            {a.email}
                                             {me?.id === a.id && (
-                                                <span className='ml-2 text-xs text-muted'>{t('accounts.you')}</span>
+                                                <span className='ml-2 text-xs font-normal text-muted'>
+                                                    {t('accounts.you')}
+                                                </span>
                                             )}
                                         </Td>
+                                        <Td className='break-words'>{a.display_name}</Td>
                                         <Td>
                                             <RoleBadge role={a.role} />
                                         </Td>
@@ -109,6 +123,20 @@ export function AccountsPage() {
                                         <Td className='whitespace-nowrap'>{formatDateTime(a.created_at)}</Td>
                                         <Td className='text-right'>
                                             <div className='flex flex-wrap justify-end gap-1'>
+                                                <Button
+                                                    size='sm'
+                                                    icon='alternate_email'
+                                                    onClick={() => setDialog({ kind: 'email', account: a })}
+                                                >
+                                                    {t('accounts.changeEmail')}
+                                                </Button>
+                                                <Button
+                                                    size='sm'
+                                                    icon='edit'
+                                                    onClick={() => setDialog({ kind: 'displayName', account: a })}
+                                                >
+                                                    {t('accounts.changeDisplayName')}
+                                                </Button>
                                                 <Button
                                                     size='sm'
                                                     icon='badge'
@@ -153,6 +181,23 @@ export function AccountsPage() {
                 onClose={close}
                 onCreated={() => done(t('accounts.created'))}
             />
+            <EmailModal
+                account={dialog?.kind === 'email' ? dialog.account : null}
+                self={dialog?.kind === 'email' && dialog.account.id === me?.id}
+                onClose={close}
+                onSaved={() => done(t('accounts.emailChanged'))}
+            />
+            <DisplayNameModal
+                account={dialog?.kind === 'displayName' ? dialog.account : null}
+                onClose={close}
+                onSaved={() => {
+                    done(t('common.saved'));
+                    // The header shows the own display name.
+                    if (dialog?.kind === 'displayName' && dialog.account.id === me?.id) {
+                        refreshMe().catch(() => {});
+                    }
+                }}
+            />
             <RoleModal
                 account={dialog?.kind === 'role' ? dialog.account : null}
                 onClose={close}
@@ -173,7 +218,7 @@ export function AccountsPage() {
                 message={
                     dialog?.kind === 'toggle'
                         ? t(dialog.account.disabled ? 'accounts.enableConfirm' : 'accounts.disableConfirm', {
-                              name: dialog.account.name,
+                              name: accountLabel(dialog.account),
                           })
                         : ''
                 }
@@ -188,7 +233,9 @@ export function AccountsPage() {
             <ConfirmDialog
                 open={dialog?.kind === 'delete'}
                 title={t('accounts.deleteTitle')}
-                message={dialog?.kind === 'delete' ? t('accounts.deleteConfirm', { name: dialog.account.name }) : ''}
+                message={
+                    dialog?.kind === 'delete' ? t('accounts.deleteConfirm', { name: accountLabel(dialog.account) }) : ''
+                }
                 confirmLabel={t('common.delete')}
                 danger
                 onClose={close}
@@ -270,7 +317,7 @@ function useSubmit() {
         try {
             await fn();
         } catch (e) {
-            setError(errorMessage(t, e));
+            setError(accountErrorMessage(t, e));
         } finally {
             setBusy(false);
         }
@@ -288,7 +335,8 @@ function CreateAccountModal({
     onCreated: () => void;
 }) {
     const { t } = useTranslation();
-    const [name, setName] = useState('');
+    const [email, setEmail] = useState('');
+    const [displayName, setDisplayName] = useState('');
     const [role, setRole] = useState<Role>('viewer');
     const [language, setLanguage] = useState<LangSetting>('auto');
     const [password, setPassword] = useState('');
@@ -296,7 +344,8 @@ function CreateAccountModal({
 
     useEffect(() => {
         if (!open) return;
-        setName('');
+        setEmail('');
+        setDisplayName('');
         setRole('viewer');
         setLanguage('auto');
         setPassword('');
@@ -319,20 +368,42 @@ function CreateAccountModal({
                     return;
                 }
                 void run(async () => {
-                    await createAccount({ name: name.trim(), role, language, password });
+                    await createAccount({
+                        email: email.trim(),
+                        display_name: displayName.trim(),
+                        role,
+                        language,
+                        password,
+                    });
                     onClose();
                     onCreated();
                 });
             }}
         >
-            <Field label={t('accounts.name')} htmlFor='ca-name' required>
+            <Field label={t('accounts.email')} htmlFor='ca-email' hint={t('accounts.emailHint')} required>
                 <input
-                    id='ca-name'
+                    id='ca-email'
+                    {...emailInputProps}
                     className={inputClass}
-                    value={name}
+                    value={email}
                     required
                     autoComplete='off'
-                    onChange={e => setName(e.target.value)}
+                    onChange={e => setEmail(e.target.value)}
+                />
+            </Field>
+            <Field
+                label={t('accounts.displayName')}
+                htmlFor='ca-display-name'
+                hint={t('accounts.displayNameHint', { max: MAX_DISPLAY_NAME_LENGTH })}
+                required
+            >
+                <input
+                    id='ca-display-name'
+                    className={inputClass}
+                    value={displayName}
+                    required
+                    autoComplete='off'
+                    onChange={e => setDisplayName(e.target.value)}
                 />
             </Field>
             <Field label={t('accounts.role')} htmlFor='ca-role'>
@@ -372,6 +443,121 @@ function CreateAccountModal({
     );
 }
 
+function EmailModal({
+    account,
+    self,
+    onClose,
+    onSaved,
+}: {
+    account: Account | null;
+    /** The account is the signed-in one: the change logs the user out. */
+    self: boolean;
+    onClose: () => void;
+    onSaved: () => void;
+}) {
+    const { t } = useTranslation();
+    const [email, setEmail] = useState('');
+    const { busy, error, setError, run } = useSubmit();
+
+    useEffect(() => {
+        if (!account) return;
+        setEmail(account.email);
+        setError(null);
+    }, [account, setError]);
+
+    return (
+        <FormModal
+            open={account !== null}
+            title={t('accounts.changeEmailTitle', { name: account ? accountLabel(account) : '' })}
+            formId='email-form'
+            busy={busy}
+            error={error}
+            submitLabel={t('common.save')}
+            onClose={onClose}
+            onSubmit={e => {
+                e.preventDefault();
+                if (!account) return;
+                void run(async () => {
+                    await setAccountEmail(account.id, email.trim());
+                    onClose();
+                    onSaved();
+                });
+            }}
+        >
+            <Field label={t('accounts.email')} htmlFor='ea-email' hint={t('accounts.emailHint')} required>
+                <input
+                    id='ea-email'
+                    {...emailInputProps}
+                    className={inputClass}
+                    value={email}
+                    required
+                    autoComplete='off'
+                    onChange={e => setEmail(e.target.value)}
+                />
+            </Field>
+            <p className='text-xs text-muted'>{t('accounts.changeEmailNote')}</p>
+            {self && <Alert tone='warning'>{t('accounts.changeOwnEmailWarning')}</Alert>}
+        </FormModal>
+    );
+}
+
+function DisplayNameModal({
+    account,
+    onClose,
+    onSaved,
+}: {
+    account: Account | null;
+    onClose: () => void;
+    onSaved: () => void;
+}) {
+    const { t } = useTranslation();
+    const [displayName, setDisplayName] = useState('');
+    const { busy, error, setError, run } = useSubmit();
+
+    useEffect(() => {
+        if (!account) return;
+        setDisplayName(account.display_name);
+        setError(null);
+    }, [account, setError]);
+
+    return (
+        <FormModal
+            open={account !== null}
+            title={t('accounts.changeDisplayNameTitle', { name: account ? accountLabel(account) : '' })}
+            formId='display-name-form'
+            busy={busy}
+            error={error}
+            submitLabel={t('common.save')}
+            onClose={onClose}
+            onSubmit={e => {
+                e.preventDefault();
+                if (!account) return;
+                void run(async () => {
+                    await setAccountDisplayName(account.id, displayName.trim());
+                    onClose();
+                    onSaved();
+                });
+            }}
+        >
+            <Field
+                label={t('accounts.displayName')}
+                htmlFor='da-display-name'
+                hint={t('accounts.displayNameHint', { max: MAX_DISPLAY_NAME_LENGTH })}
+                required
+            >
+                <input
+                    id='da-display-name'
+                    className={inputClass}
+                    value={displayName}
+                    required
+                    autoComplete='off'
+                    onChange={e => setDisplayName(e.target.value)}
+                />
+            </Field>
+        </FormModal>
+    );
+}
+
 function RoleModal({
     account,
     onClose,
@@ -394,7 +580,7 @@ function RoleModal({
     return (
         <FormModal
             open={account !== null}
-            title={t('accounts.changeRoleTitle', { name: account?.name ?? '' })}
+            title={t('accounts.changeRoleTitle', { name: account ? accountLabel(account) : '' })}
             formId='role-form'
             busy={busy}
             error={error}
@@ -441,7 +627,7 @@ function PasswordModal({
     return (
         <FormModal
             open={account !== null}
-            title={t('accounts.resetPasswordTitle', { name: account?.name ?? '' })}
+            title={t('accounts.resetPasswordTitle', { name: account ? accountLabel(account) : '' })}
             formId='password-form'
             busy={busy}
             error={error}

@@ -1,17 +1,34 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getMe, login as apiLogin, logout as apiLogout, setOwnLanguage, setUnauthorizedHandler } from '../api/client';
+import {
+    getMe,
+    login as apiLogin,
+    loginVerify as apiLoginVerify,
+    logout as apiLogout,
+    setOwnLanguage,
+    setUnauthorizedHandler,
+} from '../api/client';
 import type { LangSetting } from '../constants';
 import { applyLangSetting } from '../i18n/i18n';
 import type { Me } from '../types';
 
 type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
+/** Outcome of the password step: logged in, or the mailed code is needed. */
+export type LoginStep = { kind: 'done' } | { kind: 'code'; challenge: string };
+
 interface AuthContextValue {
     status: AuthStatus;
     me: Me | null;
     isAdmin: boolean;
-    login: (name: string, password: string, remember: boolean) => Promise<void>;
+    /** Password step of the login. */
+    login: (email: string, password: string, remember: boolean) => Promise<LoginStep>;
+    /** Code step of the login (after login answered 'code'). */
+    verify: (challenge: string, code: string, trust: boolean) => Promise<void>;
     logout: () => Promise<void>;
+    /** Replaces the signed-in account after an own change (display name, e-mail address). */
+    updateMe: (me: Me) => void;
+    /** Reloads the signed-in account from the server. */
+    refreshMe: () => Promise<void>;
     /** The language setting in effect: the account's, or the temporary one before login. */
     langSetting: LangSetting;
     /** Changes the display language; saved to the account when signed in. */
@@ -51,11 +68,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, []);
 
-    const login = useCallback(async (name: string, password: string, remember: boolean) => {
-        const m = await apiLogin(name, password, remember);
+    const signedIn = useCallback(async (m: Me) => {
         setMe(m);
         setStatus('authenticated');
         await applyLangSetting(m.language);
+    }, []);
+
+    const login = useCallback(
+        async (email: string, password: string, remember: boolean): Promise<LoginStep> => {
+            const r = await apiLogin(email, password, remember);
+            if (r.kind === 'code') return r;
+            await signedIn(r.me);
+            return { kind: 'done' };
+        },
+        [signedIn]
+    );
+
+    const verify = useCallback(
+        async (challenge: string, code: string, trust: boolean) => {
+            await signedIn(await apiLoginVerify(challenge, code, trust));
+        },
+        [signedIn]
+    );
+
+    const updateMe = useCallback((m: Me) => setMe(m), []);
+
+    const refreshMe = useCallback(async () => {
+        setMe(await getMe());
     }, []);
 
     const setLanguage = useCallback(
@@ -88,11 +127,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             me,
             isAdmin: me?.role === 'admin',
             login,
+            verify,
             logout,
+            updateMe,
+            refreshMe,
             langSetting: me ? me.language : anonLang,
             setLanguage,
         }),
-        [status, me, anonLang, login, logout, setLanguage]
+        [status, me, anonLang, login, verify, logout, updateMe, refreshMe, setLanguage]
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

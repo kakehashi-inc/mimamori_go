@@ -8,9 +8,11 @@ import type {
     ConfigUpdate,
     Detection,
     DetectionQuery,
+    EmailChangeStart,
     Guide,
     Health,
     HistoryItem,
+    LoginChallenge,
     Me,
     MergePreview,
     Overview,
@@ -44,8 +46,10 @@ export class ApiError extends Error {
     }
 }
 
-// Called when any request other than the login itself answers 401, so the app
-// can drop the session and show the login screen.
+// Called when any request other than the login steps answers 401, so the app
+// can drop the session and show the login screen. On the login steps a 401
+// means a wrong password or code, not a lost session.
+const LOGIN_PATHS = new Set(['/auth/login', '/auth/login/verify']);
 let unauthorizedHandler: (() => void) | null = null;
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
@@ -76,7 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         } catch {
             // The body is not JSON; keep the status text.
         }
-        if (res.status === 401 && path !== '/auth/login' && unauthorizedHandler) {
+        if (res.status === 401 && !LOGIN_PATHS.has(path) && unauthorizedHandler) {
             unauthorizedHandler();
         }
         throw new ApiError(res.status, message);
@@ -108,8 +112,18 @@ export function getHealth(): Promise<Health> {
     return request<Health>('/health');
 }
 
-export function login(name: string, password: string, remember: boolean): Promise<Me> {
-    return send<Me>('POST', '/auth/login', { name, password, remember });
+/** Result of the password step: logged in, or a code was mailed. */
+export type LoginResult = { kind: 'done'; me: Me } | { kind: 'code'; challenge: string };
+
+export async function login(email: string, password: string, remember: boolean): Promise<LoginResult> {
+    const r = await send<Me | LoginChallenge>('POST', '/auth/login', { email, password, remember });
+    if ('two_step' in r && r.two_step) return { kind: 'code', challenge: r.challenge };
+    return { kind: 'done', me: r as Me };
+}
+
+/** Second login step: the mailed code; trust skips the code on this browser for the configured days. */
+export function loginVerify(challenge: string, code: string, trust: boolean): Promise<Me> {
+    return send<Me>('POST', '/auth/login/verify', { challenge, code, trust });
 }
 
 export function logout(): Promise<unknown> {
@@ -124,14 +138,33 @@ export function setOwnLanguage(language: LangSetting): Promise<Me> {
     return send<Me>('PUT', '/auth/language', { language });
 }
 
+export function setOwnDisplayName(displayName: string): Promise<Me> {
+    return send<Me>('PUT', '/auth/display-name', { display_name: displayName });
+}
+
+/** Starts the change of the own e-mail address (a code is mailed to the new address unless applied). */
+export function requestOwnEmailChange(email: string): Promise<EmailChangeStart> {
+    return send<EmailChangeStart>('POST', '/auth/email', { email });
+}
+
+/** Confirms the own e-mail address change with the mailed code. */
+export function verifyOwnEmailChange(code: string): Promise<Me> {
+    return send<Me>('POST', '/auth/email/verify', { code });
+}
+
 export function changeOwnPassword(currentPassword: string, newPassword: string): Promise<unknown> {
     return send('POST', '/auth/password', { current_password: currentPassword, new_password: newPassword });
 }
 
 // --- Overview and agents ---
 
-export function getOverview(): Promise<Overview> {
-    return request<Overview>('/overview');
+/**
+ * Overview of the central. `background` marks a request the page sends by
+ * itself (the periodic refresh): it does not count as an operation that keeps
+ * the login session alive.
+ */
+export function getOverview(background = false): Promise<Overview> {
+    return request<Overview>('/overview', background ? { headers: { 'X-Mimamori-Background': '1' } } : undefined);
 }
 
 export function listAgents(): Promise<AgentSummary[]> {
@@ -286,12 +319,21 @@ export function listAccounts(): Promise<Account[]> {
 }
 
 export function createAccount(body: {
-    name: string;
+    email: string;
+    display_name: string;
     role: Role;
     language: LangSetting;
     password: string;
 }): Promise<Account> {
     return send<Account>('POST', '/accounts', body);
+}
+
+export function setAccountEmail(id: number, email: string): Promise<Account> {
+    return send<Account>('PUT', `/accounts/${id}/email`, { email });
+}
+
+export function setAccountDisplayName(id: number, displayName: string): Promise<Account> {
+    return send<Account>('PUT', `/accounts/${id}/display-name`, { display_name: displayName });
 }
 
 export function setAccountRole(id: number, role: Role): Promise<Account> {

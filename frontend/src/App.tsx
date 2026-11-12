@@ -10,11 +10,11 @@ import { DetectionsPage } from './pages/DetectionsPage';
 import { GuidePage } from './pages/GuidePage';
 import { HistoryPage } from './pages/HistoryPage';
 import { LoginPage } from './pages/LoginPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { RuleDetailPage } from './pages/RuleDetailPage';
 import { RuleEditPage } from './pages/RuleEditPage';
 import { RuleNewPage } from './pages/RuleNewPage';
 import { RulesPage } from './pages/RulesPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { SuppressionsPage } from './pages/SuppressionsPage';
 import { TemplateDetailPage } from './pages/TemplateDetailPage';
 import { TemplatesPage } from './pages/TemplatesPage';
@@ -57,7 +57,7 @@ export default function App() {
                         </RequireAdmin>
                     }
                 />
-                <Route path='/settings' element={<SettingsPage />} />
+                <Route path='/profile' element={<ProfilePage />} />
                 <Route path='/guide' element={<GuidePage />} />
                 <Route path='*' element={<NotFoundPage />} />
             </Route>

@@ -26,7 +26,7 @@ import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { Guide, RuleSummary, RuleVersionInfo, Token, TokenWithValue } from '../types';
 import { agentInitCommand } from '../utils/commands';
-import { errorMessage, formatDateTime } from '../utils/format';
+import { errorMessage, formatDateTime, formatOperator } from '../utils/format';
 
 // Token names accepted by the server.
 const TOKEN_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
@@ -159,7 +159,7 @@ export function TokensPage() {
                                         <Td className='whitespace-nowrap'>{formatDateTime(tk.last_seen_at)}</Td>
                                         <Td className='whitespace-nowrap'>
                                             {formatDateTime(tk.created_at)}
-                                            <div className='text-xs text-muted'>{tk.created_by}</div>
+                                            <div className='text-xs text-muted'>{formatOperator(tk.created_by)}</div>
                                         </Td>
                                         {isAdmin && (
                                             <Td className='text-right'>

@@ -26,7 +26,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useApi } from '../hooks/useApi';
 import type { AgentSummary, RuleDetail, RuleVersionInfo } from '../types';
-import { errorMessage, formatDateTime } from '../utils/format';
+import { errorMessage, formatDateTime, formatOperator } from '../utils/format';
 
 type Tab = 'content' | 'versions' | 'diff';
 
@@ -234,7 +234,7 @@ function VersionContent({
                 {isLatest && <span className='text-xs text-success'>{t('rules.latest')}</span>}
                 {info && (
                     <span className='min-w-0 text-xs wrap-anywhere text-muted'>
-                        {info.created_by} / {info.comment || t('rules.noComment')}
+                        {formatOperator(info.created_by)} / {info.comment || t('rules.noComment')}
                     </span>
                 )}
             </div>
@@ -275,7 +275,7 @@ function VersionsTable({
                             )}
                         </Td>
                         <Td className='whitespace-nowrap'>{formatDateTime(v.created_at)}</Td>
-                        <Td>{v.created_by}</Td>
+                        <Td>{formatOperator(v.created_by)}</Td>
                         <Td className='text-muted'>{v.comment || '-'}</Td>
                         <Td className='text-right'>
                             <div className='flex justify-end gap-1'>
