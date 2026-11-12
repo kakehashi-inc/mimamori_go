@@ -199,22 +199,20 @@ func TestServerCertNamesNormalized(t *testing.T) {
 
 func TestSMTPAuthChoice(t *testing.T) {
 	cases := []struct {
-		security, mechs, want string
+		security, want string
 	}{
-		{"none", "PLAIN LOGIN", "LOGIN"},
-		{"none", "PLAIN", "LOGIN"},
-		{"starttls", "PLAIN LOGIN", "PLAIN"},
-		{"tls", "LOGIN", "LOGIN"},
-		{"tls", "", "PLAIN"},
+		{"none", "LOGIN"},
+		{"starttls", "PLAIN"},
+		{"tls", "PLAIN"},
 	}
 	for _, c := range cases {
-		a := smtpAuth(SMTPConfig{Security: c.security, Host: "mail.example.com"}, c.mechs)
+		a := smtpAuth(SMTPConfig{Security: c.security, Host: "mail.example.com"})
 		got := "PLAIN"
 		if _, ok := a.(*loginAuth); ok {
 			got = "LOGIN"
 		}
 		if got != c.want {
-			t.Errorf("security %s, AUTH %q: %s, want %s", c.security, c.mechs, got, c.want)
+			t.Errorf("security %s: %s, want %s", c.security, got, c.want)
 		}
 	}
 	var _ smtp.Auth = &loginAuth{}

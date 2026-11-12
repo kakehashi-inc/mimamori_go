@@ -41,7 +41,7 @@ func (v *VersionCmd) Run() error {
 // become the current directory.
 func dataDirMapper(ctx *kong.DecodeContext, target reflect.Value) error {
 	var path string
-	if err := ctx.Scan.PopValueInto("DIR", &path); err != nil {
+	if err := ctx.Scan.PopValueInto("file", &path); err != nil {
 		return err
 	}
 	if path == "" {

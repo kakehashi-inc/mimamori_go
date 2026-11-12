@@ -62,8 +62,7 @@ func SendMail(cfg SMTPConfig, subject, body string) error {
 		}
 	}
 	if cfg.Auth {
-		_, mechs := c.Extension("AUTH")
-		if err := c.Auth(smtpAuth(cfg, mechs)); err != nil {
+		if err := c.Auth(smtpAuth(cfg)); err != nil {
 			return fmt.Errorf("SMTP auth: %w", err)
 		}
 	}
@@ -106,16 +105,11 @@ func buildMessage(cfg SMTPConfig, subject, body string) string {
 	return b.String()
 }
 
-// smtpAuth chooses the authentication mechanism. Without encryption it is
-// LOGIN, because net/smtp refuses to send PLAIN over an unencrypted
-// connection. With TLS (tls or starttls) it is PLAIN, or LOGIN when the
-// server offers LOGIN but not PLAIN. mechs is the server's AUTH extension.
-func smtpAuth(cfg SMTPConfig, mechs string) smtp.Auth {
-	offered := map[string]bool{}
-	for _, m := range strings.Fields(strings.ToUpper(mechs)) {
-		offered[m] = true
-	}
-	if cfg.Security == "none" || (offered["LOGIN"] && !offered["PLAIN"]) {
+// smtpAuth chooses the authentication mechanism: LOGIN without encryption,
+// because net/smtp refuses to send PLAIN over an unencrypted connection, and
+// PLAIN with TLS (tls or starttls).
+func smtpAuth(cfg SMTPConfig) smtp.Auth {
+	if cfg.Security == "none" {
 		return &loginAuth{user: cfg.Username, pass: cfg.Password}
 	}
 	return smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)

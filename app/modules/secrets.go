@@ -25,7 +25,7 @@ func GenerateSecret(prefix string) (string, error) {
 
 // HashSecret returns the SHA-256 hash (hex) of a high-entropy secret value.
 // Session ids are stored only as this hash; tokens are looked up by it (the
-// tokens table also keeps the value in effect, for the management CLI).
+// tokens table also keeps the value in effect).
 func HashSecret(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return hex.EncodeToString(sum[:])
