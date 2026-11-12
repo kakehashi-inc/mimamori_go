@@ -26,6 +26,7 @@ const (
 	stateExecWatermark  = "exec_watermark"
 	stateLastFullScan   = "last_full_scan"
 	stateScanSignature  = "scan_signature"
+	stateScanPrevRoots  = "scan_prev_roots"
 	stateDroppedPending = "dropped_pending"
 	stateLastAuditEvent = "last_audit_event"
 )
@@ -268,13 +269,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	} else {
 		result.Message = fmt.Sprintf("applied (%d audit rules)", len(lines))
 	}
-	// A changed scan configuration needs a fresh full scan.
-	sig := ra.Content.Writable.Base + "|" + fmt.Sprint(ra.Content.Writable.AllowedPaths)
-	if models.GetLocalState(rt.DB, stateScanSignature) != sig {
-		_ = models.SetLocalState(rt.DB, stateScanSignature, sig)
-		_ = models.SetLocalState(rt.DB, stateLastFullScan, "0")
-		_ = models.ReplaceScanRoots(rt.DB, nil)
-	}
+	rt.noteScanConfig(ra.Content.Writable.Base + "|" + fmt.Sprint(ra.Content.Writable.AllowedPaths))
 	b, _ := json.Marshal(ra)
 	if err := models.SetLocalState(rt.DB, stateRule, string(b)); err != nil {
 		rt.logf("failed to store the applied rule: %v", err)
@@ -322,6 +317,26 @@ func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []Det
 	return AggregateAuditEvents(events, c, users)
 }
 
+// noteScanConfig records the scan configuration (base directory and allowed
+// paths) of the applied rule. When it changed, a fresh full scan is needed:
+// the roots known so far are remembered, so that the next full scan treats
+// every other root as new (see scanFiles).
+func (rt *AgentRuntime) noteScanConfig(sig string) {
+	if models.GetLocalState(rt.DB, stateScanSignature) == sig {
+		return
+	}
+	if models.GetLocalState(rt.DB, stateScanPrevRoots) == "" {
+		if old, err := models.ListScanRoots(rt.DB); err == nil {
+			if b, err := json.Marshal(old); err == nil {
+				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, string(b))
+			}
+		}
+	}
+	_ = models.SetLocalState(rt.DB, stateScanSignature, sig)
+	_ = models.SetLocalState(rt.DB, stateLastFullScan, "0")
+	_ = models.ReplaceScanRoots(rt.DB, nil)
+}
+
 func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart time.Time) []DetectionReport {
 	var out []DetectionReport
 	now := cycleStart.Unix()
@@ -336,6 +351,10 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	// Files created in them before they became roots are older than the
 	// watermark, so they are scanned from the previous full scan.
 	var newRoots map[string]bool
+	// Allowed roots that appear after the scan configuration changed (another
+	// base directory, other allowed paths). They are scanned like the roots
+	// of a first scan: the files already in them are reported.
+	var freshRoots map[string]bool
 	if now-lastFull >= int64(c.ScanInterval()) {
 		wr, err := ScanWritable(c.Writable.Base, c.Writable.AllowedPaths, uids, c.Writable.Category)
 		if err != nil {
@@ -368,6 +387,21 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 				}
 			}
+			if prev := models.GetLocalState(rt.DB, stateScanPrevRoots); prev != "" {
+				var old []string
+				_ = json.Unmarshal([]byte(prev), &old)
+				known := map[string]bool{}
+				for _, r := range old {
+					known[r] = true
+				}
+				freshRoots = map[string]bool{}
+				for _, r := range wr.AllowedRoots {
+					if !known[r] {
+						freshRoots[r] = true
+					}
+				}
+				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, "")
+			}
 			_ = models.ReplaceScanRoots(rt.DB, wr.AllowedRoots)
 			_ = models.SetLocalState(rt.DB, stateLastFullScan, strconv.FormatInt(now, 10))
 		}
@@ -377,12 +411,15 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		if err == nil {
 			wm, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecWatermark), 10, 64)
 			since := func(root string) int64 {
+				if freshRoots[root] {
+					return 0
+				}
 				if newRoots[root] && lastFull < wm {
 					return lastFull
 				}
 				return wm
 			}
-			found, skipped, err := ScanExecFiles(c.Writable.Base, roots, c, since, wm == 0)
+			found, skipped, err := ScanExecFiles(c.Writable.Base, roots, c, since)
 			if err != nil {
 				rt.logf("executed-file scan failed: %v", err)
 			} else {
@@ -393,7 +430,7 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 					_ = models.TouchFinding(rt.DB, fp, now)
 				}
-				// Files of the first scan that are not reported are remembered,
+				// Files of a first scan that are not reported are remembered,
 				// so the next scan (which also looks at the second of this one)
 				// does not report them either.
 				for _, f := range skipped {

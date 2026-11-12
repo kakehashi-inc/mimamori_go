@@ -123,10 +123,13 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	if !more {
 		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(string(fromServer))) {
-	case "username:":
+	// Servers word the two challenges differently ("Username:", "User Name",
+	// "Password:"), so only the key word is looked at.
+	challenge := strings.ToLower(string(fromServer))
+	switch {
+	case strings.Contains(challenge, "user"):
 		return []byte(a.user), nil
-	case "password:":
+	case strings.Contains(challenge, "pass"):
 		return []byte(a.pass), nil
 	}
 	return nil, fmt.Errorf("unexpected LOGIN challenge %q", fromServer)

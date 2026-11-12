@@ -161,5 +161,5 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent init` と `agent set-central` を含む）。`status` では停止中 |
 | 4 | 認証または権限のエラー（`ctl` では、`cli.secret` が稼働中のセントラルと一致しない場合と、セントラルの証明書を `ca.crt` で検証できない場合） |
 | 5 | 実行エラー（外部コマンドまたはセントラル） |
-| 6 | ファイルまたはディレクトリの I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合を含む） |
+| 6 | ファイルまたはディレクトリの I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合と、`ca.crt` に証明書が無い場合を含む） |
 | 7 | タイムアウト |

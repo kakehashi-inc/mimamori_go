@@ -19,6 +19,8 @@ import (
 	"text/tabwriter"
 	"time"
 	"unicode/utf8"
+
+	"mimamori/app/models"
 )
 
 // CtlCmd groups the management commands. They run on the central host and
@@ -77,7 +79,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemData) {
-		return nil, NewExitErrorf(ExitConfig, "no certificate in %s", caFile)
+		return nil, NewExitErrorf(ExitFileIO, "no certificate in %s (the central writes it when it starts)", caFile)
 	}
 	portNum, err := strconv.Atoi(port)
 	if err != nil {
@@ -156,7 +158,11 @@ func (cl *ctlClient) show(v any, columns ...string) {
 		m, _ := r.(map[string]any)
 		var cells []string
 		for _, col := range columns {
-			cells = append(cells, cell(col, lookup(m, col), cl.full))
+			name := col
+			if col == "detail" && keepsUserDetail(m) {
+				name = "" // printed as it is
+			}
+			cells = append(cells, cell(name, lookup(m, col), cl.full))
 		}
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
@@ -214,8 +220,13 @@ func localizeValue(v any) any {
 func localizeKeyed(key string, v any) any {
 	switch t := v.(type) {
 	case map[string]any:
+		keepDetail := keepsUserDetail(t)
 		out := make(map[string]any, len(t))
 		for k, x := range t {
+			if k == "detail" && keepDetail {
+				out[k] = x
+				continue
+			}
 			out[k] = localizeKeyed(k, x)
 		}
 		return out
@@ -229,6 +240,15 @@ func localizeKeyed(key string, v any) any {
 		return localizeField(key, t)
 	}
 	return v
+}
+
+// keepsUserDetail reports whether the "detail" of the row m is printed as it
+// is. The detail of a history row is converted to local time only where the
+// system writes it (token and certificate history, "expires <time>"); in the
+// other categories it holds text typed by users, which is shown unchanged.
+func keepsUserDetail(m map[string]any) bool {
+	cat, isHistory := m["category"].(string)
+	return isHistory && cat != models.HistToken && cat != models.HistCertificate
 }
 
 // formatNumber prints a JSON number; whole numbers never use the exponent

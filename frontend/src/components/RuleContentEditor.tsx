@@ -219,7 +219,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                         id='re-base'
                         className={`${inputSmClass} font-mono`}
                         value={c.writable.base}
-                        placeholder='/var/www'
+                        placeholder='/srv/app'
                         disabled={disabled}
                         onChange={ev => set({ writable: { ...c.writable, base: ev.target.value } })}
                     />

@@ -228,7 +228,9 @@ export function TokensPage() {
                     />
                     <Modal
                         open={issued !== null}
-                        title={t('tokens.issuedTitle', { name: issued?.token.name ?? '' })}
+                        title={t(reissued ? 'tokens.reissuedTitle' : 'tokens.issuedTitle', {
+                            name: issued?.token.name ?? '',
+                        })}
                         onClose={() => setIssued(null)}
                         size='lg'
                         footer={

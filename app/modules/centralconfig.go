@@ -424,6 +424,9 @@ func (c *CentralConfig) validationErrors() []string {
 			}
 		}
 	}
+	if c.DefaultCheckIntervalSec < MinCheckInterval {
+		errs = append(errs, fmt.Sprintf("default_check_interval_sec must be %d or more", MinCheckInterval))
+	}
 	if c.TokenRenewBeforeDays >= c.TokenValidDays {
 		errs = append(errs, "token_renew_before_days must be less than token_valid_days")
 	}

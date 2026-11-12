@@ -195,7 +195,7 @@ func TestScans(t *testing.T) {
 	laravel, _ := FindBuiltinTemplate("laravel")
 	c := &RuleContent{Writable: WritableSpec{Base: base, AllowedPaths: []string{"storage", "bootstrap/cache"}},
 		ExecFiles: ExecFilesSpec{Extensions: []string{".php"}, Legit: laravel.Content.ExecFiles.Legit, OtherCategory: CategoryAlert}}
-	files, _, err := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(1), false)
+	files, _, err := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,10 +206,10 @@ func TestScans(t *testing.T) {
 	if cats["evil.php"] != CategoryAlert || cats["config.php"] != CategoryNormal || len(cats) != 2 {
 		t.Fatalf("exec files: %v", cats)
 	}
-	if files, skipped, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(0), true); len(files) != 1 || len(skipped) != 1 {
+	if files, skipped, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(0)); len(files) != 1 || len(skipped) != 1 {
 		t.Fatalf("first scan must skip legitimate locations: %d (skipped %d)", len(files), len(skipped))
 	}
-	if files, _, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(time.Now().Unix()+10), false); len(files) != 0 {
+	if files, _, _ := ScanExecFiles(base, res.AllowedRoots, c, sinceAll(time.Now().Unix()+10)); len(files) != 0 {
 		t.Fatal("unchanged files must not be reported")
 	}
 }

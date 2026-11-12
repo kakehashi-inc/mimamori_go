@@ -142,10 +142,10 @@ func ScanWritable(base string, allowed []string, uids map[int]bool, category str
 // ScanExecFiles walks the allowed roots for files with one of the extensions
 // whose status change time (not the forgeable modification time) is newer
 // than since(root). Files inside a legitimate location get that location's
-// category, all others get otherCategory. When skipLegit is set (first scan)
-// files in legitimate locations are not reported; they are returned as
-// skipped instead.
-func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root string) int64, skipLegit bool) (found, skipped []FileFinding, err error) {
+// category, all others get otherCategory. A root whose since is 0 is scanned
+// for the first time: its files in legitimate locations are not reported;
+// they are returned as skipped instead.
+func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root string) int64) (found, skipped []FileFinding, err error) {
 	exts := map[string]bool{}
 	for _, e := range c.ExecFiles.Extensions {
 		exts[e] = true
@@ -171,6 +171,7 @@ func ScanExecFiles(base string, roots []string, c *RuleContent, since func(root 
 	visited := 0
 	for _, root := range roots {
 		rootSince := since(root)
+		skipLegit := rootSince == 0
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
 			if werr != nil {
 				if d != nil && d.IsDir() && p != root {

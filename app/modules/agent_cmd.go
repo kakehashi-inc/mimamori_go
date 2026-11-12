@@ -136,7 +136,11 @@ func AgentInit(o AgentInitOptions) error {
 		return NewExitErrorf(ExitFileIO, "data directory %s: %v", o.DataDir, err)
 	}
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
-		created = append(created, dbPath, dbPath+"-wal", dbPath+"-shm")
+		for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+			if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+				created = append(created, p)
+			}
+		}
 	}
 	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {

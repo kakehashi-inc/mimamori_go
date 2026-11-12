@@ -161,5 +161,5 @@ Management commands. Run them on the central host while the central is running. 
 | 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use) and `agent init` or `agent set-central` while the agent is running; for `status`, not running |
 | 4 | Authentication or authorization failure (for `ctl`, `cli.secret` that does not match the running central, or a central certificate that `ca.crt` cannot verify) |
 | 5 | Execution error (external command or the central) |
-| 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read) |
+| 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read, or a `ca.crt` without a certificate) |
 | 7 | Timeout |

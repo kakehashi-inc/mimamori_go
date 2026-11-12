@@ -226,6 +226,7 @@
         "issue": "Issue token",
         "issueTitle": "Issue a token",
         "issuedTitle": "Token {{name}} issued",
+        "reissuedTitle": "Token {{name}} reissued",
         "name": "Name",
         "nameHint": "Letters, digits and . _ - (up to 64 characters). Must be unique.",
         "nameInvalid": "Use up to 64 letters, digits, '.', '_' or '-' for the name.",

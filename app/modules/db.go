@@ -26,14 +26,17 @@ const (
 var sqliteURIPath = strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23")
 
 // OpenSQLite opens (creating when missing) the SQLite database at path and
-// applies the migrations of schema. A new file gets its mode from the umask
+// applies the migrations of schema. Transactions take the write lock when
+// they begin (_txlock=immediate) and wait for it (busy_timeout), so a
+// transaction that reads and then writes never fails because another one
+// wrote in between. A new file gets its mode from the umask
 // (the -wal and -shm files take the mode of the database file); the mode of
 // an existing file is not changed.
 func OpenSQLite(path, schema string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	dsn := "file:" + sqliteURIPath.Replace(path) + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
+	dsn := "file:" + sqliteURIPath.Replace(path) + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

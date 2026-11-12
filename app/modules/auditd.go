@@ -307,25 +307,40 @@ func ApplyAuditRules(lines []string) ([]string, error) {
 	fileWritten, neverRemoved := false, false
 
 	rollback := func(cause error) ([]string, error) {
+		// failed counts the steps of the restoration that did not succeed,
+		// so the message never claims more than what was restored.
+		failed := 0
+		try := func(args ...string) {
+			if _, err := RunSimple("auditctl", args...); err != nil {
+				failed++
+			}
+		}
 		_ = deleteOwnRules()
 		for _, l := range prevOwn {
-			_, _ = RunSimple("auditctl", splitRule(l)...)
+			try(splitRule(l)...)
 		}
 		if neverRemoved {
-			_, _ = RunSimple("auditctl", strings.Fields(neverRuleLine)...)
+			try(strings.Fields(neverRuleLine)...)
 		}
-		_, _ = RunSimple("auditctl", "-b", strconv.FormatInt(prevStatus.BacklogLimit, 10))
-		_, _ = RunSimple("auditctl", "-f", strconv.Itoa(prevStatus.Failure))
-		_, _ = RunSimple("auditctl", "--backlog_wait_time", strconv.FormatInt(prevStatus.BacklogWaitTime, 10))
+		try("-b", strconv.FormatInt(prevStatus.BacklogLimit, 10))
+		try("-f", strconv.Itoa(prevStatus.Failure))
+		try("--backlog_wait_time", strconv.FormatInt(prevStatus.BacklogWaitTime, 10))
 		switch {
 		case prevFileErr == nil:
-			_ = os.WriteFile(AuditRulesFile, prevFile, 0o600)
+			if err := os.WriteFile(AuditRulesFile, prevFile, 0o600); err != nil {
+				failed++
+			}
 		case errors.Is(prevFileErr, os.ErrNotExist):
-			_ = os.Remove(AuditRulesFile)
+			if err := os.Remove(AuditRulesFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+				failed++
+			}
 		case fileWritten:
 			// The previous content is unknown, so nothing is deleted or
 			// written: the file keeps the new rules.
 			return nil, fmt.Errorf("applying audit rules failed and the previous state was restored except %s, which could not be read before the change (%v): %w", AuditRulesFile, prevFileErr, cause)
+		}
+		if failed > 0 {
+			return nil, fmt.Errorf("applying audit rules failed and the previous state could not be restored completely (%d steps failed; check the loaded rules with auditctl -l): %w", failed, cause)
 		}
 		return nil, fmt.Errorf("applying audit rules failed and the previous state was restored: %w", cause)
 	}
