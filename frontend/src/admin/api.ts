@@ -1,6 +1,7 @@
 // API functions used only by the administrator extension.
 import type { LangSetting } from '../constants';
 import { query, request, send } from '../api/client';
+import { codedTexts, type CodedText } from '../utils/serverText';
 import type {
     Account,
     CentralConfig,
@@ -14,6 +15,7 @@ import type {
     RuleContent,
     RuleCreate,
     RuleDetail,
+    ServerProblem,
     Suppression,
     SuppressionCreate,
     TemplateCreate,
@@ -74,8 +76,17 @@ export function deleteRule(id: number | string): Promise<unknown> {
     return send('DELETE', `/rules/${encodeURIComponent(id)}`);
 }
 
-export function validateRule(content: RuleContent): Promise<string[]> {
-    return send<{ errors: string[] | null }>('POST', '/rules/validate', { content }).then(r => r.errors ?? []);
+// Answer of the validation requests: the problems in English and, in the same order, with their codes.
+interface ValidationAnswer {
+    errors: string[] | null;
+    errors_i18n?: ServerProblem[] | null;
+}
+
+/** The problems of a rule content (empty when valid). */
+export function validateRule(content: RuleContent): Promise<CodedText[]> {
+    return send<ValidationAnswer>('POST', '/rules/validate', { content }).then(r =>
+        codedTexts(r.errors, r.errors_i18n)
+    );
 }
 
 export function createTemplate(body: TemplateCreate): Promise<TemplateDetail> {
@@ -178,12 +189,14 @@ export function deleteCommandSet(agentId: number | string, setId: number): Promi
 }
 
 /** Checks a definition without saving it; setId excludes that set from the name check. */
-export function validateCommandSet(agentId: number | string, spec: CommandSetSpec, setId?: number): Promise<string[]> {
-    return send<{ errors: string[] | null }>(
-        'POST',
-        `${setsPath(agentId)}/validate${query({ set_id: setId })}`,
-        spec
-    ).then(r => r.errors ?? []);
+export function validateCommandSet(
+    agentId: number | string,
+    spec: CommandSetSpec,
+    setId?: number
+): Promise<CodedText[]> {
+    return send<ValidationAnswer>('POST', `${setsPath(agentId)}/validate${query({ set_id: setId })}`, spec).then(r =>
+        codedTexts(r.errors, r.errors_i18n)
+    );
 }
 
 export function importCommandSets(

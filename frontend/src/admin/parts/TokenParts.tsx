@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import type { Guide, RuleSummary, RuleVersionInfo, Token, TokenWithValue } from '../../types';
 import { agentInitCommand } from '../../utils/commands';
 import { errorMessage } from '../../utils/format';
+import { serverText } from '../../utils/serverText';
 import { issueToken, reissueToken, revokeToken, unbindToken } from '../api';
 
 // Parts placed in the token list (slots tokens.*).
@@ -335,7 +336,7 @@ function IssueTokenModal({
                             {versions.map(v => (
                                 <option key={v.version} value={v.version}>
                                     v{v.version}
-                                    {v.comment ? ` - ${v.comment}` : ''}
+                                    {v.comment ? ` - ${serverText(t, v.comment_i18n, v.comment)}` : ''}
                                 </option>
                             ))}
                         </select>

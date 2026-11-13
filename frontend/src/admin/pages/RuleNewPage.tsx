@@ -14,6 +14,7 @@ import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
 import type { MergePreview } from '../../types';
 import { errorMessage } from '../../utils/format';
+import { serverText } from '../../utils/serverText';
 
 type Mode = 'templates' | 'empty';
 
@@ -138,7 +139,9 @@ export function RuleNewPage() {
                                                             {tpl.builtin && <Badge>{t('templates.builtin')}</Badge>}
                                                         </span>
                                                         <span className='block text-xs wrap-anywhere text-muted'>
-                                                            {tpl.description || '-'}
+                                                            {tpl.description
+                                                                ? serverText(t, tpl.description_i18n, tpl.description)
+                                                                : '-'}
                                                         </span>
                                                     </span>
                                                     {order >= 0 && (

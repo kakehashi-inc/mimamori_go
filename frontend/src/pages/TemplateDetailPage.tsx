@@ -9,6 +9,7 @@ import { Slot } from '../components/Slot';
 import { ErrorAlert, Loading } from '../components/StateViews';
 import { useApi } from '../hooks/useApi';
 import { formatDateTime } from '../utils/format';
+import { serverText } from '../utils/serverText';
 
 export function TemplateDetailPage() {
     const { t } = useTranslation();
@@ -32,7 +33,7 @@ export function TemplateDetailPage() {
                 }
                 description={
                     !panelOpen && tpl?.description ? (
-                        <span className='wrap-anywhere'>{tpl.description}</span>
+                        <span className='wrap-anywhere'>{serverText(t, tpl.description_i18n, tpl.description)}</span>
                     ) : undefined
                 }
                 actions={

@@ -21,6 +21,8 @@ import type {
     RuleDiff,
     RuleSummary,
     RuleVersion,
+    ServerMsg,
+    ServerProblem,
     Suppression,
     TemplateDetail,
     TemplateSummary,
@@ -29,14 +31,26 @@ import type {
 
 const BASE = '/api/v1';
 
-/** Raised for any non-2xx response, or with status 0 when the network failed. */
+/**
+ * Raised for any non-2xx response, or with status 0 when the network failed. message is the English
+ * text of the answer (field error); i18n its message (error_i18n) and problems the coded problems of
+ * the answer (errors_i18n), when the server sent them.
+ */
 export class ApiError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    i18n?: ServerMsg;
+    problems?: ServerProblem[];
+    constructor(status: number, message: string, i18n?: ServerMsg, problems?: ServerProblem[]) {
         super(message);
         this.name = 'ApiError';
         this.status = status;
+        this.i18n = i18n;
+        this.problems = problems;
     }
+}
+
+function isServerMsg(v: unknown): v is ServerMsg {
+    return typeof v === 'object' && v !== null && typeof (v as { code?: unknown }).code === 'string';
 }
 
 // Called when any request other than the login steps answers 401, so the app
@@ -67,16 +81,22 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (!res.ok) {
         let message = `HTTP ${res.status}`;
+        let i18n: ServerMsg | undefined;
+        let problems: ServerProblem[] | undefined;
         try {
             const body = await res.json();
-            if (body && typeof body.error === 'string') message = body.error;
+            if (body && typeof body.error === 'string') {
+                message = body.error;
+                if (isServerMsg(body.error_i18n)) i18n = body.error_i18n;
+            }
+            if (body && Array.isArray(body.errors_i18n)) problems = body.errors_i18n as ServerProblem[];
         } catch {
             // The body is not JSON; keep the status text.
         }
         if (res.status === 401 && !LOGIN_PATHS.has(path) && unauthorizedHandler) {
             unauthorizedHandler();
         }
-        throw new ApiError(res.status, message);
+        throw new ApiError(res.status, message, i18n, problems);
     }
     if (res.status === 204) {
         return undefined as T;

@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
 import type { RuleContent } from '../../types';
 import { errorMessage } from '../../utils/format';
+import type { CodedText } from '../../utils/serverText';
 import { normalizeRuleContent } from '../../utils/ruleContent';
 
 export function RuleEditPage() {
@@ -24,7 +25,7 @@ export function RuleEditPage() {
     const [content, setContent] = useState<RuleContent | null>(null);
     const [description, setDescription] = useState('');
     const [comment, setComment] = useState('');
-    const [validation, setValidation] = useState<string[] | null>(null);
+    const [validation, setValidation] = useState<CodedText[] | null>(null);
     const [busy, setBusy] = useState<'validate' | 'save' | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
     // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.

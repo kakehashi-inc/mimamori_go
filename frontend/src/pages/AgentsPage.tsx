@@ -8,6 +8,7 @@ import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import { formatDateTime } from '../utils/format';
+import { serverText } from '../utils/serverText';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
 
 export function AgentsPage() {
@@ -85,9 +86,9 @@ export function AgentsPage() {
                                             {a.apply.message && (
                                                 <p
                                                     className='mt-1 line-clamp-2 text-xs break-words text-muted'
-                                                    title={a.apply.message}
+                                                    title={serverText(t, a.apply.message_i18n, a.apply.message)}
                                                 >
-                                                    {a.apply.message}
+                                                    {serverText(t, a.apply.message_i18n, a.apply.message)}
                                                 </p>
                                             )}
                                         </Td>

@@ -15,6 +15,7 @@ import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
 import type { AgentDetail, CommandRun, CommandRunDetail, CommandRunItem, CommandSet } from '../../types';
 import { errorMessage, formatDateTime } from '../../utils/format';
+import { codedText, codedTexts } from '../../utils/serverText';
 import { deleteCommandSet, discardCommandRequest, importCommandSets, listCommandSets, requestCommandRun } from '../api';
 import { hostZoneText, scheduleSummary } from '../components/commandSetDraft';
 import { StepUpCancelled, useStepUp } from '../components/StepUp';
@@ -127,9 +128,11 @@ export function CommandSetsSection({ agent, reload: reloadPage }: { agent: Agent
                                                 {(s.agent_problems ?? []).length > 0 && (
                                                     <Alert tone='warning' title={t('commandSets.agentProblems')}>
                                                         <ul className='list-disc pl-5 text-xs'>
-                                                            {(s.agent_problems ?? []).map((p, i) => (
-                                                                <li key={i}>{p}</li>
-                                                            ))}
+                                                            {codedTexts(s.agent_problems, s.agent_problems_i18n).map(
+                                                                (p, i) => (
+                                                                    <li key={i}>{codedText(t, p)}</li>
+                                                                )
+                                                            )}
                                                         </ul>
                                                     </Alert>
                                                 )}

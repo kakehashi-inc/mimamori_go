@@ -199,16 +199,6 @@
         "unackedLink": "Review {{count}}",
         "droppedTotal": "Dropped detections (total)",
         "droppedNote": "Some detections were dropped because the storage limit was exceeded.",
-        "tokenActions": {
-            "issued": "issued",
-            "reissued": "reissued",
-            "bound": "bound",
-            "unbound": "unbound",
-            "revoked": "revoked",
-            "expired": "expired",
-            "renewed": "renewed",
-            "renewal_issued": "renewal_issued"
-        },
         "ruleAndApply": "Rule and apply result",
         "assignedVersion": "Assigned version",
         "reportedVersion": "Reported version",

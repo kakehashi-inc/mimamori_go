@@ -11,7 +11,8 @@ import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { HistoryCategory } from '../types';
-import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
+import { formatDateTime, formatOperator } from '../utils/format';
+import { historyActionText, historyDetailText, historyTargetText } from '../utils/historyText';
 
 // Categories every account can read; extensions add their own options.
 const CATEGORIES: HistoryCategory[] = [
@@ -26,14 +27,6 @@ const CATEGORIES: HistoryCategory[] = [
 
 // Rows per page.
 const LIMIT = 100;
-
-/**
- * Detail text of a history row. Only the token and certificate history carry timestamps written by the
- * system, which are shown in local time; the other categories hold text typed by users, shown unchanged.
- */
-function historyDetail(h: { category: string; detail: string }): string {
-    return h.category === 'token' || h.category === 'certificate' ? localizeTimestamps(h.detail) : h.detail;
-}
 
 export function HistoryPage() {
     const { t } = useTranslation();
@@ -108,10 +101,12 @@ export function HistoryPage() {
                                                 {t(`historyCategory.${h.category}`)}
                                             </Badge>
                                         </Td>
-                                        <Td>{h.action}</Td>
-                                        <Td className='max-w-64 break-all'>{h.target || '-'}</Td>
+                                        <Td>{historyActionText(t, h)}</Td>
+                                        <Td className='max-w-64 break-all'>
+                                            {h.target ? historyTargetText(t, h) : '-'}
+                                        </Td>
                                         <Td className='max-w-96 break-words text-muted'>
-                                            {h.detail ? historyDetail(h) : '-'}
+                                            {h.detail ? historyDetailText(t, h) : '-'}
                                         </Td>
                                         <Td className='font-mono text-xs'>{h.remote_addr || '-'}</Td>
                                         <Td className='text-right'>{h.count}</Td>

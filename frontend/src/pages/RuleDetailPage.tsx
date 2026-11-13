@@ -16,6 +16,7 @@ import { Tabs } from '../components/Tabs';
 import { useApi } from '../hooks/useApi';
 import type { RuleDetail, RuleVersionInfo } from '../types';
 import { formatDateTime, formatOperator } from '../utils/format';
+import { serverText } from '../utils/serverText';
 
 type Tab = 'content' | 'versions' | 'diff';
 
@@ -169,7 +170,8 @@ function VersionContent({
                 {isLatest && <span className='text-xs text-success'>{t('rules.latest')}</span>}
                 {info && (
                     <span className='min-w-0 text-xs wrap-anywhere text-muted'>
-                        {formatOperator(info.created_by)} / {info.comment || t('rules.noComment')}
+                        {formatOperator(info.created_by)} /{' '}
+                        {info.comment ? serverText(t, info.comment_i18n, info.comment) : t('rules.noComment')}
                     </span>
                 )}
             </div>
@@ -211,7 +213,7 @@ function VersionsTable({
                         </Td>
                         <Td className='whitespace-nowrap'>{formatDateTime(v.created_at)}</Td>
                         <Td>{formatOperator(v.created_by)}</Td>
-                        <Td className='text-muted'>{v.comment || '-'}</Td>
+                        <Td className='text-muted'>{v.comment ? serverText(t, v.comment_i18n, v.comment) : '-'}</Td>
                         <Td className='text-right'>
                             <div className='flex justify-end gap-1'>
                                 <Button size='sm' icon='visibility' onClick={() => onView(v.version)}>

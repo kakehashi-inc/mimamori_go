@@ -17,6 +17,7 @@ import type {
     TemplateSummary,
 } from '../../types';
 import { errorMessage } from '../../utils/format';
+import type { CodedText } from '../../utils/serverText';
 import { normalizeRuleContent } from '../../utils/ruleContent';
 import { createTemplate, deleteTemplate, updateTemplate, validateRule } from '../api';
 import { RuleContentEditor } from '../components/RuleContentEditor';
@@ -112,7 +113,7 @@ export function TemplateEditor({
     const { showToast } = useToast();
     const [content, setContent] = useState<RuleContent>(() => normalizeRuleContent(tpl.content));
     const [description, setDescription] = useState(tpl.description);
-    const [validation, setValidation] = useState<string[] | null>(null);
+    const [validation, setValidation] = useState<CodedText[] | null>(null);
     const [busy, setBusy] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
     // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.

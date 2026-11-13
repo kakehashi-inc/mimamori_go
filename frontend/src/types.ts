@@ -12,6 +12,23 @@ export interface Health {
     trust_days: number;
 }
 
+// --- Texts for display ---
+
+/**
+ * A text of the server for display: a stable code and its parameters, sent next to the English text in a
+ * field named "<field>_i18n". Code '' is a text that is data only (params.text, shown as it is).
+ * Parameter values are strings, numbers, booleans, nested messages or lists of these.
+ */
+export interface ServerMsg {
+    code: string;
+    params?: Record<string, unknown> | null;
+}
+
+/** A message with its location (such as "command 2: timeout_sec"), the parts in order. */
+export interface ServerProblem extends ServerMsg {
+    where?: ServerMsg[] | null;
+}
+
 // --- Authentication ---
 
 export type Role = 'admin' | 'viewer';
@@ -51,7 +68,7 @@ export interface Overview {
     version: string;
     central_hostname: string;
     // enabled is false when the configuration disables the built-in agent.
-    builtin_agent: { enabled: boolean; running: boolean; message: string };
+    builtin_agent: { enabled: boolean; running: boolean; message: string; message_i18n?: ServerMsg | null };
     agents: number;
     unacked_alerts: number;
 }
@@ -87,6 +104,10 @@ export interface ApplyResult {
     version: number | null;
     at: string | null;
     warnings: string[] | null;
+    /** Absent for agents of older builds: the English is shown. */
+    message_i18n?: ServerMsg | null;
+    /** Same order as warnings. */
+    warnings_i18n?: ServerMsg[] | null;
 }
 
 export interface AgentRuleRef {
@@ -245,6 +266,8 @@ export interface RuleVersionInfo {
     created_at: string;
     created_by: Operator;
     comment: string;
+    /** Only for a comment the program wrote (version 1). */
+    comment_i18n?: ServerMsg | null;
 }
 
 export interface RuleDetail extends RuleSummary {
@@ -259,6 +282,7 @@ export interface RuleVersion {
     created_at: string;
     created_by: Operator;
     comment: string;
+    comment_i18n?: ServerMsg | null;
 }
 
 export interface DiffLine {
@@ -296,6 +320,8 @@ export interface TemplateSummary {
     name: string;
     builtin: boolean;
     description: string;
+    /** Only for built-in templates. */
+    description_i18n?: ServerMsg | null;
     updated_at: string | null;
 }
 
@@ -425,6 +451,9 @@ export interface HistoryItem {
     action: string;
     target: string;
     detail: string;
+    /** Present only when the recorded text has a code (target: mostly values, which have none). */
+    target_i18n?: ServerMsg | null;
+    detail_i18n?: ServerMsg | null;
     remote_addr: string;
     count: number;
 }
@@ -659,6 +688,8 @@ export interface CommandSet extends CommandSetSpec {
     last_run: CommandRun | null;
     running: boolean;
     agent_problems: string[] | null;
+    /** Same order as agent_problems. */
+    agent_problems_i18n?: ServerProblem[] | null;
 }
 
 export interface CommandSetList {

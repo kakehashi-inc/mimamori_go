@@ -9,6 +9,7 @@ import { EmptyState, ErrorAlert, Loading } from '../components/StateViews';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import { formatDateTime } from '../utils/format';
+import { serverText } from '../utils/serverText';
 
 export function TemplatesPage() {
     const { t } = useTranslation();
@@ -61,7 +62,11 @@ export function TemplatesPage() {
                                                 <Badge tone='accent'>{t('templates.custom')}</Badge>
                                             )}
                                         </Td>
-                                        <Td className='text-muted'>{tpl.description || '-'}</Td>
+                                        <Td className='text-muted'>
+                                            {tpl.description
+                                                ? serverText(t, tpl.description_i18n, tpl.description)
+                                                : '-'}
+                                        </Td>
                                         <Td className='whitespace-nowrap'>{formatDateTime(tpl.updated_at)}</Td>
                                     </Tr>
                                 ))}

@@ -11,26 +11,11 @@ import { ApplyStatusBadge, TokenStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
 import type { AgentDetail, ApplyResult, AuditdStatus, HostInfo, IncompleteScan } from '../types';
-import { formatDateTime, formatOperator, localizeTimestamps } from '../utils/format';
+import { formatDateTime, formatOperator } from '../utils/format';
+import { historyActionText, historyDetailText } from '../utils/historyText';
+import { codedTexts, codedText, serverText } from '../utils/serverText';
 import { AgentCommandResults } from './AgentCommandResults';
 import { AgentFlags, AgentRuleCell, AuditdCell, ElapsedSinceReport, unackedAlertsLink } from './agentParts';
-
-// Token history actions recorded by the central (app/workers); others are shown as they are.
-const TOKEN_ACTIONS = [
-    'issued',
-    'reissued',
-    'bound',
-    'unbound',
-    'revoked',
-    'expired',
-    'renewed',
-    'renewal_issued',
-] as const;
-type TokenAction = (typeof TOKEN_ACTIONS)[number];
-
-function isTokenAction(action: string): action is TokenAction {
-    return (TOKEN_ACTIONS as readonly string[]).includes(action);
-}
 
 const linkClass =
     'text-accent hover:text-accent-hover hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent';
@@ -184,10 +169,8 @@ function AgentDetailBody({ agent, reloadAgent }: { agent: AgentDetail; reloadAge
                                 <Tr key={h.id}>
                                     <Td className='whitespace-nowrap'>{formatDateTime(h.at)}</Td>
                                     <Td>{formatOperator(h.account_name)}</Td>
-                                    <Td>
-                                        {isTokenAction(h.action) ? t(`agentDetail.tokenActions.${h.action}`) : h.action}
-                                    </Td>
-                                    <Td className='text-muted'>{localizeTimestamps(h.detail)}</Td>
+                                    <Td>{historyActionText(t, h)}</Td>
+                                    <Td className='text-muted'>{historyDetailText(t, h)}</Td>
                                 </Tr>
                             ))}
                         </TBody>
@@ -200,7 +183,7 @@ function AgentDetailBody({ agent, reloadAgent }: { agent: AgentDetail; reloadAge
 
 function ApplyResultView({ apply }: { apply: ApplyResult }) {
     const { t } = useTranslation();
-    const warnings = apply.warnings ?? [];
+    const warnings = codedTexts(apply.warnings, apply.warnings_i18n);
     return (
         <div className='flex flex-col gap-3'>
             <DescriptionList
@@ -208,14 +191,17 @@ function ApplyResultView({ apply }: { apply: ApplyResult }) {
                     { label: t('agents.apply'), value: <ApplyStatusBadge status={apply.status} /> },
                     { label: t('agentDetail.applyVersion'), value: apply.version ? `v${apply.version}` : '-' },
                     { label: t('agentDetail.applyAt'), value: formatDateTime(apply.at) },
-                    { label: t('agentDetail.applyMessage'), value: apply.message || '-' },
+                    {
+                        label: t('agentDetail.applyMessage'),
+                        value: apply.message ? serverText(t, apply.message_i18n, apply.message) : '-',
+                    },
                 ]}
             />
             {warnings.length > 0 && (
                 <Alert tone='warning' title={t('agentDetail.applyWarnings')}>
                     <ul className='list-disc pl-5'>
                         {warnings.map((w, i) => (
-                            <li key={i}>{w}</li>
+                            <li key={i}>{codedText(t, w)}</li>
                         ))}
                     </ul>
                 </Alert>

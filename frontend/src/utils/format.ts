@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 import { ApiError } from '../api/client';
+import { serverText } from './serverText';
 
 function pad(n: number): string {
     return String(n).padStart(2, '0');
@@ -55,10 +56,17 @@ export function daysUntil(value: string | null | undefined): number | null {
 export function errorMessage(t: TFunction, e: unknown): string {
     if (e instanceof ApiError) {
         if (e.status === 0) return t('errors.network');
+        const code = e.i18n?.code;
+        // A busy server and an internal error have their own texts here (the answers carry only "busy"
+        // and "internal error"); a 503 or 500 without a message is one of them too.
+        if (code === 'common.busy' || (code === undefined && e.status === 503)) return t('errors.busy');
+        if (code === 'common.internal_error' || (code === undefined && e.status === 500)) {
+            return t('errors.generic', { status: e.status });
+        }
+        if (e.i18n) return serverText(t, e.i18n, e.message);
         if (e.message && !e.message.startsWith('HTTP ')) return e.message;
         if (e.status === 403) return t('errors.forbidden');
         if (e.status === 404) return t('errors.notFound');
-        if (e.status === 503) return t('errors.busy');
         return t('errors.generic', { status: e.status });
     }
     if (e instanceof Error) return e.message;

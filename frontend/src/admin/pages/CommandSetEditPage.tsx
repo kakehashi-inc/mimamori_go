@@ -9,6 +9,7 @@ import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
 import type { CommandSetList } from '../../types';
 import { errorMessage } from '../../utils/format';
+import { codedText, type CodedText } from '../../utils/serverText';
 import { createCommandSet, listCommandSets, updateCommandSet, validateCommandSet } from '../api';
 import { CommandSetEditor } from '../components/CommandSetEditor';
 import {
@@ -71,7 +72,7 @@ function EditForm({ list, setId, back }: { list: CommandSetList; setId?: number;
     const [draft, setDraft] = useState<SetDraft>(() =>
         current ? setDraftFrom(current) : newSetDraft(list.default_os_user)
     );
-    const [problems, setProblems] = useState<string[] | null>(null);
+    const [problems, setProblems] = useState<CodedText[] | null>(null);
     const [busy, setBusy] = useState<'check' | 'save' | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
     const zone = hostZoneText(list.time_zone, list.utc_offset_sec, list.time_zone !== '');
@@ -81,9 +82,9 @@ function EditForm({ list, setId, back }: { list: CommandSetList; setId?: number;
 
     // The problems the form finds come first, then those of the server.
     async function check(): Promise<boolean> {
-        const local = draftProblems(t, draft);
+        const local = draftProblems(t, draft).map(text => ({ text }));
         const errors = await validateCommandSet(list.agent_id, draftToSpec(draft), setId);
-        const all = [...local, ...errors];
+        const all: CodedText[] = [...local, ...errors];
         setProblems(all);
         return all.length === 0;
     }
@@ -143,7 +144,7 @@ function EditForm({ list, setId, back }: { list: CommandSetList; setId?: number;
                             <ul className='list-disc pl-5'>
                                 {problems.map((p, i) => (
                                     <li key={i} className='break-words'>
-                                        {p}
+                                        {codedText(t, p)}
                                     </li>
                                 ))}
                             </ul>

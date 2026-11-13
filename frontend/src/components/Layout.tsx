@@ -4,6 +4,7 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { getOverview } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { Overview } from '../types';
+import { serverText } from '../utils/serverText';
 import { Header } from './Header';
 import { Loading } from './StateViews';
 
@@ -59,7 +60,9 @@ export function Layout() {
                         <div>
                             <span className='font-semibold text-danger'>{t('layout.builtinStopped')}</span>
                             {overview.builtin_agent.message && (
-                                <span className='ml-2 break-words'>{overview.builtin_agent.message}</span>
+                                <span className='ml-2 break-words'>
+                                    {serverText(t, overview.builtin_agent.message_i18n, overview.builtin_agent.message)}
+                                </span>
                             )}
                         </div>
                     </div>

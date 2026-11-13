@@ -199,16 +199,6 @@
         "unackedLink": "{{count}}件を確認する",
         "droppedTotal": "破棄した検知の累計",
         "droppedNote": "保存量の上限を超えたため、一部の検知を破棄しました。",
-        "tokenActions": {
-            "issued": "発行",
-            "reissued": "再発行",
-            "bound": "紐付け",
-            "unbound": "紐付け解除",
-            "revoked": "失効",
-            "expired": "期限切れ",
-            "renewed": "自動更新",
-            "renewal_issued": "自動更新の値を発行"
-        },
         "ruleAndApply": "監視ルールと適用の結果",
         "assignedVersion": "割り当てた版",
         "reportedVersion": "適用を報告した版",
