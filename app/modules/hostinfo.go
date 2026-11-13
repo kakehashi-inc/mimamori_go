@@ -71,6 +71,9 @@ type HostInfo struct {
 	OSUser       string `json:"os_user"`
 	TimeZone     string `json:"time_zone"`
 	UTCOffsetSec int    `json:"utc_offset_sec"`
+	// Workers is the worker count the agent uses (0 from agents that do not
+	// report it).
+	Workers int `json:"workers"`
 }
 
 // ReadOSRelease returns NAME and VERSION_ID from /etc/os-release.
@@ -125,6 +128,8 @@ type HostInfoInput struct {
 	// Stop is the agent's stop: closed, it ends the audit tools that are
 	// running (nil: never).
 	Stop <-chan struct{}
+	// Workers is the worker count in use.
+	Workers int
 }
 
 // CollectHostInfo gathers the host information reported to the central. When
@@ -133,7 +138,7 @@ type HostInfoInput struct {
 // running).
 func CollectHostInfo(in HostInfoInput) (*HostInfo, error) {
 	hi := &HostInfo{CollectedAt: time.Now().Unix(), AgentVersion: AppVersion, ScanBase: in.ScanBase, Rule: in.Rule, LastApply: in.LastApply,
-		IncompleteScans: in.IncompleteScans}
+		IncompleteScans: in.IncompleteScans, Workers: in.Workers}
 	hi.Hostname, _ = os.Hostname()
 	hi.OSName, hi.OSVersion = ReadOSRelease()
 	hi.Kernel = kernelRelease()

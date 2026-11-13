@@ -213,6 +213,7 @@
         "os": "OS",
         "kernel": "Kernel",
         "agentVersion": "Agent version",
+        "workers": "Workers",
         "scanBase": "Scan base",
         "hostRule": "Reported rule",
         "auditd": "auditd status",

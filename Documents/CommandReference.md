@@ -60,9 +60,10 @@ Commands for the agent. Run them on each monitored host.
 | --- | --- |
 | `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9081. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped); the stored rule is cleared, and the first sync after the next start applies the rule assigned to the token or, when none is assigned, removes the audit rules the agent loaded |
 | `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token. Without `--port` the current port is kept |
+| `agent set-workers N [--builtin]` | Set the worker count of the agent (1-64, default 1): how many of its units (monitoring step, runs of command sets) it processes at the same time. With `--builtin`, run on the central's host, it sets the built-in agent's own count in `builtin-agent.db` (created when missing; the data directory must hold `central.db`). This count is separate from the central's `workers`. Takes effect when the agent (for `--builtin`: the central) starts; may be run while it runs. Prints the new and the previous count and, while the agent runs, the count it uses until it is restarted. Exit code 2 for a count outside 1-64, 3 without `agent.db` (or, with `--builtin`, without `central.db`) |
 | `agent start` | Start the agent. Stops with SIGTERM or SIGINT |
-| `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has finished its cycle (default 300s) |
-| `agent status` | Show whether the agent is running, the central, the token, the applied rule and unsent reports. Exit code 3 when it is not running |
+| `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has ended the work in progress (a running command is ended: SIGTERM, then SIGKILL after 60 s) (default 300s) |
+| `agent status` | Show whether the agent is running, the central, the token, the worker count, the applied rule and unsent reports. While the agent runs with another worker count than the saved one, both are shown, for example `1 (saved: 4, takes effect after restart)`. Exit code 3 when it is not running |
 
 ## ctl
 

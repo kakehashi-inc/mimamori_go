@@ -69,8 +69,8 @@ type AgentRuntime struct {
 	out *outbox
 
 	// Fixed before Run starts a worker, then only read. workers is the number
-	// of units processed at the same time (1 unless a test sets more); stop
-	// is the channel given to Run, closed when the agent stops.
+	// of units processed at the same time (SetWorkers; 1 unless set); stop is
+	// the channel given to Run, closed when the agent stops.
 	workers int
 	stop    <-chan struct{}
 	// clock, loc and cmdKillGrace replace the time, the host's time zone and
@@ -137,6 +137,12 @@ func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntim
 	return rt
 }
 
+// SetWorkers sets the number of units processed at the same time (1 to
+// MaxAgentWorkers, see LoadAgentWorkers). It is called before Run.
+func (rt *AgentRuntime) SetWorkers(n int) {
+	rt.workers = max(1, min(n, MaxAgentWorkers))
+}
+
 func (rt *AgentRuntime) logf(format string, a ...any) {
 	if rt.Logger != nil {
 		rt.Logger.Printf(format, a...)
@@ -166,9 +172,19 @@ func (rt *AgentRuntime) ReapplyStored() {
 // monitorStep), and a running command is ended (SIGTERM, grace, SIGKILL) and
 // its run still reported. Run returns when every worker has returned, after
 // one attempt to send the queued reports when a run ended after the stop.
+// While it runs, the state key running_workers holds the worker count in
+// use (for agent status and agent set-workers).
 func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	rt.stop = stop
 	rt.sched.stop = stop
+	if err := recordRunningWorkers(rt.DB, rt.workers); err != nil {
+		rt.logf("failed to record the worker count in use: %v", err)
+	}
+	defer func() {
+		if err := clearRunningWorkers(rt.DB); err != nil {
+			rt.logf("failed to clear the worker count in use: %v", err)
+		}
+	}()
 	if !isClosed(stop) {
 		rt.ReapplyStored()
 	}
@@ -1023,7 +1039,7 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The directory structure is reported only for the scan origin of the
 	// applied rule; there is no default origin.
-	in := HostInfoInput{LastApply: rt.mon.lastApply}
+	in := HostInfoInput{LastApply: rt.mon.lastApply, Workers: rt.workers}
 	if rt.mon.rule != nil {
 		in.Rule = &RuleRef{ID: rt.mon.rule.ID, Version: rt.mon.rule.Version}
 		in.ScanBase = rt.mon.rule.Content.Writable.Base

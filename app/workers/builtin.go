@@ -75,8 +75,9 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 }
 
 // startBuiltinAgent checks the prerequisites and, when they hold, starts the
-// built-in agent on its own flow. It returns a function that waits for the
-// flow to finish after stop was closed. When the prerequisites fail, only the
+// built-in agent on its own flows, as many as its own worker count in
+// builtin-agent.db (default 1). It returns a function that waits for them to
+// finish after stop was closed. When the prerequisites fail, only the
 // central functions run and the reason is shown on screen (the caller logs
 // it once).
 func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func() {
@@ -96,10 +97,20 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
 		return none
 	}
+	// The built-in agent's own worker count, from its own database; the
+	// central's item workers has nothing to do with it.
+	workers, err := modules.LoadAgentWorkers(db.Read())
+	if err != nil {
+		db.Close()
+		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
+		return none
+	}
 	logger := log.New(c.logger.Writer(), "[builtin-agent] ", log.LstdFlags)
 	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: c, agentID: agent.ID}, logger)
+	rt.SetWorkers(workers)
 	done := make(chan struct{})
 	c.setBuiltinStatus(true, modules.Msg{})
+	logger.Printf("started (workers %d)", workers)
 	go func() {
 		defer close(done)
 		defer db.Close()

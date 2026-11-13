@@ -129,6 +129,9 @@ type hostInfoJSON struct {
 	LastApply            applyJSON               `json:"last_apply"`
 	TrustedCAs           []trustedCAJSON         `json:"trusted_cas"`
 	IncompleteScans      []incompleteScanJSON    `json:"incomplete_scans"`
+	// Workers is the worker count the agent reported in use (0: not
+	// reported).
+	Workers int `json:"workers"`
 }
 
 // incompleteScanJSON is a file scan split over several checks (see
@@ -318,7 +321,8 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		hj := &hostInfoJSON{CollectedAt: ts(hi.CollectedAt), Hostname: hi.Hostname, OSName: hi.OSName, OSVersion: hi.OSVersion,
 			Kernel: hi.Kernel, AgentVersion: hi.AgentVersion, Auditd: auditdOut(hi.Auditd),
 			ScanBase: hi.ScanBase, Directories: nonNil(hi.Directories), DirectoriesTruncated: hi.DirectoriesTruncated,
-			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}, IncompleteScans: []incompleteScanJSON{}}
+			Rule: hi.Rule, LastApply: applyOut(hi.LastApply), TrustedCAs: []trustedCAJSON{}, IncompleteScans: []incompleteScanJSON{},
+			Workers: hi.Workers}
 		for _, t := range hi.TrustedCAs {
 			hj.TrustedCAs = append(hj.TrustedCAs, trustedCAJSON{Fingerprint: t.Fingerprint, NotAfter: ts(t.NotAfter)})
 		}

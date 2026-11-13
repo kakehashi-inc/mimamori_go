@@ -130,7 +130,7 @@ func statusValue(item, prefix string, saved *CentralConfig, runningValues map[st
 
 // AgentStopCmd stops the running agent.
 type AgentStopCmd struct {
-	Timeout time.Duration `help:"How long to wait for the agent to finish its current cycle and stop" default:"300s"`
+	Timeout time.Duration `help:"How long to wait for the agent to stop" default:"300s"`
 }
 
 func (c *AgentStopCmd) Run() error {
@@ -164,6 +164,7 @@ func (c *AgentStatusCmd) Run() error {
 		} else {
 			fmt.Printf("%-16s %v\n", "configuration:", err)
 		}
+		fmt.Printf("%-16s %s\n", "workers:", agentWorkersStatus(rd, running))
 		var rule RuleAssignment
 		if json.Unmarshal([]byte(models.GetLocalState(rd, stateRule)), &rule) == nil && rule.ID > 0 {
 			fmt.Printf("%-16s %s (version %d)\n", "rule:", rule.Name, rule.Version)

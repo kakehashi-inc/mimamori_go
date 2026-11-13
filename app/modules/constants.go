@@ -63,6 +63,17 @@ const (
 	DefaultOutboxMaxDetection = 10000
 )
 
+// --- Worker count of an agent ---
+
+// The worker count of an agent (and of the built-in agent) is stored in that
+// agent's own local database (agent_workers.go). It has nothing to do with
+// the central's item workers (DefaultWorkers and its bound in
+// centralconfig.go): neither is ever read for the other.
+const (
+	DefaultAgentWorkers = 1
+	MaxAgentWorkers     = 64
+)
+
 // --- Databases ---
 
 const (

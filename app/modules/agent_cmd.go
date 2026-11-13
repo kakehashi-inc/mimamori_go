@@ -356,8 +356,8 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	return nil
 }
 
-// AgentStart runs the agent (the calling flow is its first worker) until
-// SIGINT or SIGTERM closes its stop channel.
+// AgentStart runs the agent with its saved worker count (the calling flow
+// is its first worker) until SIGINT or SIGTERM closes its stop channel.
 func AgentStart(dataDir string) error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if err := CheckAuditd(); err != nil {
@@ -381,11 +381,16 @@ func AgentStart(dataDir string) error {
 	if err != nil {
 		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}
+	workers, err := LoadAgentWorkers(db.Read())
+	if err != nil {
+		return NewExitError(ExitConfig, err.Error())
+	}
 	tr, err := NewRemoteTransport(cfg)
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	rt := NewAgentRuntime(db, tr, logger)
+	rt.SetWorkers(workers)
 	rt.mon.config = cfg
 	// The transport uses the token and the CAs the runtime saved last.
 	rt.mon.onConfigSaved = func(c *AgentConfig) {
@@ -394,7 +399,7 @@ func AgentStart(dataDir string) error {
 	}
 	stopCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	logger.Printf("%s agent %s started (central %s, token %s)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName)
+	logger.Printf("%s agent %s started (central %s, token %s, workers %d)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName, workers)
 	rt.Run(stopCtx.Done())
 	logger.Printf("agent stopped")
 	return nil

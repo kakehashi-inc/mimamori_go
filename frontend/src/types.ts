@@ -159,6 +159,8 @@ export interface HostInfo {
     trusted_cas: { fingerprint: string; not_after: string }[] | null;
     /** File scans whose pass is split over several checks and not complete yet. */
     incomplete_scans?: IncompleteScan[] | null;
+    /** Worker count the agent reported in use (0 when it has not reported it). */
+    workers?: number;
 }
 
 /** A file scan that reached its entry limit; the rest is scanned in the following checks. */

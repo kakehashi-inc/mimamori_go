@@ -213,9 +213,21 @@ func (c *CentralResetPasswordCmd) Run() error {
 type AgentCmd struct {
 	Init       AgentInitCmd       `cmd:"" help:"Initialize the agent (the token is read from standard input, never from an argument)"`
 	SetCentral AgentSetCentralCmd `cmd:"" name:"set-central" help:"Change the central host (and port) of the initialized agent; the agent must be stopped"`
+	SetWorkers AgentSetWorkersCmd `cmd:"" name:"set-workers" help:"Set how many units the agent processes at the same time (1-64; with --builtin the built-in agent of the central on this host); takes effect at its next start"`
 	Start      AgentStartCmd      `cmd:"" help:"Start the agent"`
-	Stop       AgentStopCmd       `cmd:"" help:"Stop the running agent (sends SIGTERM and waits until it has finished its cycle)"`
+	Stop       AgentStopCmd       `cmd:"" help:"Stop the running agent (sends SIGTERM and waits until it has ended the work in progress)"`
 	Status     AgentStatusCmd     `cmd:"" help:"Show whether the agent is running and its state (exit code 3 when it is not)"`
+}
+
+// AgentSetWorkersCmd sets the worker count of the agent or, with --builtin,
+// of the built-in agent of the central in the data directory.
+type AgentSetWorkersCmd struct {
+	N       int  `arg:"" help:"Worker count (1-64)"`
+	Builtin bool `help:"Set the built-in agent's worker count (on the central's host)"`
+}
+
+func (c *AgentSetWorkersCmd) Run() error {
+	return AgentSetWorkers(DataDir(), c.N, c.Builtin)
 }
 
 // AgentInitCmd initializes the agent.

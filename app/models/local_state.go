@@ -18,6 +18,20 @@ func GetLocalState(db Reader, key string) string {
 	return v
 }
 
+// FindLocalState returns the value of key and whether the row exists; unlike
+// GetLocalState it tells a missing row from an empty value and returns the
+// error of the read.
+func FindLocalState(db Reader, key string) (value string, found bool, err error) {
+	err = db.QueryRow(`SELECT value FROM state WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
 // SetLocalState upserts a value.
 func SetLocalState(db Writer, key, value string) error {
 	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)

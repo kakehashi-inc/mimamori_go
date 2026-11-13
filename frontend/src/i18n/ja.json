@@ -213,6 +213,7 @@
         "os": "OS",
         "kernel": "カーネル",
         "agentVersion": "エージェントの版",
+        "workers": "ワーカー数",
         "scanBase": "走査の起点",
         "hostRule": "報告された監視ルール",
         "auditd": "auditd の状態",

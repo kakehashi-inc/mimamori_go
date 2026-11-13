@@ -202,6 +202,7 @@ interface HostInfo {
     limit: number;                   // 1 回の確認でたどる項目数の上限
     started_at: string | null;       // 途中の 1 巡を始めた日時
   }[];
+  workers: number;                   // エージェントのワーカー数（使用中の値。報告していなければ 0）
 }
 ```
 
@@ -693,7 +694,7 @@ interface ReportRequest {
   report_id?: string;                  // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の報告に入れたときに作り、送り直しても変わらない。現在のセントラルは使わない
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
-  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
+  host_info?: HostInfo;                // 4 章の HostInfo と同じ項目（workers を含む）に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
   apply?: ApplyResult;                 // 最後の適用の結果（まだ適用していなければ省略）
   dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
   command_runs?: CommandRunReport[];   // コマンドセットの実行（開始、コマンドごと、終了のたびに送る）

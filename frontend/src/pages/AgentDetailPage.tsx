@@ -227,6 +227,7 @@ function HostInfoView({ host, auditd }: { host: HostInfo; auditd: AuditdStatus |
                             { label: t('agentDetail.os'), value: `${host.os_name} ${host.os_version}`.trim() || '-' },
                             { label: t('agentDetail.kernel'), value: host.kernel || '-' },
                             { label: t('agentDetail.agentVersion'), value: host.agent_version || '-' },
+                            { label: t('agentDetail.workers'), value: host.workers ? String(host.workers) : '-' },
                             {
                                 label: t('agentDetail.scanBase'),
                                 value: host.scan_base ? (
