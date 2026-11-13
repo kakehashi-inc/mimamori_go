@@ -46,6 +46,53 @@ func (f *cmdTransport) Report(r *ReportRequest) error {
 	return nil
 }
 
+// stopWhenRunsFinished returns a stop channel for Run that is closed once n
+// runs are recorded finished in the local database.
+func stopWhenRunsFinished(t *testing.T, db *DB, n int) <-chan struct{} {
+	t.Helper()
+	stop, quit, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			var finished int
+			err := db.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE finished_at > 0`).Scan(&finished)
+			if err == nil && finished >= n {
+				close(stop)
+				return
+			}
+			select {
+			case <-quit:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(quit)
+		<-done
+	})
+	return stop
+}
+
+// stopAfterFirstSync returns a stop channel for Run that is closed after
+// delay from the first sync on, and the time the stop is due (set at that
+// sync). first, when not nil, also runs at that sync.
+func stopAfterFirstSync(tr *cmdTransport, delay time.Duration, first func()) (<-chan struct{}, *time.Time) {
+	stop := make(chan struct{})
+	stopAt := new(time.Time)
+	tr.onSync = func(n int) {
+		if n != 1 {
+			return
+		}
+		if first != nil {
+			first()
+		}
+		*stopAt = time.Now().Add(delay)
+		time.AfterFunc(delay, func() { close(stop) })
+	}
+	return stop, stopAt
+}
+
 func newCommandRuntime(t *testing.T, tr AgentTransport) *AgentRuntime {
 	t.Helper()
 	MigrationsFS = os.DirFS("../..")
@@ -468,7 +515,7 @@ func TestCommandRunKeepsMonitoring(t *testing.T) {
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	rt.defaultInterval = 1
 	rt.lastMonitor = time.Time{}
-	rt.Run(func(time.Duration) bool { return false }, func() bool { return false })
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
 	if tr.syncs < 3 {
 		t.Fatalf("the monitoring must go on while the command runs: %d syncs", tr.syncs)
 	}
@@ -501,11 +548,10 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	now := time.Now().Unix()
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo started; sleep 30", "echo never"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	var stopAt time.Time
-	tr.onSync = func(int) { stopAt = time.Now().Add(300 * time.Millisecond) }
+	stop, _ := stopAfterFirstSync(tr, 300*time.Millisecond, nil)
 	rt.lastMonitor = time.Time{}
 	start := time.Now()
-	rt.Run(func(time.Duration) bool { return false }, func() bool { return !stopAt.IsZero() && time.Now().After(stopAt) })
+	rt.Run(stop)
 	if time.Since(start) > 10*time.Second {
 		t.Fatalf("the stop took %s", time.Since(start))
 	}
@@ -535,16 +581,12 @@ func TestCommandRunStoppedSendsOnce(t *testing.T) {
 	now := time.Now().Unix()
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 30"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	var stopAt time.Time
-	tr.onSync = func(int) {
-		tr.failReports = true
-		stopAt = time.Now().Add(300 * time.Millisecond)
-	}
+	stop, stopAt := stopAfterFirstSync(tr, 300*time.Millisecond, func() { tr.failReports = true })
 	rt.lastMonitor = time.Time{}
-	rt.Run(func(time.Duration) bool { return false }, func() bool { return !stopAt.IsZero() && time.Now().After(stopAt) })
+	rt.Run(stop)
 	after := 0
 	for _, a := range tr.attempts {
-		if a.After(stopAt) {
+		if a.After(*stopAt) {
 			after++
 		}
 	}
@@ -591,5 +633,31 @@ func TestCommandOutbox(t *testing.T) {
 	}
 	if acks := acksOf(queuedReports(t, rt)); len(acks) != 1 {
 		t.Fatalf("answers to requests are kept: %+v", acks)
+	}
+}
+
+// TestConfigSavedReachesTransport: a configuration changed by the central is
+// handed to OnConfigSaved after it was saved (the agent's transport takes
+// the token and the CAs from it); a sync that changes nothing does not call
+// it.
+func TestConfigSavedReachesTransport(t *testing.T) {
+	tr := &cmdTransport{}
+	rt := newCommandRuntime(t, tr)
+	rt.Config = &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: 8443, Token: "old", TokenName: "a"}
+	var saved []string
+	rt.OnConfigSaved = func(c *AgentConfig) {
+		if stored := models.GetLocalState(rt.DB.Read(), agentCfgToken); stored != c.Token {
+			t.Errorf("called before the configuration was saved: stored token %q", stored)
+		}
+		saved = append(saved, c.Token)
+	}
+	tr.resp.TokenRenewal = &TokenRenewal{Token: "new", ExpiresAt: time.Now().Add(time.Hour).Unix()}
+	rt.Cycle()
+	if len(saved) != 1 || saved[0] != "new" || rt.Config.Token != "new" {
+		t.Fatalf("renewed token: %v, config %q", saved, rt.Config.Token)
+	}
+	rt.Cycle()
+	if len(saved) != 1 {
+		t.Fatalf("a sync without changes must not call OnConfigSaved: %v", saved)
 	}
 }

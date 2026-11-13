@@ -103,30 +103,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	go func() {
 		defer close(done)
 		defer db.Close()
-		stopped := false
-		stopping := func() bool {
-			if stopped {
-				return true
-			}
-			select {
-			case <-stop:
-				stopped = true
-			default:
-			}
-			return stopped
-		}
-		wait := func(d time.Duration) bool {
-			t := time.NewTimer(d)
-			defer t.Stop()
-			select {
-			case <-stop:
-				stopped = true
-				return false
-			case <-t.C:
-				return true
-			}
-		}
-		rt.Run(wait, stopping)
+		rt.Run(stop)
 		c.setBuiltinStatus(false, modules.M("builtin.stopped"))
 	}()
 	return func() { <-done }

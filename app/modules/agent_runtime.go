@@ -58,8 +58,10 @@ type AgentRuntime struct {
 	Transport AgentTransport
 	Config    *AgentConfig // nil for the built-in agent
 	Logger    *log.Logger
-	// OnTokenRenewed is called after a renewed token was saved.
-	OnTokenRenewed func(token string)
+	// OnConfigSaved is called with the configuration after a change from
+	// the central (renewed token, name, expiry, CAs) was saved, so that the
+	// transport uses the saved token and CAs from the next request on.
+	OnConfigSaved func(cfg *AgentConfig)
 
 	defaultInterval int
 	rule            *RuleAssignment
@@ -72,9 +74,10 @@ type AgentRuntime struct {
 	// the central assigns the running version again after a failed one.
 	lastOK *ApplyResult
 
-	// stopping is the stop check given to Run (also used while a command
-	// runs); lastMonitor is the start of the last monitoring step.
-	stopping    func() bool
+	// stop is the channel given to Run, closed when the agent stops (also
+	// looked at while a command runs); lastMonitor is the start of the last
+	// monitoring step.
+	stop        <-chan struct{}
 	lastMonitor time.Time
 	// Command sets: the stored definitions, the valid sets by ID, the manual
 	// requests waiting to run (oldest first) and the requests answered in
@@ -141,10 +144,10 @@ func (rt *AgentRuntime) ReapplyStored() {
 	rt.applyRule(rt.rule, true)
 }
 
-// Run loops until stopping returns true. wait sleeps for the given duration
-// and returns false when a stop was requested meanwhile. The stop request is
-// checked between steps of a cycle; a running cycle always completes and
-// saves its state before returning.
+// Run loops in the calling flow until stop is closed (a nil stop never
+// is). The stop is checked between steps of a cycle and ends the waits
+// between them; a running cycle always completes and saves its state before
+// returning.
 //
 // Each pass runs the monitoring step when the check interval has passed,
 // then the command sets that are due, one at a time (manual requests first,
@@ -153,39 +156,53 @@ func (rt *AgentRuntime) ReapplyStored() {
 // wait loop runs the monitoring step when it is due; a stop ends the running
 // command (SIGTERM, grace, SIGKILL) and its run is still reported: one
 // attempt to send the queued reports is made before returning.
-func (rt *AgentRuntime) Run(wait func(time.Duration) bool, stopping func() bool) {
-	rt.stopping = stopping
-	rt.ReapplyStored()
+func (rt *AgentRuntime) Run(stop <-chan struct{}) {
+	rt.stop = stop
+	if !rt.isStopping() {
+		rt.ReapplyStored()
+	}
 	rt.recoverInterruptedRuns()
 	for {
-		if stopping() {
+		if rt.isStopping() {
 			return
 		}
 		if rt.monitorDue() {
 			rt.monitorStep()
 		}
-		for !stopping() {
+		for !rt.isStopping() {
 			job := rt.nextCommandJob()
 			if job == nil || !rt.runCommandJob(job) {
 				break
 			}
-			if stopping() {
+			if rt.isStopping() {
 				// The run was closed because of the stop: one attempt to send
 				// its reports, so that the central does not show it running
 				// until the next start (what fails stays queued).
 				rt.flushOutbox()
 				return
 			}
-			if rt.monitorDue() && !stopping() {
+			if rt.monitorDue() && !rt.isStopping() {
 				rt.monitorStep()
 			}
 		}
-		if stopping() {
+		if rt.isStopping() {
 			return
 		}
-		if !wait(rt.nextWait()) {
+		if !rt.wait(rt.nextWait()) {
 			return
 		}
+	}
+}
+
+// wait sleeps for d and returns false when the stop came meanwhile.
+func (rt *AgentRuntime) wait(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-rt.stop:
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
@@ -314,9 +331,9 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 	*rt.Config = cfg
 	if renewed {
 		rt.logf("token renewed; new expiry %s", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
-		if rt.OnTokenRenewed != nil {
-			rt.OnTokenRenewed(cfg.Token)
-		}
+	}
+	if rt.OnConfigSaved != nil {
+		rt.OnConfigSaved(rt.Config)
 	}
 }
 

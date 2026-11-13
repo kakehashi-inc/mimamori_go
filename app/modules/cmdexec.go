@@ -58,10 +58,10 @@ type CommandExecHooks struct {
 	// They are called from the wait loop while the command runs.
 	MonitorDue func() bool
 	Monitor    func()
-	// Stopping reports whether the agent is stopping; the command is then
-	// ended (SIGTERM, grace, SIGKILL) and its result is an error with the
-	// reason interrupted.
-	Stopping func() bool
+	// Stop is closed when the agent stops; the command is then ended
+	// (SIGTERM, grace, SIGKILL) and its result is an error with the reason
+	// interrupted. A nil channel never stops the command.
+	Stop <-chan struct{}
 	// Logf writes to the agent's log.
 	Logf func(format string, a ...any)
 }
@@ -294,7 +294,7 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 			break
 		}
 		now := time.Now()
-		stopping := hooks.Stopping != nil && hooks.Stopping()
+		stopping := isClosed(hooks.Stop)
 		if !terminating {
 			// A stop during the grace of a time limit keeps the reason (the
 			// time limit) and the grace.
@@ -341,6 +341,16 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 		sig.send(syscall.SIGKILL, drainPipe)
 	}
 	return raw
+}
+
+// isClosed reports whether the channel is closed (a nil channel never is).
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // groupSignaler sends signals to the process group of a command. A command

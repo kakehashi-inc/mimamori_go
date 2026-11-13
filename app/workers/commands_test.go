@@ -761,7 +761,25 @@ func TestCommandSetEndToEnd(t *testing.T) {
 	}
 	defer db.Close()
 	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: e.c, agentID: b.ID}, log.New(io.Discard, "", 0))
-	rt.Run(func(time.Duration) bool { return false }, func() bool { return false })
+	// Stop the agent once the run is recorded finished.
+	stop, quit := make(chan struct{}), make(chan struct{})
+	defer close(quit)
+	go func() {
+		for {
+			var finished int
+			err := db.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE finished_at > 0`).Scan(&finished)
+			if err == nil && finished > 0 {
+				close(stop)
+				return
+			}
+			select {
+			case <-quit:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}()
+	rt.Run(stop)
 	rt.Cycle() // sends what the run queued
 
 	runs := e.admin("GET", base+"/command-sets/"+setID+"/runs", nil)["runs"].([]any)

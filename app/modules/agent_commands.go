@@ -46,8 +46,9 @@ func (rt *AgentRuntime) location() *time.Location {
 	return time.Local
 }
 
+// isStopping reports whether the stop channel given to Run was closed.
 func (rt *AgentRuntime) isStopping() bool {
-	return rt.stopping != nil && rt.stopping()
+	return isClosed(rt.stop)
 }
 
 // commandSignature is the signature of the definitions the agent holds.
@@ -293,7 +294,7 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	rt.queueCommandReport(start)
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
-	hooks := CommandExecHooks{MonitorDue: rt.monitorDue, Monitor: rt.monitorStep, Stopping: rt.isStopping, Logf: rt.logf}
+	hooks := CommandExecHooks{MonitorDue: rt.monitorDue, Monitor: rt.monitorStep, Stop: rt.stop, Logf: rt.logf}
 	collect := def.Purpose == PurposeCollectOutput
 	var kinds []string
 	var values []CommandValues

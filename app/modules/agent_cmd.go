@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -356,7 +356,8 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	return nil
 }
 
-// AgentStart runs the agent in the calling flow until SIGINT or SIGTERM.
+// AgentStart runs the agent in the calling flow until SIGINT or SIGTERM
+// closes its stop channel.
 func AgentStart(dataDir string) error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if err := CheckAuditd(); err != nil {
@@ -386,43 +387,15 @@ func AgentStart(dataDir string) error {
 	}
 	rt := NewAgentRuntime(db, tr, logger)
 	rt.Config = cfg
-	rt.OnTokenRenewed = tr.SetToken
-	prevCAs := slices.Clone(cfg.CAPEMs)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-	stop := false
-	stopping := func() bool {
-		if stop {
-			return true
-		}
-		select {
-		case <-sigCh:
-			stop = true
-		default:
-		}
-		// Compare the certificates themselves: a new CA may replace an
-		// expired one without changing the count.
-		if !slices.Equal(cfg.CAPEMs, prevCAs) {
-			tr.SetCAs(cfg.CAPEMs)
-			prevCAs = slices.Clone(cfg.CAPEMs)
-		}
-		return stop
+	// The transport uses the token and the CAs the runtime saved last.
+	rt.OnConfigSaved = func(c *AgentConfig) {
+		tr.SetToken(c.Token)
+		tr.SetCAs(c.CAPEMs)
 	}
-	wait := func(d time.Duration) bool {
-		t := time.NewTimer(d)
-		defer t.Stop()
-		select {
-		case <-sigCh:
-			stop = true
-			return false
-		case <-t.C:
-			return true
-		}
-	}
+	stopCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 	logger.Printf("%s agent %s started (central %s, token %s)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName)
-	rt.Run(wait, stopping)
+	rt.Run(stopCtx.Done())
 	logger.Printf("agent stopped")
 	return nil
 }

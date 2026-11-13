@@ -259,6 +259,13 @@ func TestExecuteCommandTimeLimitAndOutputCap(t *testing.T) {
 	}
 }
 
+// closedAfter returns a channel that is closed after d (a stop of the agent).
+func closedAfter(d time.Duration) <-chan struct{} {
+	ch := make(chan struct{})
+	time.AfterFunc(d, func() { close(ch) })
+	return ch
+}
+
 func TestExecuteCommandHooks(t *testing.T) {
 	requireBash(t)
 	user := agentUserName()
@@ -273,8 +280,7 @@ func TestExecuteCommandHooks(t *testing.T) {
 		t.Fatalf("monitoring while the command runs: %+v %d", r, monitored)
 	}
 
-	stopAt := time.Now().Add(200 * time.Millisecond)
-	hooks = CommandExecHooks{Stopping: func() bool { return time.Now().After(stopAt) }}
+	hooks = CommandExecHooks{Stop: closedAfter(200 * time.Millisecond)}
 	start := time.Now()
 	r = runTestCommand(t, testCommand("echo started; sleep 30"), user, "/", hooks)
 	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || time.Since(start) > 5*time.Second {
@@ -421,10 +427,9 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	signalGroupAsUser = func(string, int, syscall.Signal, func()) error { return syscall.EPERM }
 	t.Cleanup(func() { signalGroupAsUser = signalGroupAs })
 	var logged []string
-	stopAt := time.Now().Add(200 * time.Millisecond)
 	hooks := CommandExecHooks{
-		Stopping: func() bool { return time.Now().After(stopAt) },
-		Logf:     func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
+		Stop: closedAfter(200 * time.Millisecond),
+		Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
 	}
 	cmd = testCommand("trap '' TERM; echo started; exec -a " + marker + " sleep 33")
 	start = time.Now()
