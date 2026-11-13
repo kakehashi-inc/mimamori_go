@@ -55,7 +55,6 @@ type CentralConfig struct {
 	AgentListen             string
 	ServerNames             []string
 	Workers                 int
-	QueueTimeoutSec         int
 	TokenValidDays          int
 	TokenRenewBeforeDays    int
 	RetentionDays           int
@@ -87,7 +86,7 @@ type ConfigField struct {
 
 // restartItems lists the items that take effect when the central restarts.
 var restartItems = map[string]bool{
-	"web_listen": true, "agent_listen": true, "workers": true, "queue_timeout_sec": true, "builtin_agent": true,
+	"web_listen": true, "agent_listen": true, "workers": true, "builtin_agent": true,
 }
 
 func init() {
@@ -141,7 +140,6 @@ var ConfigFields = []ConfigField{
 			return nil
 		}},
 	cfgIntField("workers", "Worker count of the central (not used for requests or periodic work)", func(c *CentralConfig) *int { return &c.Workers }),
-	cfgIntField("queue_timeout_sec", "Longest wait of a queued request (seconds)", func(c *CentralConfig) *int { return &c.QueueTimeoutSec }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
 	cfgIntField("retention_days", "Retention of detections and of the history of rejected connections (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
@@ -230,9 +228,6 @@ func (c *CentralConfig) applyDefaults() {
 	if c.Workers <= 0 {
 		c.Workers = DefaultWorkers
 	}
-	if c.QueueTimeoutSec <= 0 {
-		c.QueueTimeoutSec = DefaultQueueTimeoutSec
-	}
 	if c.TokenValidDays <= 0 {
 		c.TokenValidDays = DefaultTokenValidDays
 	}
@@ -288,7 +283,6 @@ func (c *CentralConfig) applyDefaults() {
 // keep every time computed from the items far from overflowing.
 var configIntMax = map[string]int{
 	"workers":                    64,
-	"queue_timeout_sec":          3600,
 	"token_valid_days":           36500,
 	"token_renew_before_days":    36500,
 	"retention_days":             36500,
@@ -423,7 +417,7 @@ func (c *CentralConfig) validationProblems() []Problem {
 
 // removedConfigItems lists items that earlier versions stored and that no
 // longer exist. Their rows in an existing database are ignored.
-var removedConfigItems = map[string]bool{"smtp.to": true}
+var removedConfigItems = map[string]bool{"smtp.to": true, "queue_timeout_sec": true}
 
 // storedCentralConfig reads the stored items (without defaults) and returns
 // the configuration and the names of the stored items.
@@ -573,7 +567,7 @@ func ApplyCentralConfigChanges(tx models.Writer, set map[string]string, unset []
 // running into c, so a configuration reloaded while running keeps them.
 func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
 	c.WebListen, c.AgentListen = running.WebListen, running.AgentListen
-	c.Workers, c.QueueTimeoutSec = running.Workers, running.QueueTimeoutSec
+	c.Workers = running.Workers
 	c.BuiltinAgent = running.BuiltinAgent
 }
 

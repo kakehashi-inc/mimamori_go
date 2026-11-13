@@ -48,7 +48,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `central config set NAME [VALUE]` | 1 項目を設定する。一覧はカンマ区切り。`smtp.password` は端末または標準入力から読む |
 | `central config unset NAME` | 1 項目を既定値に戻す |
 
-`central config` での変更は、動作中のセントラルが次の定期的な確認（30 秒ごと）で反映します。設定画面での変更は保存した時点で反映されます。ただし `web_listen`、`agent_listen`、`workers`、`queue_timeout_sec`、`builtin_agent` はセントラルの再起動後に反映されます。
+`central config` での変更は、動作中のセントラルが次の定期的な確認（30 秒ごと）で反映します。設定画面での変更は保存した時点で反映されます。ただし `web_listen`、`agent_listen`、`workers`、`builtin_agent` はセントラルの再起動後に反映されます。
 
 `smtp.host` を設定していると、ブラウザでのログインには、メールで届く確認コードが要ります。確認コードのメールを送れずにログインできない場合は、`central config set smtp.*` で SMTP の設定を直すか、`central config unset smtp.host` で確認コードを求めない状態にします（どちらもセントラルの停止中でも使える）。アカウントのメールアドレスの誤りは `ctl accounts email ID ADDRESS` で、パスワードは `central reset-password --email ADDRESS` で直します。
 

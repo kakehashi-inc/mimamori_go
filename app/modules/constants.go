@@ -56,7 +56,6 @@ const (
 	DefaultNotifyDedupeHours  = 24
 	DefaultNotifyMaxLines     = 200
 	DefaultWorkers            = 1
-	DefaultQueueTimeoutSec    = 10
 	DefaultRememberDays       = 30
 	DefaultTrustDays          = 30
 	DefaultSMTPTimeoutSec     = 30
