@@ -72,9 +72,52 @@ type core struct {
 	// always the one loaded last.
 	configMu sync.Mutex
 
+	// reportLocks stores the reports of one agent one after another
+	// (see centralReport); reports of different agents run at once.
+	reportLocks agentLocks
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg
+}
+
+// agentLocks is a lock per agent ID. An entry exists only while a flow
+// holds or waits for the lock of that agent, so the map does not grow with
+// agents that are no longer reported for.
+type agentLocks struct {
+	mu    sync.Mutex
+	locks map[int64]*agentLock
+}
+
+type agentLock struct {
+	mu    sync.Mutex
+	users int // flows holding or waiting for mu; guarded by agentLocks.mu
+}
+
+// lock takes the lock of the agent and returns the function that gives it
+// back.
+func (l *agentLocks) lock(id int64) (unlock func()) {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = map[int64]*agentLock{}
+	}
+	e := l.locks[id]
+	if e == nil {
+		e = &agentLock{}
+		l.locks[id] = e
+	}
+	e.users++
+	l.mu.Unlock()
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		l.mu.Lock()
+		e.users--
+		if e.users == 0 {
+			delete(l.locks, id)
+		}
+		l.mu.Unlock()
+	}
 }
 
 // targetEntry is an agent's database in the set of the central. ready is

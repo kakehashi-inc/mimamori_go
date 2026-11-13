@@ -212,7 +212,10 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 			return models.RecordRejected(tx, remoteHost(r.RemoteAddr), reason, target, 600)
 		})
 		if err != nil {
-			c.logger.Printf("history: %v", err)
+			// The record goes to the log instead of nowhere (as
+			// logHistoryFailure does for the other history rows).
+			c.logger.Printf("history: %v (category %q, action %q, target %q, remote address %q)",
+				err, models.HistRejected, reason, target, remoteHost(r.RemoteAddr))
 		}
 		return nil, nil, errAgentAuth
 	}

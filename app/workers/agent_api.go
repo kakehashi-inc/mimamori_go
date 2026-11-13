@@ -217,7 +217,21 @@ func findSuppression(list []*models.Suppression, agentID int64, typ, user, exe, 
 // (aggregated with the open row of the same detection), host information,
 // the rule application result, and command set runs, request answers and
 // the outcome of storing definitions. Command results are never mailed.
+//
+// The reports of one agent are stored one after another: the agent's lock
+// is held for the whole run and the agent row is read again under it, so
+// every decision is taken on the row the previous report left (two
+// overlapping reports with the same application result record it once).
+// Handlers and the built-in agent call this in any number at the same
+// moment; reports of different agents run at once. Recognising a report
+// that was already stored belongs inside this lock too.
 func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) error {
+	unlock := c.reportLocks.lock(agent.ID)
+	defer unlock()
+	agent, err := models.GetAgent(c.db.Read(), agent.ID)
+	if err != nil {
+		return err
+	}
 	tdb, err := c.targetDB(agent)
 	if err != nil {
 		return err
@@ -275,9 +289,8 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
 	}
 	// The central part of the report is one transaction that reads the
-	// agent row again and decides from it: two reports of one agent take
-	// their turns, so a changed application result is recorded once, and
-	// each history row is written together with the row or not at all.
+	// agent row again and decides from it, so each history row is written
+	// together with the row or not at all.
 	return c.db.Write(func(tx models.Writer) error {
 		cur, err := models.GetAgent(tx, agent.ID)
 		if err != nil {
