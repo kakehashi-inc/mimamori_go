@@ -20,8 +20,9 @@ func init() {
 }
 
 // startCentral runs the central until SIGINT or SIGTERM. The central flow
-// accepts and processes requests and periodic tasks (within the worker
-// limit); the built-in agent runs on a second flow.
+// accepts and processes requests (within the worker limit); each periodic
+// step runs on a flow of its own (startPeriodic) and the built-in agent on
+// another one.
 func startCentral() error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	dataDir := modules.DataDir()
@@ -112,14 +113,11 @@ func startCentral() error {
 			return false
 		}
 	}
-	nextTick := time.Now().Add(modules.PeriodicTick)
-	tick := func() func() {
-		if time.Now().Before(nextTick) {
-			return nil
-		}
-		nextTick = time.Now().Add(modules.PeriodicTick)
-		return c.periodicTasks
-	}
+	// The periodic work runs on its own flows, not as a job of the
+	// connection server.
+	noTask := func() func() { return nil }
+	stopPeriodic := make(chan struct{})
+	waitPeriodic := c.startPeriodic(c.periodicSteps(), stopPeriodic)
 	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, workers %d",
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen, cfg.Workers)
 	// Nothing about the built-in agent is logged while it is disabled.
@@ -128,13 +126,15 @@ func startCentral() error {
 	if builtinEnabled && !builtinRunning {
 		logger.Printf("built-in agent is not running: %s", msg.Text())
 	}
-	srv.run(stopping, tick)
+	srv.run(stopping, noTask)
 	if builtinRunning {
 		logger.Printf("shutting down; waiting for the built-in agent to finish its cycle")
 	} else {
 		logger.Printf("shutting down")
 	}
+	close(stopPeriodic)
 	close(stopBuiltin)
+	waitPeriodic()
 	waitBuiltin()
 	logger.Printf("stopped")
 	return nil

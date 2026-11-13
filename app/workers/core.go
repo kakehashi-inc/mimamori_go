@@ -60,6 +60,17 @@ type core struct {
 	webAdminRoutes, webViewerRoutes *http.ServeMux
 	agentRoutes, adminRoutes        *http.ServeMux
 
+	// sentButUnmarked holds the notification mails that were sent but
+	// could not be marked as sent (ID to the time sent), so that the mail
+	// step retries only the marking; guarded by notifyMu.
+	notifyMu        sync.Mutex
+	sentButUnmarked map[int64]int64
+
+	// configMu serialises reloadConfig (the configuration step and the
+	// handler of PUT /config), so that the configuration in memory is
+	// always the one loaded last.
+	configMu sync.Mutex
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg
@@ -86,8 +97,12 @@ func (c *core) conf() *modules.CentralConfig { return c.cfg.Load() }
 
 // reloadConfig reads the stored configuration again so changes made on the
 // settings screen or with "central config" take effect without a restart
-// (except the items that apply only at start).
+// (except the items that apply only at start). Loading and storing are one
+// step under configMu, so a reload that read older rows never overwrites a
+// newer one.
 func (c *core) reloadConfig() {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
 	cfg, err := modules.LoadCentralConfig(c.db.Read())
 	if err != nil {
 		c.logger.Printf("configuration not reloaded: %v", err)
@@ -325,11 +340,18 @@ func historyParts(parts []modules.Msg) modules.Msg {
 
 // historyMsg records an operation whose target is a coded message too.
 func (c *core) historyMsg(p *principal, category, action string, target, detail modules.Msg) {
-	if err := c.db.Write(func(tx models.Writer) error {
-		return models.InsertHistory(tx, c.historyRow(p, category, action, target, detail))
-	}); err != nil {
-		c.logger.Printf("history: %v", err)
+	row := c.historyRow(p, category, action, target, detail)
+	if err := c.db.Write(func(tx models.Writer) error { return models.InsertHistory(tx, row) }); err != nil {
+		c.logHistoryFailure(row, err)
 	}
+}
+
+// logHistoryFailure logs a history row that could not be written with the
+// whole record, so that the record is in the central's log instead of
+// nowhere.
+func (c *core) logHistoryFailure(row *models.HistoryItem, err error) {
+	c.logger.Printf("history: %v (operator %q, category %q, action %q, target %q, detail %q)",
+		err, row.AccountName, row.Category, row.Action, row.Target, row.Detail)
 }
 
 // historyRow builds the history row of an operation without writing it: a

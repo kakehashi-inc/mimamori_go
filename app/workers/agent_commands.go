@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"mimamori/app/models"
@@ -350,25 +352,32 @@ func (c *core) expireCommandRequests(now time.Time) {
 // commandRetention removes, inside a transaction of a target database, the
 // runs older than cut (also the last run of a set), the finished runs of
 // every set beyond its keep count, and the ended run requests older than
-// cut. It returns the number of runs removed; on an error it stops and
-// returns what it removed so far with the error.
+// cut. It returns the number of runs removed and every part that failed
+// (each named); a failed part does not stop the others.
 func commandRetention(tx models.Writer, cut int64) (int64, error) {
+	var errs []string
 	removed, err := models.DeleteCommandRunsBefore(tx, cut)
 	if err != nil {
-		return 0, err
+		errs = append(errs, "runs older than the retention period: "+err.Error())
 	}
 	sets, err := models.ListCommandSets(tx)
 	if err != nil {
-		return removed, nil
+		errs = append(errs, "list of command sets: "+err.Error())
 	}
 	for _, s := range sets {
 		n, err := models.DeleteCommandRunsBeyondKeep(tx, s.ID, s.KeepRuns)
 		if err != nil {
-			return removed, err
+			errs = append(errs, "runs of set "+strconv.FormatInt(s.ID, 10)+" beyond its keep count: "+err.Error())
+			continue
 		}
 		removed += n
 	}
-	_, _ = models.DeleteEndedCommandRequestsBefore(tx, cut)
+	if _, err := models.DeleteEndedCommandRequestsBefore(tx, cut); err != nil {
+		errs = append(errs, "ended run requests: "+err.Error())
+	}
+	if len(errs) > 0 {
+		return removed, errors.New(strings.Join(errs, "; "))
+	}
 	return removed, nil
 }
 
