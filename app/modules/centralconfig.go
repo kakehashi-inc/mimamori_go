@@ -178,7 +178,7 @@ var ConfigFields = []ConfigField{
 		get: func(c *CentralConfig) string { return c.SMTP.Password },
 		set: func(c *CentralConfig, v string) error { c.SMTP.Password = v; return nil }},
 	cfgStringField("smtp.from", "Sender address", func(c *CentralConfig) *string { return &c.SMTP.From }),
-	cfgIntField("smtp.timeout_sec", "SMTP timeout (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
+	cfgIntField("smtp.timeout_sec", "Longest silence of the SMTP server that is waited for (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
 	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: localhost)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
 }
 

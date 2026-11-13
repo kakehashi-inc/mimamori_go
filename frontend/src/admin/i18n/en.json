@@ -334,7 +334,7 @@
             },
             "smtp_timeout_sec": {
                 "label": "Timeout (seconds)",
-                "hint": "Timeout of the SMTP connection."
+                "hint": "Sending is given up when the mail server stays silent for this long. There is no limit on the whole mail."
             },
             "smtp_helo_name": {
                 "label": "HELO name",

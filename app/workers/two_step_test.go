@@ -339,15 +339,17 @@ func TestTwoStepLoginMailFailure(t *testing.T) {
 	}
 }
 
-func TestCodeMailTimeLimit(t *testing.T) {
+// TestCodeMailSilenceUnchanged: the configured smtp.timeout_sec reaches the
+// mail function unchanged, also above the former cap of 45 s.
+func TestCodeMailSilenceUnchanged(t *testing.T) {
 	e := newTestEnv(t)
 	mb := useMailbox(e)
 	setConfig(e, func(c *modules.CentralConfig) { c.SMTP.TimeoutSec = 300 })
 	challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", "", false))
 	setConfig(e, func(c *modules.CentralConfig) { c.SMTP.TimeoutSec = 10 })
 	challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", "", false))
-	if mb.sent[0].cfg.TimeoutSec != int(modules.AuthCodeMailTimeoutCap/time.Second) || mb.sent[1].cfg.TimeoutSec != 10 {
-		t.Fatalf("time limits: %d %d", mb.sent[0].cfg.TimeoutSec, mb.sent[1].cfg.TimeoutSec)
+	if mb.sent[0].cfg.TimeoutSec != 300 || mb.sent[1].cfg.TimeoutSec != 10 {
+		t.Fatalf("silence: %d %d", mb.sent[0].cfg.TimeoutSec, mb.sent[1].cfg.TimeoutSec)
 	}
 }
 

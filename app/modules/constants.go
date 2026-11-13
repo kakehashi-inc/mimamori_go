@@ -176,10 +176,6 @@ const (
 	// code (login, e-mail address change or re-authentication).
 	AuthCodeLifetime    = 10 * time.Minute
 	AuthCodeMaxAttempts = 5
-	// AuthCodeMailTimeoutCap bounds the sending of a code mail inside a
-	// request (smtp.timeout_sec applies when shorter), so that the response
-	// is written within ConnTotalTimeout.
-	AuthCodeMailTimeoutCap = 45 * time.Second
 	// MaxTrustDays is the largest two_step_trust_days.
 	MaxTrustDays = 365
 	// MinPasswordLength is the minimum length of account passwords.

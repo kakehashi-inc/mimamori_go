@@ -2,6 +2,7 @@ package modules
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"mime"
@@ -12,9 +13,16 @@ import (
 	"time"
 )
 
+// mailRootCAs verifies the mail server's certificate; nil means the
+// system's roots. Only tests set it.
+var mailRootCAs *x509.CertPool
+
 // SendMailTo delivers one plain-text message to the given recipients
-// synchronously in the calling flow. The whole exchange is bounded by
-// cfg.TimeoutSec through a deadline on the connection.
+// synchronously in the calling flow. cfg.TimeoutSec is the longest silence
+// of the mail server that is waited for: connecting (name resolution
+// included), each answer of the server, and the sending of the message, which
+// is cut only when the server took no byte for that long (IdleConn). There is
+// no limit on the whole mail.
 func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
 	if !cfg.CanSend() {
 		return fmt.Errorf("SMTP is not configured (smtp.host and smtp.from are required)")
@@ -22,33 +30,23 @@ func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
 	if len(to) == 0 {
 		return fmt.Errorf("no recipient")
 	}
-	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+	silence := time.Duration(cfg.TimeoutSec) * time.Second
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	deadline := time.Now().Add(timeout)
-	d := net.Dialer{Deadline: deadline, FallbackDelay: -1}
-	var conn net.Conn
-	var err error
-	tlsCfg := &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}
+	raw, err := DialIdle(addr, silence)
+	if err != nil {
+		return err
+	}
+	var conn net.Conn = raw
+	tlsCfg := &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: mailRootCAs}
 	if cfg.Security == "tls" {
-		raw, derr := d.Dial("tcp", addr)
-		if derr != nil {
-			return derr
-		}
-		_ = raw.SetDeadline(deadline)
 		tc := tls.Client(raw, tlsCfg)
 		if err := tc.Handshake(); err != nil {
-			raw.Close()
+			_ = raw.Close()
 			return err
 		}
 		conn = tc
-	} else {
-		conn, err = d.Dial("tcp", addr)
-		if err != nil {
-			return err
-		}
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(deadline)
 	c, err := smtp.NewClient(conn, cfg.Host)
 	if err != nil {
 		return err

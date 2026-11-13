@@ -40,20 +40,15 @@ func (c *core) codeMatches(a *models.AuthCode, code string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(a.CodeHash)) == 1
 }
 
-// sendCodeMail mails a verification code synchronously within the request.
-// The time limit is smtp.timeout_sec, at most AuthCodeMailTimeoutCap, so
-// that the response is still written in time.
+// sendCodeMail mails a verification code synchronously within the request,
+// with the configuration's SMTP values unchanged: smtp.timeout_sec is the
+// longest silence of the mail server, and the whole mail has no limit.
 func (c *core) sendCodeMail(r *http.Request, to, code, purpose string) error {
 	cfg := c.conf()
-	smtp := cfg.SMTP
-	limit := int(modules.AuthCodeMailTimeoutCap / time.Second)
-	if smtp.TimeoutSec <= 0 || smtp.TimeoutSec > limit {
-		smtp.TimeoutSec = limit
-	}
 	subject := strings.TrimSpace(cfg.Notify.SubjectPrefix + " Verification code")
 	body := fmt.Sprintf("Your verification code: %s\n\nPurpose: %s\nThe code is valid for %d minutes.\nRequested from: %s\nTime: %s\n\nIf you did not request this code, ignore this mail and tell your administrator.\n",
 		code, purpose, int(modules.AuthCodeLifetime/time.Minute), remoteHost(r.RemoteAddr), time.Now().UTC().Format("2006-01-02 15:04:05")+" UTC")
-	return c.sendMail(smtp, []string{to}, subject, body)
+	return c.sendMail(cfg.SMTP, []string{to}, subject, body)
 }
 
 // newAuthCode builds a code row with a fresh code; the caller sets the
