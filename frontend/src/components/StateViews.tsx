@@ -99,7 +99,7 @@ export function ErrorAlert({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 /**
  * Whole-page error for a session check that failed for another reason than
- * "not signed in" (busy server, network failure), with a retry button.
+ * "not signed in" (an error of the server, network failure), with a retry button.
  */
 export function SessionCheckError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
     return (

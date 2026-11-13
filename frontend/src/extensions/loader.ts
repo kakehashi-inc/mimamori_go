@@ -36,7 +36,7 @@ async function load(role: Role): Promise<void> {
 /**
  * Loads the extension modules of the signed-in account once per page load.
  * A module that fails to load is logged and the application runs without it.
- * When the list of modules cannot be fetched (a busy server, a network
+ * When the list of modules cannot be fetched (an error of the server, a network
  * failure), the error is thrown and the next call asks again, so that the
  * caller can retry instead of running without the modules.
  */

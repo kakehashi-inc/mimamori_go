@@ -47,7 +47,6 @@
         "network": "Cannot reach the server. Check the network connection.",
         "forbidden": "You do not have permission for this operation.",
         "notFound": "The item was not found.",
-        "busy": "The server is busy. Please try again later.",
         "generic": "An error occurred (HTTP {{status}})."
     },
     "time": {
@@ -657,10 +656,8 @@
         },
         "common": {
             "body_refused": "request body not read: a body this large needs an authenticated request",
-            "busy": "busy",
             "command_not_in_path": "command {{name}} not found in PATH",
             "db_other_build": "database {{path}} was created by another build of the program and its tables do not match this build: the data directory has to be created again (move it away and set the program up anew)",
-            "header_too_large": "request header too large",
             "internal_error": "internal error",
             "invalid_body": "invalid request body: {{detail}}",
             "invalid_body_trailing": "invalid request body: unexpected data after the JSON value",

@@ -114,59 +114,27 @@ const (
 // --- Server ---
 
 const (
-	// The connection server (app/workers/connserver.go) reads requests and
-	// writes responses in its accepting flow without waiting; a worker only
-	// runs the handler on a request that is complete in memory.
+	// The central serves every request at once with net/http.Server
+	// (app/workers/http_server.go); the only time that cuts a connection is
+	// the peer's silence (IdleTimeout, app/modules/idleconn.go). The values
+	// below are sizes, not times.
 	//
-	// ConnTotalTimeout bounds one whole request, counted from the end of the
-	// request head: a body larger than MaxHeadBytes must arrive and the
-	// response must be written within it. (The head, and a body up to
-	// MaxHeadBytes, must arrive within the queue timeout.)
-	ConnTotalTimeout = 60 * time.Second
-	// TLSHandshakeTimeout bounds a TLS handshake, counted from its start.
-	// A handshake starts when the client's first record (the ClientHello)
-	// is complete and it is the connection's turn (one at a time), so only
-	// the client's next flight is waited for: one round trip and its key
-	// exchange. While it waits, the accepting flow does all its other work.
-	TLSHandshakeTimeout = 2 * time.Second
-	// HandshakeGrace is how long a handshake may wait for its client while
-	// another ClientHello waits for its turn (counted from the start of the
-	// handshake): one round trip and the key exchange of an honest client,
-	// even across continents. It then gives way, and its source counts as
-	// stalled.
-	HandshakeGrace = 400 * time.Millisecond
-	// HandshakePenalty is how long the TLS listener takes the connections of
-	// a source whose handshake gave up after those of other sources. A
-	// source whose handshake ran into TLSHandshakeTimeout is also refused
-	// for that time, unless it is this host (loopback or one of its
-	// addresses).
-	HandshakePenalty = 60 * time.Second
-	// EvictGrace is how long a connection must wait on its peer before a
-	// full table (MaxPendingConns) drops it for a new one; until then new
-	// connections wait in the kernel's backlog.
-	EvictGrace = time.Second
-	// DrainTimeout and DrainMaxBytes bound how long and how much the central
-	// reads and discards after answering a request it did not read
-	// completely (an early error or a body it refused), so that the client
-	// gets the answer instead of a reset. DrainTimeout also bounds writing
-	// such an answer.
-	DrainTimeout  = 5 * time.Second
-	DrainMaxBytes = 2 * MaxRequestBody
-	// MaxHeadBytes bounds a request head (larger: 431). Every connection may
-	// always buffer this much; bodies beyond it are read only while all
-	// connections together buffer less than MaxBufferedBytes.
-	MaxHeadBytes     = 64 << 10
+	// MaxHeadBytes bounds a request head (larger: 431 from the library). It
+	// is also the largest body that is read without an authenticated
+	// request and without a reservation from MaxBufferedBytes.
+	MaxHeadBytes = 64 << 10
+	// MaxBufferedBytes bounds the memory held by bodies larger than
+	// MaxHeadBytes, in arrival and in work: such a body reserves its whole
+	// length before it is read and waits while the bound is reached; nothing
+	// is refused.
 	MaxBufferedBytes = 128 << 20
 	// MaxRequestBody limits a request body (agent reports are the largest).
 	MaxRequestBody = 32 << 20
-	// LoopWakeInterval is the longest the accepting flow waits for socket
-	// readiness before it looks at the stop signal and the periodic tasks.
-	LoopWakeInterval = 250 * time.Millisecond
-	// StopFlushTimeout bounds how long a stopping central finishes the
-	// requests in work and writes their responses.
-	StopFlushTimeout = 5 * time.Second
-	// MaxPendingConns bounds the open connections of the central.
-	MaxPendingConns = 256
+	// DrainMaxBytes is the most that is read and dropped of a request the
+	// central answered without reading its body, so that a client that sends
+	// its whole request before it reads gets the answer instead of a reset.
+	// Reading it is bounded by the peer's silence only.
+	DrainMaxBytes = 2 * MaxRequestBody
 	// MaxOpenConns bounds the open connections of both listeners together
 	// (lowered when the limit on open files is below 4 x MaxOpenConns): about
 	// 1200 browser connections of 200 people, one per agent for several

@@ -14,8 +14,8 @@ import { applyLangSetting } from '../i18n/i18n';
 import type { Me } from '../types';
 
 /**
- * 'error': the session check failed for another reason than 401 (busy server,
- * network failure) even after the retries, so whether a session exists is unknown.
+ * 'error': the session check failed for another reason than 401 (an error of
+ * the server, network failure) even after the retries, so whether a session exists is unknown.
  */
 type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'error';
 
@@ -77,8 +77,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => setUnauthorizedHandler(null);
     }, []);
 
-    // Only a 401 means "not signed in". Any other failure (a busy server, a
-    // network failure) is retried a few times and then shown as an error with
+    // Only a 401 means "not signed in". Any other failure (an error of the
+    // server, a network failure) is retried a few times and then shown as an error with
     // a retry action, so that a signed-in person is not sent to the login screen.
     useEffect(() => {
         let active = true;

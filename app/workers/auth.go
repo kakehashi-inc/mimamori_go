@@ -318,15 +318,15 @@ func tokenProblem(t *models.Token, h, instance string, now int64) (reason string
 
 // --- large bodies ---
 
-// The connection server asks these, in its accepting flow, before it reads
-// a body larger than modules.MaxHeadBytes (see listenerSpec.admit). They
+// The request gate asks these, on the connection's own flow, before it reads
+// a body larger than modules.MaxHeadBytes (see requestGate.admit). They
 // answer whether the request is authenticated for its route, with the same
 // checks as the handlers, but only read: no token use is recorded, no
 // instance bound, no session extended or deleted, nothing written to the
 // history. A request they refuse goes to the handler without its body, and
 // the handler answers it as usual (with those effects, once). They read the
 // route tables (fixed once the handlers are built), the CLI secret (fixed at
-// start) and the database (safe next to the workers).
+// start) and the database (safe next to any number of handlers).
 
 // admitWebBody is the check of the browser listener: an API route of the
 // session's account with the CSRF header. Routes without a session (login)

@@ -57,9 +57,8 @@ export function errorMessage(t: TFunction, e: unknown): string {
     if (e instanceof ApiError) {
         if (e.status === 0) return t('errors.network');
         const code = e.i18n?.code;
-        // A busy server and an internal error have their own texts here (the answers carry only "busy"
-        // and "internal error"); a 503 or 500 without a message is one of them too.
-        if (code === 'common.busy' || (code === undefined && e.status === 503)) return t('errors.busy');
+        // An internal error has its own text here (the answer carries only "internal error"); a 500
+        // without a message is one too.
         if (code === 'common.internal_error' || (code === undefined && e.status === 500)) {
             return t('errors.generic', { status: e.status });
         }

@@ -361,8 +361,8 @@ func newTestServerCert(t *testing.T, serial int64) *tls.Certificate {
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
 }
 
-// Many requests at once are all served at once: no worker limit, no
-// "busy".
+// Many requests at once are all served at once: no worker limit, no 503
+// for load.
 func TestServeManyAtOnce(t *testing.T) {
 	s := startServe(t, serveOpts{})
 	run := func(n int, path string, limit time.Duration) {

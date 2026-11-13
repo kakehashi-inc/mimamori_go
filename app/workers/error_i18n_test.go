@@ -1,13 +1,13 @@
 package workers
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -158,7 +158,7 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 	}
 	checkErrorBody(t, "core internalError", rec.Body.Bytes(), "common.internal_error")
 
-	// core.go: the refusal of the connection server to read a large body
+	// core.go: the refusal of the request gate to read a large body
 	m := invalidBody(errBodyRefused)
 	if m.Text() != "invalid request body: "+errBodyRefused.Error() {
 		t.Errorf("refused body: %q", m.Text())
@@ -168,27 +168,33 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 	}
 }
 
-// The answers the connection server writes itself carry the message too.
-func TestConnServerFixedAnswersCarryMessage(t *testing.T) {
+// The two answers the request gate writes itself carry the message too: 411
+// for a body without Content-Length and 500 for a handler that panicked.
+func TestGateOwnAnswersCarryMessage(t *testing.T) {
+	g := &requestGate{
+		next:   http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("test") }),
+		budget: newBodyBudget(modules.MaxBufferedBytes),
+		logger: log.New(io.Discard, "", 0),
+	}
 	for _, c := range []struct {
 		name   string
-		resp   []byte
+		req    *http.Request
 		status int
 		code   string
 	}{
-		{"busy", busyResponse, http.StatusServiceUnavailable, "common.busy"},
-		{"head too large", headTooLargeResponse, http.StatusRequestHeaderFieldsTooLarge, "common.header_too_large"},
-		{"length required", lengthRequiredResponse, http.StatusLengthRequired, "common.length_required"},
+		{"length required", func() *http.Request {
+			r := httptest.NewRequest("POST", "/api/v1/x", strings.NewReader("{}"))
+			r.ContentLength = -1
+			return r
+		}(), http.StatusLengthRequired, "common.length_required"},
+		{"panic", httptest.NewRequest("GET", "/api/v1/x", nil), http.StatusInternalServerError, "common.internal_error"},
 	} {
-		resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(c.resp)), nil)
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		body, err := io.ReadAll(resp.Body)
-		if err != nil || resp.StatusCode != c.status || int64(len(body)) != resp.ContentLength {
-			t.Fatalf("%s: %d %q (length %d) %v", c.name, resp.StatusCode, body, resp.ContentLength, err)
+		rec := httptest.NewRecorder()
+		g.ServeHTTP(rec, c.req)
+		body := rec.Body.Bytes()
+		if rec.Code != c.status || rec.Header().Get("Content-Length") != strconv.Itoa(len(body)) || rec.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("%s: %d %q %v", c.name, rec.Code, body, rec.Header())
 		}
 		checkErrorBody(t, c.name, body, c.code)
 	}
-	checkErrorBody(t, "panic", internalErrorBody, "common.internal_error")
 }

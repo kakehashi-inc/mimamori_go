@@ -254,7 +254,7 @@
             },
             "workers": {
                 "label": "Workers",
-                "hint": "Requests processed at the same time (up to 64)."
+                "hint": "Worker count of the central (up to 64). Requests and the periodic work never wait for it."
             },
             "queue_timeout_sec": {
                 "label": "Queue timeout (seconds)",

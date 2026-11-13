@@ -140,7 +140,7 @@ var ConfigFields = []ConfigField{
 			}
 			return nil
 		}},
-	cfgIntField("workers", "Requests processed at the same time", func(c *CentralConfig) *int { return &c.Workers }),
+	cfgIntField("workers", "Worker count of the central (not used for requests or periodic work)", func(c *CentralConfig) *int { return &c.Workers }),
 	cfgIntField("queue_timeout_sec", "Longest wait of a queued request (seconds)", func(c *CentralConfig) *int { return &c.QueueTimeoutSec }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),

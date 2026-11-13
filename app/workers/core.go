@@ -22,9 +22,10 @@ import (
 	"mimamori/app/modules"
 )
 
-// core holds the central's shared state. Request handlers may run on several
-// worker flows and the built-in agent on its own flow, so everything shared
-// is either in the databases or guarded here.
+// core holds the central's shared state. Request handlers run in any number
+// at the same moment (one flow per connection), next to the periodic steps
+// and the built-in agent, so everything shared is either in the databases or
+// guarded here.
 type core struct {
 	db *modules.DB // central.db
 	// cfg is the configuration in effect; it is replaced when the stored

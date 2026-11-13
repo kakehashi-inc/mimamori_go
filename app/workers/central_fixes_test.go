@@ -1,12 +1,9 @@
 package workers
 
 import (
-	"bufio"
-	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -54,17 +51,6 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 	tdb, _ := e.c.targetDB(b)
 	if pending, _ := models.ListPendingNotify(tdb.Read()); len(pending) != 1 {
 		t.Fatalf("the new detection must wait for the next mail: %d pending", len(pending))
-	}
-}
-
-func TestBusyResponseLength(t *testing.T) {
-	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(busyResponse)), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil || resp.StatusCode != http.StatusServiceUnavailable || string(body) != `{"error":"busy","error_i18n":{"code":"common.busy"}}` {
-		t.Fatalf("503 response: %d %q %v", resp.StatusCode, body, err)
 	}
 }
 

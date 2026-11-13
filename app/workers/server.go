@@ -1,14 +1,16 @@
 package workers
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
-	"time"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
@@ -19,10 +21,12 @@ func init() {
 	modules.StartCentral = startCentral
 }
 
-// startCentral runs the central until SIGINT or SIGTERM. The central flow
-// accepts and processes requests (within the worker limit); each periodic
-// step runs on a flow of its own (startPeriodic) and the built-in agent on
-// another one.
+// startCentral runs the central until SIGINT or SIGTERM. Its flows: one
+// accepting flow per listener (net/http.Server.Serve), one flow per open
+// connection that reads its requests, runs their handlers and writes the
+// answers (no request waits for a worker), one flow per periodic step
+// (startPeriodic), the built-in agent's own flows, and this main flow,
+// which starts everything, waits for the stop signal and stops everything.
 func startCentral() error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	dataDir := modules.DataDir()
@@ -93,11 +97,17 @@ func startCentral() error {
 		webLn.Close()
 		return modules.NewExitErrorf(modules.ExitConfig, "agent listener %s: %v", cfg.AgentListen, err)
 	}
-	specs := []*listenerSpec{
-		{name: "web", ln: webLn, handler: c.webHandler(), admit: c.admitWebBody},
-		{name: "agent", ln: agentLn, tls: c.tlsConfig(), handler: c.agentHandler(), admit: c.admitAgentBody},
-	}
-	srv := newConnServer(specs, cfg.Workers, time.Duration(cfg.QueueTimeoutSec)*time.Second, logger)
+	// Both servers serve every request at once, each connection on a flow
+	// of its own; a connection is cut only after modules.IdleTimeout of
+	// silence. One bound on open connections and one budget for large
+	// bodies hold for both listeners.
+	limit := newProcessConnLimit(logger)
+	budget := newBodyBudget(modules.MaxBufferedBytes)
+	web := newHTTPServer(c.webHandler(), c.admitWebBody, nil, budget, logger)
+	agent := newHTTPServer(c.agentHandler(), c.admitAgentBody, c.tlsConfig(), budget, logger)
+	serveErr := make(chan error, 2)
+	go func() { serveErr <- web.Serve(limit.listener(webLn, modules.IdleTimeout)) }()
+	go func() { serveErr <- agent.ServeTLS(limit.listener(agentLn, modules.IdleTimeout), "", "") }()
 
 	stopBuiltin := make(chan struct{})
 	waitBuiltin := c.startBuiltinAgent(builtin, stopBuiltin)
@@ -105,17 +115,6 @@ func startCentral() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
-	stopping := func() bool {
-		select {
-		case <-sigCh:
-			return true
-		default:
-			return false
-		}
-	}
-	// The periodic work runs on its own flows, not as a job of the
-	// connection server.
-	noTask := func() func() { return nil }
 	stopPeriodic := make(chan struct{})
 	waitPeriodic := c.startPeriodic(c.periodicSteps(), stopPeriodic)
 	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, workers %d",
@@ -126,16 +125,44 @@ func startCentral() error {
 	if builtinEnabled && !builtinRunning {
 		logger.Printf("built-in agent is not running: %s", msg.Text())
 	}
-	srv.run(stopping, noTask)
+	// Run until a signal, or until a listener fails for good (the library
+	// retries temporary accept errors itself).
+	var failed error
+	select {
+	case <-sigCh:
+	case err := <-serveErr:
+		failed = err
+		logger.Printf("listener failed: %v", err)
+	}
 	if builtinRunning {
 		logger.Printf("shutting down; waiting for the built-in agent to finish its cycle")
 	} else {
 		logger.Printf("shutting down")
 	}
+	// Everything is told to stop at the same moment and waited for without
+	// a time limit: the servers stop accepting, close the connections that
+	// have no request in work and let the requests in work finish and be
+	// answered (each bounded only by its peer's idle time); the periodic
+	// step in work and the built-in agent's cycle finish. A further signal
+	// changes nothing (the signal channel stays registered).
+	var stopped sync.WaitGroup
+	for _, srv := range []*http.Server{web, agent} {
+		stopped.Add(1)
+		go func() {
+			defer stopped.Done()
+			if err := srv.Shutdown(context.Background()); err != nil {
+				logger.Printf("stopping a server: %v", err)
+			}
+		}()
+	}
 	close(stopPeriodic)
 	close(stopBuiltin)
+	stopped.Wait()
 	waitPeriodic()
 	waitBuiltin()
 	logger.Printf("stopped")
+	if failed != nil {
+		return modules.NewExitErrorf(modules.ExitGeneral, "listener failed: %v", failed)
+	}
 	return nil
 }

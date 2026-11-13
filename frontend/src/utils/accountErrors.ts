@@ -20,7 +20,7 @@ function errorCode(e: ApiError): string {
     return e.i18n?.code ?? '';
 }
 
-/** The server could not mail a verification code (503; a busy server also answers 503). */
+/** The server could not mail a verification code (503 with this code). */
 export function isCodeMailFailed(e: unknown): boolean {
     return e instanceof ApiError && e.status === 503 && errorCode(e) === 'auth.code_mail_failed';
 }
