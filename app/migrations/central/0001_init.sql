@@ -173,6 +173,31 @@ CREATE TABLE agents (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+CREATE TABLE command_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id     INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    set_id       INTEGER NOT NULL,
+    state        TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'pending', 'delivered', 'running', 'done', 'expired', 'discarded')),
+    requested_at INTEGER NOT NULL,
+    requested_by TEXT    NOT NULL DEFAULT '',
+    expires_at   INTEGER NOT NULL,
+    delivered_at INTEGER NOT NULL DEFAULT 0,
+    done_at      INTEGER NOT NULL DEFAULT 0,
+    run_uid      TEXT    NOT NULL DEFAULT '',
+    discarded_at INTEGER NOT NULL DEFAULT 0,
+    discarded_by TEXT    NOT NULL DEFAULT ''
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE UNIQUE INDEX idx_command_requests_unanswered ON command_requests(agent_id, set_id) WHERE state IN ('queued', 'pending', 'delivered');
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE INDEX idx_command_requests_state ON command_requests(state, id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 CREATE TABLE suppressions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id   INTEGER REFERENCES agents(id) ON DELETE CASCADE,
@@ -258,6 +283,9 @@ DROP TABLE history;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE suppressions;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE command_requests;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE agents;

@@ -110,6 +110,10 @@ func (c *core) retention(now time.Time) {
 		{"expired sessions", func(tx models.Writer) error { return models.DeleteExpiredSessions(tx, now.Unix()) }},
 		{"expired codes", func(tx models.Writer) error { return models.DeleteExpiredAuthCodes(tx, now.Unix()) }},
 		{"expired browser verifications", func(tx models.Writer) error { return models.DeleteExpiredBrowserVerifications(tx, now.Unix()) }},
+		{"ended run requests", func(tx models.Writer) error {
+			_, err := models.DeleteEndedCommandRequestsBefore(tx, cut)
+			return err
+		}},
 		{"sent notifications", func(tx models.Writer) error {
 			return models.DeleteSentNotificationsBefore(tx, now.Add(-30*24*time.Hour).Unix())
 		}},

@@ -167,30 +167,7 @@ CREATE TABLE command_results (
 );
 -- +goose StatementEnd
 
--- +goose StatementBegin
-CREATE TABLE command_requests (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    set_id       INTEGER NOT NULL REFERENCES command_sets(id) ON DELETE CASCADE,
-    state        TEXT    NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'delivered', 'done', 'expired', 'discarded')),
-    requested_at INTEGER NOT NULL,
-    requested_by TEXT    NOT NULL DEFAULT '',
-    expires_at   INTEGER NOT NULL,
-    delivered_at INTEGER NOT NULL DEFAULT 0,
-    done_at      INTEGER NOT NULL DEFAULT 0,
-    run_uid      TEXT    NOT NULL DEFAULT '',
-    discarded_at INTEGER NOT NULL DEFAULT 0,
-    discarded_by TEXT    NOT NULL DEFAULT ''
-);
--- +goose StatementEnd
-
--- +goose StatementBegin
-CREATE UNIQUE INDEX idx_command_requests_active ON command_requests(set_id) WHERE state IN ('pending', 'delivered');
--- +goose StatementEnd
-
 -- +goose Down
--- +goose StatementBegin
-DROP TABLE command_requests;
--- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE command_results;
 -- +goose StatementEnd

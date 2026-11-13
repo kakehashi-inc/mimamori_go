@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,11 +17,11 @@ import (
 // request answers and the outcome of storing definitions come back with
 // reports. Nothing about command results is mailed.
 
-// commandSync adds the command set definitions (only when the agent's
-// signature differs) and the waiting run requests to a sync response, and
-// keeps the signature the agent reported. It runs for the built-in agent
-// too.
-func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *modules.SyncResponse, now int64) error {
+// commandSync adds the command set definitions to a sync response (only
+// when the agent's signature differs) and keeps the signature the agent
+// reported. It runs for the built-in agent too. The run requests are handed
+// over by centralSync.
+func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *modules.SyncResponse) error {
 	if req.CommandSig != agent.CommandSig {
 		if err := c.db.Write(func(tx models.Writer) error { return models.RecordAgentCommandSig(tx, agent.ID, req.CommandSig) }); err != nil {
 			return err
@@ -44,55 +43,7 @@ func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *
 		}
 		resp.CommandSets = defs
 	}
-	reqs, err := models.ListActiveCommandRequests(tdb.Read())
-	if err != nil {
-		return err
-	}
-	if slices.ContainsFunc(reqs, func(r *models.CommandRequest) bool { return deliverable(r, now) }) {
-		// Something is to be marked delivered: the list is read again in
-		// the transaction that marks it, so a request discarded or expired
-		// meanwhile is not delivered.
-		err = tdb.Write(func(tx models.Writer) error {
-			list, err := models.ListActiveCommandRequests(tx)
-			if err != nil {
-				return err
-			}
-			reqs = reqs[:0]
-			for _, r := range list {
-				if r.State == models.RequestPending {
-					if !deliverable(r, now) {
-						continue
-					}
-					if err := models.MarkCommandRequestDelivered(tx, r.ID, now); err != nil {
-						return err
-					}
-				}
-				reqs = append(reqs, r)
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-	for _, r := range reqs {
-		// A pending request past its expiry is ended by the periodic task;
-		// a delivered one is delivered again until the agent answers it
-		// (the agent runs a request at most once and answers it again).
-		if r.State == models.RequestPending && !deliverable(r, now) {
-			continue
-		}
-		resp.CommandRequests = append(resp.CommandRequests, modules.CommandRunRequest{
-			ID: r.ID, SetID: r.SetID, RequestedAt: r.RequestedAt, ExpiresAt: r.ExpiresAt,
-		})
-	}
 	return nil
-}
-
-// deliverable reports whether a run request is waiting to be delivered and
-// not past its expiry.
-func deliverable(r *models.CommandRequest, now int64) bool {
-	return r.State == models.RequestPending && r.ExpiresAt > now
 }
 
 // validResultKind reports whether k is one of the three result kinds.
@@ -137,11 +88,6 @@ func storeCommandRuns(tx models.Writer, runs []modules.CommandRunReport, now int
 		run, _, err := models.EnsureCommandRun(tx, row, now)
 		if err != nil {
 			return nil, err
-		}
-		if run.RequestID > 0 {
-			if err := models.MarkCommandRequestDone(tx, run.RequestID, run.RunUID, now); err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, err
-			}
 		}
 		for j := range rep.Results {
 			res := &rep.Results[j]
@@ -201,30 +147,45 @@ type endedRequest struct {
 	why   modules.Msg
 }
 
-// storeCommandAcks records the agent's answers to delivered run requests.
-// It returns the requests that ended without a run (for the history).
-func storeCommandAcks(tx models.Writer, acks []modules.CommandRequestAck, now int64) ([]endedRequest, error) {
+// storeRequestAnswers records, inside a transaction of the central
+// database, what a report of an agent says about its run requests: an ack
+// "started" and every run with a request id end the request as done, an
+// ack "expired" or "unknown_set" ends it as expired. Each change is
+// conditional on the request's agent and state, so a request of another
+// agent or one already ended is not changed. It returns the requests that
+// ended without a run (for the history).
+func storeRequestAnswers(tx models.Writer, agentID int64, req *modules.ReportRequest, now int64) ([]endedRequest, error) {
 	var ended []endedRequest
-	for _, a := range acks {
-		var err error
+	for _, a := range req.CommandRequestAcks {
 		switch a.Status {
 		case modules.RequestAckStarted:
-			err = models.MarkCommandRequestDone(tx, a.RequestID, a.RunUID, now)
-		case modules.RequestAckExpired, modules.RequestAckUnknownSet:
-			err = models.MarkCommandRequestExpired(tx, a.RequestID, now)
-			if err == nil {
-				why := modules.M("history.detail.request_ended_why.expired")
-				if a.Status == modules.RequestAckUnknownSet {
-					why = modules.M("history.detail.request_ended_why.unknown_set")
-				}
-				if r, gerr := models.GetCommandRequest(tx, a.RequestID); gerr == nil {
-					ended = append(ended, endedRequest{setID: r.SetID, why: modules.M("history.detail.request_ended", "request", a.RequestID, "why", why)})
-				}
+			if _, err := models.MarkCommandRequestDone(tx, agentID, a.RequestID, a.RunUID, now); err != nil {
+				return nil, err
 			}
-		default:
+		case modules.RequestAckExpired, modules.RequestAckUnknownSet:
+			ok, err := models.MarkCommandRequestExpired(tx, agentID, a.RequestID, now)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			why := modules.M("history.detail.request_ended_why.expired")
+			if a.Status == modules.RequestAckUnknownSet {
+				why = modules.M("history.detail.request_ended_why.unknown_set")
+			}
+			r, err := models.GetCommandRequest(tx, agentID, a.RequestID)
+			if err != nil {
+				return nil, err
+			}
+			ended = append(ended, endedRequest{setID: r.SetID, why: modules.M("history.detail.request_ended", "request", a.RequestID, "why", why)})
+		}
+	}
+	for _, run := range req.CommandRuns {
+		if run.RequestID <= 0 || run.RunUID == "" || len(run.RunUID) > 128 {
 			continue
 		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if _, err := models.MarkCommandRequestDone(tx, agentID, run.RequestID, run.RunUID, now); err != nil {
 			return nil, err
 		}
 	}
@@ -321,39 +282,39 @@ func agentCommandProblems(agent *models.Agent) map[int64]*setProblems {
 	return out
 }
 
-// expireCommandRequests ends the run requests that were not delivered
-// within their expiry and records them in the history.
+// expireCommandRequests ends the run requests of all agents that were not
+// handed over within their expiry and records them in the history (the
+// set's name is read from the agent's database after the transaction).
 func (c *core) expireCommandRequests(now time.Time) {
-	agents, err := models.ListAgents(c.db.Read())
+	var list []*models.CommandRequest
+	err := c.db.Write(func(tx models.Writer) error {
+		var err error
+		list, err = models.ExpireCommandRequests(tx, now.Unix())
+		return err
+	})
 	if err != nil {
+		c.logger.Printf("command requests: %v", err)
 		return
 	}
-	for _, a := range agents {
+	for _, r := range list {
+		a, err := models.GetAgent(c.db.Read(), r.AgentID)
+		if err != nil {
+			continue
+		}
 		tdb, err := c.targetDB(a)
 		if err != nil {
 			continue
 		}
-		var list []*models.CommandRequest
-		err = tdb.Write(func(tx models.Writer) error {
-			list, err = models.ExpireCommandRequests(tx, now.Unix())
-			return err
-		})
-		if err != nil {
-			c.logger.Printf("command requests of %s: %v", c.agentDisplayName(a), err)
-			continue
-		}
-		for _, r := range list {
-			c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(a, tdb, r.SetID),
-				modules.M("history.detail.request_not_delivered", "request", r.ID, "expiry", modules.CommandRequestExpiry.String()))
-		}
+		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(a, tdb, r.SetID),
+			modules.M("history.detail.request_not_delivered", "request", r.ID, "expiry", modules.CommandRequestExpiry.String()))
 	}
 }
 
 // commandRetention removes, inside a transaction of a target database, the
-// runs older than cut (also the last run of a set), the finished runs of
-// every set beyond its keep count, and the ended run requests older than
-// cut. It returns the number of runs removed and every part that failed
-// (each named); a failed part does not stop the others.
+// runs older than cut (also the last run of a set) and the finished runs of
+// every set beyond its keep count. It returns the number of runs removed
+// and every part that failed (each named); a failed part does not stop the
+// others.
 func commandRetention(tx models.Writer, cut int64) (int64, error) {
 	var errs []string
 	removed, err := models.DeleteCommandRunsBefore(tx, cut)
@@ -371,9 +332,6 @@ func commandRetention(tx models.Writer, cut int64) (int64, error) {
 			continue
 		}
 		removed += n
-	}
-	if _, err := models.DeleteEndedCommandRequestsBefore(tx, cut); err != nil {
-		errs = append(errs, "ended run requests: "+err.Error())
 	}
 	if len(errs) > 0 {
 		return removed, errors.New(strings.Join(errs, "; "))

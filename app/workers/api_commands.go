@@ -206,9 +206,10 @@ func (c *core) loadCommandSetRow(w http.ResponseWriter, r *http.Request, tdb *mo
 	return s
 }
 
-// commandSetOut builds the administrator view of a set.
+// commandSetOut builds the administrator view of a set; requests are the
+// agent's unanswered run requests by set id.
 func (c *core) commandSetOut(r *http.Request, a *models.Agent, tdb *modules.DB, row *models.CommandSet, problems map[int64]*setProblems,
-	latest map[int64]*models.CommandRun, running map[int64]bool) (*commandSetJSON, error) {
+	latest map[int64]*models.CommandRun, running map[int64]bool, requests map[int64]*models.CommandRequest) (*commandSetJSON, error) {
 	items, err := models.ListCommandItems(tdb.Read(), row.ID)
 	if err != nil {
 		return nil, err
@@ -224,9 +225,7 @@ func (c *core) commandSetOut(r *http.Request, a *models.Agent, tdb *modules.DB, 
 		ImportedFrom: row.ImportedFrom, CreatedAt: ts(row.CreatedAt), CreatedBy: show(row.CreatedBy), UpdatedAt: ts(row.UpdatedAt),
 		UpdatedBy: show(row.UpdatedBy), Running: running[row.ID], AgentProblems: nonNil(sp.texts),
 		AgentProblemsI18n: nonNil(sp.coded)}
-	if q, err := models.ActiveCommandRequest(tdb.Read(), row.ID); err != nil {
-		return nil, err
-	} else if q != nil {
+	if q := requests[row.ID]; q != nil {
 		out.Request = commandRequestOut(q)
 	}
 	if run := latest[row.ID]; run != nil {
@@ -247,7 +246,11 @@ func (c *core) commandSetOne(r *http.Request, a *models.Agent, tdb *modules.DB, 
 	if err != nil {
 		return nil, err
 	}
-	return c.commandSetOut(r, a, tdb, row, agentCommandProblems(a), latest, running)
+	requests, err := models.UnansweredCommandRequests(c.db.Read(), a.ID)
+	if err != nil {
+		return nil, err
+	}
+	return c.commandSetOut(r, a, tdb, row, agentCommandProblems(a), latest, running, requests)
 }
 
 func (c *core) handleListCommandSets(w http.ResponseWriter, r *http.Request) {
@@ -275,11 +278,16 @@ func (c *core) handleListCommandSets(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
+	requests, err := models.UnansweredCommandRequests(c.db.Read(), a.ID)
+	if err != nil {
+		c.internalError(w, r, err)
+		return
+	}
 	out := commandSetListJSON{AgentID: a.ID, AgentName: c.agentDisplayName(a), DefaultOSUser: a.HostOSUser, TimeZone: a.TimeZone,
 		UTCOffsetSec: a.UTCOffsetSec, Delivered: a.CommandSig == sig, Sets: []commandSetJSON{}}
 	problems := agentCommandProblems(a)
 	for _, row := range rows {
-		s, err := c.commandSetOut(r, a, tdb, row, problems, latest, running)
+		s, err := c.commandSetOut(r, a, tdb, row, problems, latest, running, requests)
 		if err != nil {
 			c.internalError(w, r, err)
 			return
@@ -459,21 +467,7 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principalFrom(r)
 	now := time.Now().Unix()
-	// A request not yet delivered goes with the set, in the same
-	// transaction; a delivered one is answered by the agent (it no longer
-	// holds the set).
-	var discarded int64
-	err := tdb.Write(func(tx models.Writer) error {
-		if err := models.DeleteCommandSet(tx, stored.ID, p.operator(), now); err != nil {
-			return err
-		}
-		if q, err := models.ActiveCommandRequest(tx, stored.ID); err == nil && q != nil && q.State == models.RequestPending {
-			if models.DiscardCommandRequest(tx, q.ID, p.operator(), now) == nil {
-				discarded = q.ID
-			}
-		}
-		return nil
-	})
+	err := tdb.Write(func(tx models.Writer) error { return models.DeleteCommandSet(tx, stored.ID, p.operator(), now) })
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return
@@ -481,9 +475,22 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
+	// A request not yet handed over goes with the set (in the central
+	// database, after the set's deletion); a delivered one is answered by
+	// the agent (it no longer holds the set). The set is deleted even when
+	// this fails, so the failure is logged and the deletion answered.
+	var discarded []int64
+	err = c.db.Write(func(tx models.Writer) error {
+		var err error
+		discarded, err = models.DiscardCommandRequestsOfSet(tx, a.ID, stored.ID, p.operator(), now)
+		return err
+	})
+	if err != nil {
+		c.logger.Printf("run requests of the deleted command set %d of %s: %v", stored.ID, c.agentDisplayName(a), err)
+	}
 	detail := []modules.Msg{modules.M("history.detail.command_set", "set", stored.ID)}
-	if discarded > 0 {
-		detail = append(detail, modules.M("history.detail.command_request_discarded_with", "request", discarded))
+	for _, id := range discarded {
+		detail = append(detail, modules.M("history.detail.command_request_discarded_with", "request", id))
 	}
 	c.history(p, models.HistCommand, "deleted", c.agentDisplayName(a)+" / "+stored.Name, historyParts(detail))
 	writeJSON(w, http.StatusOK, map[string]any{})
@@ -683,9 +690,27 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principalFrom(r)
 	now := time.Now().Unix()
-	q := &models.CommandRequest{SetID: stored.ID, RequestedAt: now, RequestedBy: p.operator(),
+	q := &models.CommandRequest{AgentID: a.ID, SetID: stored.ID, RequestedAt: now, RequestedBy: p.operator(),
 		ExpiresAt: now + int64(modules.CommandRequestExpiry/time.Second)}
-	err := tdb.Write(func(tx models.Writer) error { return models.InsertCommandRequest(tx, q) })
+	target := modules.Raw(c.agentDisplayName(a) + " / " + stored.Name)
+	// The request is inserted, made ready for the agent's next sync and
+	// recorded in the history in one transaction of the central database,
+	// and read again in it for the answer.
+	err := c.db.Write(func(tx models.Writer) error {
+		if err := models.InsertCommandRequest(tx, q); err != nil {
+			return err
+		}
+		if _, err := models.GrantCommandRequest(tx, q.ID); err != nil {
+			return err
+		}
+		if err := models.InsertHistory(tx, c.historyRow(p, models.HistCommand, "run_requested", target,
+			modules.M("history.detail.command_request", "request", q.ID))); err != nil {
+			return err
+		}
+		var err error
+		q, err = models.GetCommandRequest(tx, a.ID, q.ID)
+		return err
+	})
 	if errors.Is(err, models.ErrRequestActive) {
 		writeError(w, http.StatusConflict, modules.M("command.request_pending"))
 		return
@@ -693,9 +718,12 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistCommand, "run_requested", c.agentDisplayName(a)+" / "+stored.Name, modules.M("history.detail.command_request", "request", q.ID))
 	writeJSON(w, http.StatusOK, commandRequestOut(q))
 }
+
+// errNotDiscardable ends the discard transaction of a request that was
+// already handed over or ended.
+var errNotDiscardable = errors.New("the run request cannot be discarded")
 
 func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Request) {
 	a, tdb := c.loadCommandTarget(w, r)
@@ -711,17 +739,20 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 	// The request is read, discarded and read again in one transaction.
 	var q *models.CommandRequest
 	missing, notDiscardable := false, false
-	err := tdb.Write(func(tx models.Writer) error {
-		if _, err := models.GetCommandRequest(tx, id); err != nil {
+	err := c.db.Write(func(tx models.Writer) error {
+		if _, err := models.GetCommandRequest(tx, a.ID, id); err != nil {
 			missing = errors.Is(err, sql.ErrNoRows)
 			return err
 		}
-		if err := models.DiscardCommandRequest(tx, id, p.operator(), time.Now().Unix()); err != nil {
-			notDiscardable = errors.Is(err, sql.ErrNoRows)
+		ok, err := models.DiscardCommandRequest(tx, a.ID, id, p.operator(), time.Now().Unix())
+		if err != nil {
 			return err
 		}
-		var err error
-		q, err = models.GetCommandRequest(tx, id)
+		if !ok {
+			notDiscardable = true
+			return errNotDiscardable
+		}
+		q, err = models.GetCommandRequest(tx, a.ID, id)
 		return err
 	})
 	switch {

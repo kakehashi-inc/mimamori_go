@@ -89,8 +89,19 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	fps, _ := json.Marshal(req.CAFingerprints)
+	// The sync is recorded and the agent's pending run requests are handed
+	// over in one transaction of the central database; the delivered ones
+	// are sent with the answer (again with every sync until the agent
+	// answers them; the agent runs a request at most once and answers it
+	// again).
+	var handed []*models.CommandRequest
 	err := c.db.Write(func(tx models.Writer) error {
-		return models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now)
+		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
+			return err
+		}
+		var err error
+		handed, err = models.HandOverCommandRequests(tx, agent.ID, now)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -108,8 +119,13 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		}
 		resp.Rule = ra
 	}
-	if err := c.commandSync(agent, req, resp, now); err != nil {
+	if err := c.commandSync(agent, req, resp); err != nil {
 		return nil, err
+	}
+	for _, r := range handed {
+		resp.CommandRequests = append(resp.CommandRequests, modules.CommandRunRequest{
+			ID: r.ID, SetID: r.SetID, RequestedAt: r.RequestedAt, ExpiresAt: r.ExpiresAt,
+		})
 	}
 	if tok == nil {
 		return resp, nil
@@ -242,17 +258,13 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
-	var ended []endedRequest
 	var ignored []ignoredRun
 	err = tdb.Write(func(tx models.Writer) error {
 		var err error
 		if err = storeDetections(tx, agent, req, sups, now, dedupe); err != nil {
 			return err
 		}
-		if ignored, err = storeCommandRuns(tx, req.CommandRuns, now); err != nil {
-			return err
-		}
-		ended, err = storeCommandAcks(tx, req.CommandRequestAcks, now)
+		ignored, err = storeCommandRuns(tx, req.CommandRuns, now)
 		return err
 	})
 	if err != nil {
@@ -260,9 +272,6 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	for _, r := range ignored {
 		c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), r.runUID, r.setID)
-	}
-	for _, e := range ended {
-		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
 	}
 	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
 	if hi := req.HostInfo; hi != nil {
@@ -290,8 +299,16 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	// The central part of the report is one transaction that reads the
 	// agent row again and decides from it, so each history row is written
-	// together with the row or not at all.
-	return c.db.Write(func(tx models.Writer) error {
+	// together with the row or not at all. The answers to run requests are
+	// recorded in it too; a request that ended without a run is recorded
+	// in the history after it, with the set's name read from the agent's
+	// database.
+	var ended []endedRequest
+	err = c.db.Write(func(tx models.Writer) error {
+		var err error
+		if ended, err = storeRequestAnswers(tx, agent.ID, req, now); err != nil {
+			return err
+		}
 		cur, err := models.GetAgent(tx, agent.ID)
 		if err != nil {
 			return err
@@ -332,6 +349,13 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		}
 		return models.RecordAgentReport(tx, cur.ID, f)
 	})
+	if err != nil {
+		return err
+	}
+	for _, e := range ended {
+		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
+	}
+	return nil
 }
 
 // storeDetections stores the detections and the host information of a

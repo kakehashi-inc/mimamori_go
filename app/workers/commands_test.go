@@ -249,11 +249,31 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	if len(resp.CommandRequests) != 1 || resp.CommandRequests[0].ID != qid2 || resp.CommandRequests[0].SetID != setID {
 		t.Fatalf("delivered requests: %+v", resp.CommandRequests)
 	}
-	if r, _ := models.GetCommandRequest(tdb.Read(), qid2); r.State != models.RequestDelivered || r.DeliveredAt == 0 {
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestDelivered || r.DeliveredAt == 0 {
 		t.Fatalf("delivered state: %+v", r)
 	}
 	if rec := e.cli("DELETE", path+"/command-requests/"+itoa64(qid2), nil); rec.Code != 409 {
 		t.Fatalf("discard delivered: %d", rec.Code)
+	}
+	// The requests of all agents are rows of one table of the central
+	// database: another agent can neither discard nor answer this one, and
+	// the agent's own database has no such table.
+	tokB, b, _ := commandAgent(t, e, "host-r2")
+	if rec := e.cli("DELETE", "/agents/"+itoa64(b.ID)+"/command-requests/"+itoa64(qid2), nil); rec.Code != 404 {
+		t.Fatalf("discard through another agent: %d", rec.Code)
+	}
+	reportAgent(t, e, tokB, modules.ReportRequest{
+		CommandRequestAcks: []modules.CommandRequestAck{{RequestID: qid2, Status: modules.RequestAckStarted, RunUID: "other", At: 1000}},
+	})
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestDelivered {
+		t.Fatalf("answered by another agent: %+v", r)
+	}
+	if resp := syncAgent(t, e, tokB, ""); len(resp.CommandRequests) != 0 {
+		t.Fatalf("handed to another agent: %+v", resp.CommandRequests)
+	}
+	var tables int
+	if err := tdb.Read().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'command_requests'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("command_requests in the agent's database: %d %v", tables, err)
 	}
 	if resp = syncAgent(t, e, tok, sig); len(resp.CommandRequests) != 1 {
 		t.Fatalf("delivered request is delivered again until answered: %+v", resp.CommandRequests)
@@ -262,7 +282,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		CommandRuns:        []modules.CommandRunReport{runReport("run-1", setID, "s", qid2, []modules.CommandResultReport{}, false, "")},
 		CommandRequestAcks: []modules.CommandRequestAck{{RequestID: qid2, Status: modules.RequestAckStarted, RunUID: "run-1", At: 1000}},
 	})
-	if r, _ := models.GetCommandRequest(tdb.Read(), qid2); r.State != models.RequestDone || r.RunUID != "run-1" {
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestDone || r.RunUID != "run-1" {
 		t.Fatalf("done: %+v", r)
 	}
 	if resp = syncAgent(t, e, tok, sig); len(resp.CommandRequests) != 0 {
@@ -275,7 +295,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		id := int64(q["id"].(float64))
 		syncAgent(t, e, tok, "")
 		reportAgent(t, e, tok, modules.ReportRequest{CommandRequestAcks: []modules.CommandRequestAck{{RequestID: id, Status: status, At: 5}}})
-		if r, _ := models.GetCommandRequest(tdb.Read(), id); r.State != models.RequestExpired {
+		if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, id); r.State != models.RequestExpired {
 			t.Fatalf("%s: %+v", status, r)
 		}
 	}
@@ -283,20 +303,20 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	// not delivered within 24 hours: expired by the periodic task, never delivered
 	q = e.admin("POST", sp+"/run", nil)
 	id := int64(q["id"].(float64))
-	if err := execTDB(tdb, `UPDATE command_requests SET expires_at = ? WHERE id = ?`, time.Now().Unix()-1, id); err != nil {
+	if err := e.exec(`UPDATE command_requests SET expires_at = ? WHERE id = ?`, time.Now().Unix()-1, id); err != nil {
 		t.Fatal(err)
 	}
 	if resp = syncAgent(t, e, tok, ""); len(resp.CommandRequests) != 0 {
 		t.Fatalf("expired request delivered: %+v", resp.CommandRequests)
 	}
 	e.c.expireCommandRequests(time.Now())
-	if r, _ := models.GetCommandRequest(tdb.Read(), id); r.State != models.RequestExpired {
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, id); r.State != models.RequestExpired {
 		t.Fatalf("expired: %+v", r)
 	}
 	// Deleting a set discards its request that was not delivered.
 	q = e.admin("POST", sp+"/run", nil)
 	e.admin("DELETE", sp, nil)
-	if r, _ := models.GetCommandRequest(tdb.Read(), int64(q["id"].(float64))); r.State != models.RequestDiscarded {
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, int64(q["id"].(float64))); r.State != models.RequestDiscarded {
 		t.Fatalf("request of a deleted set: %+v", r)
 	}
 	if rec := e.cli("POST", sp+"/run", nil); rec.Code != 404 {
@@ -400,8 +420,8 @@ func TestCommandRetention(t *testing.T) {
 	add("running", setID, now, 0)
 	add("ancient", oldID, old, old) // the only (last) run of its set
 	for _, st := range []string{"done", "expired", "discarded", "pending"} {
-		if err := execTDB(tdb, `INSERT INTO command_requests (set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, 'x', ?)`,
-			oldID, st, old, old+86400); err != nil {
+		if err := e.exec(`INSERT INTO command_requests (agent_id, set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, ?, 'x', ?)`,
+			a.ID, oldID, st, old, old+86400); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -418,7 +438,7 @@ func TestCommandRetention(t *testing.T) {
 		t.Fatalf("runs after retention: %v", uids)
 	}
 	var states []string
-	rows, _ = tdb.Read().Query(`SELECT state FROM command_requests`)
+	rows, _ = e.c.db.Read().Query(`SELECT state FROM command_requests`)
 	for rows.Next() {
 		var s string
 		_ = rows.Scan(&s)
