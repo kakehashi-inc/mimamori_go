@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import type { Overview } from '../types';
 import { serverText } from '../utils/serverText';
 import { Header } from './Header';
-import { Loading } from './StateViews';
+import { Loading, SessionCheckError } from './StateViews';
 
 // How often the overview (builtin agent state) is refreshed.
 const OVERVIEW_POLL_MS = 60000;
@@ -14,7 +14,7 @@ const OVERVIEW_POLL_MS = 60000;
 /** Frame of every signed-in page: header, builtin agent warning and content. */
 export function Layout() {
     const { t } = useTranslation();
-    const { status } = useAuth();
+    const { status, checkError, retryCheck } = useAuth();
     const location = useLocation();
     const [overview, setOverview] = useState<Overview | null>(null);
 
@@ -41,6 +41,7 @@ export function Layout() {
     }, [status]);
 
     if (status === 'loading') return <Loading />;
+    if (status === 'error') return <SessionCheckError error={checkError} onRetry={retryCheck} />;
     if (status === 'anonymous')
         return <Navigate to='/login' replace state={{ from: location.pathname + location.search }} />;
 

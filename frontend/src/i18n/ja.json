@@ -627,7 +627,7 @@
             "warn_user_missing": "OSユーザー {{value}} は存在しません。"
         },
         "auditd": {
-            "command_failed": "auditctl {{args}}: {{cause}}",
+            "command_failed": "auditctl {{args}} が失敗しました: {{cause}}",
             "disabled": "監査が無効になっています（auditctl -s の enabled が 0）。",
             "list_failed": "auditctl -l が失敗しました: {{cause}}",
             "not_running": "auditd が動いていません。",

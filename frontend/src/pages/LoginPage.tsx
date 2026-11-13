@@ -6,7 +6,7 @@ import { Button } from '../components/Button';
 import { CODE_LENGTH, CodeInput } from '../components/CodeInput';
 import { checkboxClass, emailInputProps, Field, inputClass } from '../components/FormControls';
 import { LanguageSwitch } from '../components/LanguageSwitch';
-import { Alert, Loading } from '../components/StateViews';
+import { Alert, Loading, SessionCheckError } from '../components/StateViews';
 import { useAuth } from '../context/AuthContext';
 import { useHealth } from '../hooks/useHealth';
 import { isCodeMailFailed } from '../utils/accountErrors';
@@ -22,7 +22,7 @@ const DEFAULT_TRUST_DAYS = 30;
  */
 export function LoginPage() {
     const { t } = useTranslation();
-    const { status, login, verify } = useAuth();
+    const { status, checkError, retryCheck, login, verify } = useAuth();
     const { health } = useHealth();
     const navigate = useNavigate();
     const location = useLocation();
@@ -39,6 +39,7 @@ export function LoginPage() {
     const [notice, setNotice] = useState<string | null>(null);
 
     if (status === 'loading') return <Loading />;
+    if (status === 'error') return <SessionCheckError error={checkError} onRetry={retryCheck} />;
     if (status === 'authenticated' && !busy) return <Navigate to={from} replace />;
 
     /** Back to the password step, keeping the e-mail address. */

@@ -96,3 +96,15 @@ export function ErrorAlert({ error, onRetry }: { error: unknown; onRetry?: () =>
         </Alert>
     );
 }
+
+/**
+ * Whole-page error for a session check that failed for another reason than
+ * "not signed in" (busy server, network failure), with a retry button.
+ */
+export function SessionCheckError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+    return (
+        <div className='mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-4 py-10'>
+            <ErrorAlert error={error} onRetry={onRetry} />
+        </div>
+    );
+}
