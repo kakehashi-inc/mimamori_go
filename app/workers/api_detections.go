@@ -107,7 +107,7 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -193,7 +193,7 @@ func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
 	count := 0
 	perAgent := map[string]int{}
 	for _, it := range in.Items {
-		a, err := models.GetAgent(c.pool, it.AgentID)
+		a, err := models.GetAgent(c.db.Read(), it.AgentID)
 		if err != nil {
 			continue
 		}
@@ -244,7 +244,7 @@ func (c *core) suppressionOut(s *models.Suppression, show func(string) string) s
 	if s.AgentID.Valid {
 		id := s.AgentID.Int64
 		out.AgentID = &id
-		if a, err := models.GetAgent(c.pool, id); err == nil {
+		if a, err := models.GetAgent(c.db.Read(), id); err == nil {
 			out.AgentName = c.agentDisplayName(a)
 		}
 	}
@@ -252,7 +252,7 @@ func (c *core) suppressionOut(s *models.Suppression, show func(string) string) s
 }
 
 func (c *core) handleListSuppressions(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListSuppressions(c.pool)
+	list, err := models.ListSuppressions(c.db.Read())
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -294,7 +294,7 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 	}
 	var agentName = "all agents"
 	if in.AgentID != nil && *in.AgentID > 0 {
-		a, err := models.GetAgent(c.pool, *in.AgentID)
+		a, err := models.GetAgent(c.db.Read(), *in.AgentID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("agent.not_found"))
 			return
@@ -302,7 +302,7 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 		s.AgentID = sql.NullInt64{Int64: a.ID, Valid: true}
 		agentName = c.agentDisplayName(a)
 	}
-	if err := models.InsertSuppression(c.pool, s); err != nil {
+	if err := c.db.Write(func(tx models.Writer) error { return models.InsertSuppression(tx, s) }); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -358,7 +358,7 @@ func describeSuppression(s *models.Suppression) string {
 // applySuppression marks open detections matching a new suppression so they
 // are not notified.
 func (c *core) applySuppression(s *models.Suppression) int {
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		return 0
 	}
@@ -406,12 +406,12 @@ func (c *core) applySuppression(s *models.Suppression) int {
 // detections of one target change in one transaction. It returns the number
 // of released detections.
 func (c *core) releaseSuppression(s *models.Suppression) int {
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		c.logger.Printf("release suppression %d: %v", s.ID, err)
 		return 0
 	}
-	sups, err := models.ListSuppressions(c.pool)
+	sups, err := models.ListSuppressions(c.db.Read())
 	if err != nil {
 		c.logger.Printf("release suppression %d: %v", s.ID, err)
 		return 0
@@ -480,13 +480,17 @@ func (c *core) handleDeleteSuppression(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, modules.M("suppression.not_found"))
 		return
 	}
-	s, err := models.GetSuppression(c.pool, id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, modules.M("suppression.not_found"))
-		return
-	}
-	if err := models.DeleteSuppression(c.pool, id); err != nil {
-		c.internalError(w, r, err)
+	// The condition is read in the transaction that deletes it; its
+	// detections are released after it (agent databases).
+	var s *models.Suppression
+	err := c.db.Write(func(tx models.Writer) error {
+		var err error
+		if s, err = models.GetSuppression(tx, id); err != nil {
+			return &refusal{http.StatusNotFound, modules.M("suppression.not_found")}
+		}
+		return models.DeleteSuppression(tx, id)
+	})
+	if c.failed(w, r, err) {
 		return
 	}
 	n := c.releaseSuppression(s)
@@ -510,12 +514,12 @@ func certOut(x *models.Certificate) certInfoJSON {
 }
 
 func (c *core) handleCertificates(w http.ResponseWriter, r *http.Request) {
-	cas, err := models.ListCertificates(c.pool, "ca")
+	cas, err := models.ListCertificates(c.db.Read(), "ca")
 	if err != nil {
 		c.internalError(w, r, err)
 		return
 	}
-	servers, _ := models.ListCertificates(c.pool, "server")
+	servers, _ := models.ListCertificates(c.db.Read(), "server")
 	out := map[string]any{}
 	caList := []certInfoJSON{}
 	var next *models.Certificate
@@ -548,7 +552,7 @@ func (c *core) handleCertificates(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	latest := c.latestCAFingerprints()
-	agents, _ := models.ListAgents(c.pool)
+	agents, _ := models.ListAgents(c.db.Read())
 	for _, a := range agents {
 		if a.Kind != models.AgentToken || a.LastSyncAt == 0 {
 			continue
@@ -613,7 +617,7 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if p := principalFrom(r); !p.isAdmin() {
 		exclude = viewerHiddenHistory
 	}
-	items, total, err := models.ListHistory(c.pool, r.URL.Query().Get("category"), "", exclude, limit, offset)
+	items, total, err := models.ListHistory(c.db.Read(), r.URL.Query().Get("category"), "", exclude, limit, offset)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -632,7 +636,7 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 	// agent disabled there is the administrator's choice, so the screens do
 	// not report it as stopped.
 	enabled := *c.conf().BuiltinAgent
-	agents, _ := models.ListAgents(c.pool)
+	agents, _ := models.ListAgents(c.db.Read())
 	unacked := 0
 	for _, a := range agents {
 		if tdb, err := c.targetDB(a); err == nil {

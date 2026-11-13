@@ -219,17 +219,24 @@ func (c *core) closeTargets() {
 	}
 }
 
-// createAgent inserts an agent row and its per-target database file.
+// createAgent inserts an agent row and opens (creates) its per-target
+// database file.
 func (c *core) createAgent(a *models.Agent) error {
-	if err := models.InsertAgent(c.pool, a); err != nil {
-		return err
-	}
-	a.DBFile = fmt.Sprintf("agent-%d.db", a.ID)
-	if err := models.SetAgentDBFile(c.pool, a.ID, a.DBFile); err != nil {
+	if err := c.db.Write(func(tx models.Writer) error { return insertAgent(tx, a) }); err != nil {
 		return err
 	}
 	_, err := c.targetDB(a)
 	return err
+}
+
+// insertAgent inserts an agent row with the name of its database file. The
+// file itself is created after the transaction (targetDB).
+func insertAgent(tx models.Writer, a *models.Agent) error {
+	if err := models.InsertAgent(tx, a); err != nil {
+		return err
+	}
+	a.DBFile = fmt.Sprintf("agent-%d.db", a.ID)
+	return models.SetAgentDBFile(tx, a.ID, a.DBFile)
 }
 
 // ensureBuiltinAgent creates the built-in agent row on first start.
@@ -284,11 +291,17 @@ func (c *core) ensureServerKey() error {
 
 // agentDisplayName returns the name shown for an agent.
 func (c *core) agentDisplayName(a *models.Agent) string {
+	return agentName(c.db.Read(), a)
+}
+
+// agentName returns the name shown for an agent, reading its token through
+// db (the transaction, when it is needed inside one).
+func agentName(db models.Reader, a *models.Agent) string {
 	if a.Kind == models.AgentBuiltin {
 		return modules.BuiltinAgentName
 	}
 	if a.TokenID.Valid {
-		if t, err := models.GetToken(c.pool, a.TokenID.Int64); err == nil {
+		if t, err := models.GetToken(db, a.TokenID.Int64); err == nil {
 			return t.Name
 		}
 	}

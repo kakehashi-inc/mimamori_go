@@ -185,7 +185,7 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		}
 		s.CAUpToDate = true
 	} else if a.TokenID.Valid {
-		if t, err := models.GetToken(c.pool, a.TokenID.Int64); err == nil {
+		if t, err := models.GetToken(c.db.Read(), a.TokenID.Int64); err == nil {
 			s.Token = &tokenRefJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt)}
 		}
 		var fps []string
@@ -202,7 +202,7 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 	if a.AssignedRuleID.Valid {
 		r := rules[a.AssignedRuleID.Int64]
 		if r == nil {
-			r, _ = models.GetRule(c.pool, a.AssignedRuleID.Int64)
+			r, _ = models.GetRule(c.db.Read(), a.AssignedRuleID.Int64)
 		}
 		if r != nil {
 			ar := &agentRuleJSON{ID: r.ID, Name: r.Name, AssignedVersion: a.AssignedRuleVersion, LatestVersion: r.LatestVersion,
@@ -257,7 +257,7 @@ func (c *core) latestCAFingerprints() []string {
 
 func (c *core) rulesByID() map[int64]*models.Rule {
 	m := map[int64]*models.Rule{}
-	if list, err := models.ListRules(c.pool); err == nil {
+	if list, err := models.ListRules(c.db.Read()); err == nil {
 		for _, r := range list {
 			m[r.ID] = r
 		}
@@ -266,7 +266,7 @@ func (c *core) rulesByID() map[int64]*models.Rule {
 }
 
 func (c *core) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListAgents(c.pool)
+	list, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -286,7 +286,7 @@ func (c *core) loadAgent(w http.ResponseWriter, r *http.Request, name string) *m
 		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
 	}
-	a, err := models.GetAgent(c.pool, id)
+	a, err := models.GetAgent(c.db.Read(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
@@ -329,7 +329,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	name := out.DisplayName
 	if a.Kind == models.AgentToken {
-		items, _, err := models.ListHistory(c.pool, models.HistToken, name, nil, 100, 0)
+		items, _, err := models.ListHistory(c.db.Read(), models.HistToken, name, nil, 100, 0)
 		if err == nil {
 			show := c.operatorShown(r)
 			for _, h := range items {
@@ -373,14 +373,14 @@ func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.conf().DefaultCheckIntervalSec)+600
 		out.ExpiringUnconnected = near && stale
 	}
-	if a, err := models.GetAgentByToken(c.pool, t.ID); err == nil {
+	if a, err := models.GetAgentByToken(c.db.Read(), t.ID); err == nil {
 		out.AgentID = a.ID
 	}
 	return out
 }
 
 func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListTokens(c.pool)
+	list, err := models.ListTokens(c.db.Read())
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -398,7 +398,7 @@ func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
 		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
 	}
-	t, err := models.GetToken(c.pool, id)
+	t, err := models.GetToken(c.db.Read(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
@@ -447,25 +447,6 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	agent := &models.Agent{Kind: models.AgentToken}
-	if in.RuleID != nil && *in.RuleID > 0 {
-		rule, err := models.GetRule(c.pool, *in.RuleID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, modules.M("rule.not_found"))
-			return
-		}
-		ver := rule.LatestVersion
-		if in.RuleVersion != nil && *in.RuleVersion > 0 {
-			ver = *in.RuleVersion
-		}
-		if _, err := models.GetRuleVersion(c.pool, rule.ID, ver); err != nil {
-			writeError(w, http.StatusBadRequest, modules.M("rule.rule_version_not_found"))
-			return
-		}
-		agent.AssignedRuleID = sql.NullInt64{Int64: rule.ID, Valid: true}
-		agent.AssignedRuleVersion = ver
-		agent.AssignedAt = time.Now().Unix()
-	}
 	value, err := modules.GenerateSecret(modules.TokenPrefix)
 	if err != nil {
 		c.internalError(w, r, err)
@@ -473,19 +454,43 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principalFrom(r)
 	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.operator()}
-	if err := models.InsertToken(c.pool, tok); err != nil {
-		if isUniqueErr(err) {
-			writeError(w, http.StatusConflict, modules.M("token.name_taken"))
-			return
+	// The rule is read, and the token and its agent are inserted, in one
+	// transaction; the agent's database file is created after it.
+	var agent *models.Agent
+	err = c.db.Write(func(tx models.Writer) error {
+		agent = &models.Agent{Kind: models.AgentToken}
+		if in.RuleID != nil && *in.RuleID > 0 {
+			rule, err := models.GetRule(tx, *in.RuleID)
+			if err != nil {
+				return &refusal{http.StatusBadRequest, modules.M("rule.not_found")}
+			}
+			ver := rule.LatestVersion
+			if in.RuleVersion != nil && *in.RuleVersion > 0 {
+				ver = *in.RuleVersion
+			}
+			if _, err := models.GetRuleVersion(tx, rule.ID, ver); err != nil {
+				return &refusal{http.StatusBadRequest, modules.M("rule.rule_version_not_found")}
+			}
+			agent.AssignedRuleID = sql.NullInt64{Int64: rule.ID, Valid: true}
+			agent.AssignedRuleVersion = ver
+			agent.AssignedAt = time.Now().Unix()
 		}
-		c.internalError(w, r, err)
+		if err := models.InsertToken(tx, tok); err != nil {
+			if isUniqueErr(err) {
+				return &refusal{http.StatusConflict, modules.M("token.name_taken")}
+			}
+			return err
+		}
+		agent.TokenID = sql.NullInt64{Int64: tok.ID, Valid: true}
+		return insertAgent(tx, agent)
+	})
+	if c.failed(w, r, err) {
 		return
 	}
-	agent.TokenID = sql.NullInt64{Int64: tok.ID, Valid: true}
-	if err := c.createAgent(agent); err != nil {
+	if _, err := c.targetDB(agent); err != nil {
 		// Undo the token, so no token is left without its agent (the agent
-		// row, if it was created, goes with it).
-		if derr := models.DeleteToken(c.pool, tok.ID); derr != nil {
+		// row goes with it).
+		if derr := c.db.Write(func(tx models.Writer) error { return models.DeleteToken(tx, tok.ID) }); derr != nil {
 			c.logger.Printf("token %d: undo after a failed issue: %v", tok.ID, derr)
 		}
 		c.internalError(w, r, err)
@@ -530,7 +535,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 	t.ExpiresAt = now + int64(days)*86400
 	t.PendingHash, t.PendingExpiresAt = "", 0
 	t.UsedAt, t.RevokedAt, t.ReissuedAt = 0, 0, now
-	if err := models.ReissueToken(c.pool, t); err != nil {
+	if err := c.db.Write(func(tx models.Writer) error { return models.ReissueToken(tx, t) }); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -545,7 +550,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 	}
 	prev := t.InstanceID
 	t.InstanceID, t.BoundAt = "", 0
-	if err := models.UnbindToken(c.pool, t.ID); err != nil {
+	if err := c.db.Write(func(tx models.Writer) error { return models.UnbindToken(tx, t.ID) }); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -561,7 +566,7 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	if t.RevokedAt == 0 {
 		t.RevokedAt = time.Now().Unix()
 		t.PendingHash, t.PendingExpiresAt = "", 0
-		if err := models.RevokeToken(c.pool, t.ID, t.RevokedAt); err != nil {
+		if err := c.db.Write(func(tx models.Writer) error { return models.RevokeToken(tx, t.ID, t.RevokedAt) }); err != nil {
 			c.internalError(w, r, err)
 			return
 		}
