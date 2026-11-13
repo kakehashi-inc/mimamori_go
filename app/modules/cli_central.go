@@ -125,6 +125,9 @@ func (c *CentralInitAdminCmd) Run() error {
 	}
 	a := &models.Account{Email: email, DisplayName: display, Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
 	// The account and its history row are written together or not at all.
+	// Read before the transaction: nothing inside a write transaction reads
+	// files.
+	operator := localOperator()
 	err = db.Write(func(tx models.Writer) error {
 		// Checked again under the write lock: another command may have
 		// created an administrator while the password was typed.
@@ -137,7 +140,7 @@ func (c *CentralInitAdminCmd) Run() error {
 			return NewExitError(ExitArgument, err.Error())
 		}
 		detail := M("history.detail.first_admin_cli")
-		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email,
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: operator, Category: models.HistAccount, Action: "created", Target: a.Email,
 			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	})
 	if err != nil {
@@ -182,6 +185,9 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	// The new password, the enabling, the revocation and the history row
 	// are written together or not at all.
+	// Read before the transaction: nothing inside a write transaction reads
+	// files.
+	operator := localOperator()
 	err = db.Write(func(tx models.Writer) error {
 		if err := models.UpdateAccountPassword(tx, a.ID, hash); err != nil {
 			return err
@@ -193,7 +199,7 @@ func (c *CentralResetPasswordCmd) Run() error {
 			return err
 		}
 		detail := M("history.detail.admin_recovered_cli")
-		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email,
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: operator, Category: models.HistAccount, Action: "password_reset", Target: a.Email,
 			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	})
 	if err != nil {

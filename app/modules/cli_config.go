@@ -134,6 +134,9 @@ func (c *CentralConfigSetCmd) Run() error {
 	defer db.Close()
 	// The change and its history row are saved together or not at all.
 	var changed []string
+	// Read before the transaction: nothing inside a write transaction reads
+	// files.
+	operator := localOperator()
 	err = db.Write(func(tx models.Writer) error {
 		var err error
 		if changed, err = ApplyCentralConfigChanges(tx, map[string]string{f.Name: value}, nil); err != nil || len(changed) == 0 {
@@ -148,7 +151,7 @@ func (c *CentralConfigSetCmd) Run() error {
 			}
 			detail = M("history.detail.config_value", "name", f.Name, "value", shown)
 		}
-		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name,
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: operator, Category: models.HistConfig, Action: "set", Target: f.Name,
 			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	})
 	if err != nil {
@@ -179,13 +182,16 @@ func (c *CentralConfigUnsetCmd) Run() error {
 	}
 	// The change and its history row are saved together or not at all.
 	var changed []string
+	// Read before the transaction: nothing inside a write transaction reads
+	// files.
+	operator := localOperator()
 	err = db.Write(func(tx models.Writer) error {
 		var err error
 		if changed, err = ApplyCentralConfigChanges(tx, nil, []string{f.Name}); err != nil || len(changed) == 0 {
 			return err
 		}
 		restored := M("history.detail.config_restored")
-		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "unset", Target: c.Name,
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: operator, Category: models.HistConfig, Action: "unset", Target: c.Name,
 			Detail: restored.Text(), I18n: HistoryTextsJSON(Msg{}, restored)})
 	})
 	if err != nil {
