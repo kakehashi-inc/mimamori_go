@@ -172,53 +172,6 @@ func openDB(dbPath string, fsys fs.FS, o openOptions, single bool) (_ *DB, err e
 	return d, nil
 }
 
-// OpenSQLitePool opens the database as OpenSQLite does, but returns a pool
-// of connections that all read and write, without the handle. It is what
-// OpenSQLite was before the handle and exists only for the callers that do
-// not use the handle yet.
-func OpenSQLitePool(path, schema string) (*sql.DB, error) {
-	sub, err := schemaMigrations(schema)
-	if err != nil {
-		return nil, err
-	}
-	return openSQLitePool(path, sub)
-}
-
-// openSQLitePool opens the pooled database at dbPath with the migrations in
-// fsys.
-func openSQLitePool(dbPath string, fsys fs.FS) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		return nil, err
-	}
-	// The same locks as in openDB.
-	migrateMu.Lock()
-	defer migrateMu.Unlock()
-	unlock, err := lockDir(filepath.Dir(dbPath))
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	db, err := sql.Open("sqlite", writeDSN(dbPath, DBLockWaitMS))
-	if err != nil {
-		return nil, err
-	}
-	// Each flow uses at most one connection at a time; a small pool is enough.
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(2)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := migrate(db, dbPath, fsys); err != nil {
-		db.Close()
-		if IsOtherBuildDB(err) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("migrate %s: %w", dbPath, err)
-	}
-	return db, nil
-}
-
 // IsOtherBuildDB reports whether err is (or wraps) the refusal of a
 // database created by another build of the program.
 func IsOtherBuildDB(err error) bool {
