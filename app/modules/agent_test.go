@@ -168,11 +168,26 @@ func TestInitConnectErrors(t *testing.T) {
 func openAgentDB(t *testing.T) (*AgentRuntime, func()) {
 	t.Helper()
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return NewAgentRuntime(db, &fakeTransport{fail: true}, nil), func() { db.Close() }
+}
+
+// setLocalState writes a state key of the agent database in a write
+// transaction of its own.
+func setLocalState(t testing.TB, db *DB, key, value string) {
+	t.Helper()
+	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, key, value) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// queueReport queues req in the outbox the way a report does, in a write
+// transaction of its own.
+func queueReport(rt *AgentRuntime, req *ReportRequest) error {
+	return rt.DB.Write(func(tx models.Writer) error { return enqueue(tx, req) })
 }
 
 func TestEnqueueKeepsOneHostInfo(t *testing.T) {
@@ -181,21 +196,21 @@ func TestEnqueueKeepsOneHostInfo(t *testing.T) {
 	apply := &ApplyResult{RuleID: 1, Version: 1, Status: "ok"}
 	hi := &HostInfo{Hostname: "h"}
 	for i := 0; i < 3; i++ {
-		if err := rt.enqueue(&ReportRequest{HostInfo: hi, Apply: apply}); err != nil {
+		if err := queueReport(rt, &ReportRequest{HostInfo: hi, Apply: apply}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := models.CountOutbox(rt.DB); n != 1 {
+	if n := models.CountOutbox(rt.DB.Read()); n != 1 {
 		t.Fatalf("reports without anything else to deliver must be replaced: %d rows", n)
 	}
 	v2 := &ApplyResult{RuleID: 1, Version: 2, Status: "ok"}
-	_ = rt.enqueue(&ReportRequest{HostInfo: hi, Apply: v2})
-	if n := models.CountOutbox(rt.DB); n != 2 {
+	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2})
+	if n := models.CountOutbox(rt.DB.Read()); n != 2 {
 		t.Fatalf("a report with another application result must be kept: %d rows", n)
 	}
-	_ = rt.enqueue(&ReportRequest{HostInfo: hi, Apply: v2, Detections: []DetectionReport{{Type: TypeExec, Category: CategoryAlert}}})
-	_ = rt.enqueue(&ReportRequest{HostInfo: hi, Apply: v2, Dropped: 3})
-	items, _ := models.ListOutbox(rt.DB)
+	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2, Detections: []DetectionReport{{Type: TypeExec, Category: CategoryAlert}}})
+	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2, Dropped: 3})
+	items, _ := models.ListOutbox(rt.DB.Read())
 	var withHost, withDetections, withDropped int
 	for _, it := range items {
 		var r ReportRequest
@@ -279,24 +294,24 @@ func TestAgentSetCentralKeepsPort(t *testing.T) {
 	host, port := fakeCentral(t, ca, []string{ca.CertPEM}, http.StatusOK)
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
-	db, err := OpenSQLitePool(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+	db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The stored host does not answer; the stored port is the fake central's.
 	cfg := &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: port, Token: "tok", CAPEMs: []string{ca.CertPEM}}
-	if err := withLocalTx(db, cfg.Save); err != nil {
+	if err := db.Write(cfg.Save); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 	load := func() *AgentConfig {
 		t.Helper()
-		db, err := OpenSQLitePool(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+		db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer db.Close()
-		c, err := LoadAgentConfig(db)
+		c, err := LoadAgentConfig(db.Read())
 		if err != nil {
 			t.Fatal(err)
 		}

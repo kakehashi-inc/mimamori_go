@@ -238,7 +238,7 @@ func (f *fakeTransport) Report(r *ReportRequest) error {
 func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
-	db, err := OpenSQLitePool(filepath.Join(dir, "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLite(filepath.Join(dir, "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 		for i := 0; i < n; i++ {
 			ds = append(ds, DetectionReport{Type: TypeExec, Category: cat, Target: cat})
 		}
-		if err := rt.enqueue(&ReportRequest{Detections: ds}); err != nil {
+		if err := queueReport(rt, &ReportRequest{Detections: ds}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -258,13 +258,13 @@ func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	mkReport(CategoryAlert, DefaultOutboxMaxDetection/2)
 	mkReport(CategoryAlert, 10)
 	rt.enforceOutboxLimit()
-	if n := models.OutboxDetectionCount(db); n != DefaultOutboxMaxDetection {
+	if n := models.OutboxDetectionCount(db.Read()); n != DefaultOutboxMaxDetection {
 		t.Fatalf("outbox size %d", n)
 	}
-	if v := models.GetLocalState(db, stateDroppedPending); v != "10" {
+	if v := models.GetLocalState(db.Read(), stateDroppedPending); v != "10" {
 		t.Fatalf("dropped count %q", v)
 	}
-	items, _ := models.ListOutbox(db)
+	items, _ := models.ListOutbox(db.Read())
 	var first ReportRequest
 	_ = json.Unmarshal([]byte(items[0].Payload), &first)
 	if len(first.Detections) != DefaultOutboxMaxDetection/2-10 {
@@ -272,7 +272,7 @@ func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	}
 	tr.fail = false
 	rt.flushOutbox()
-	if len(tr.reports) != 3 || models.OutboxDetectionCount(db) != 0 {
+	if len(tr.reports) != 3 || models.OutboxDetectionCount(db.Read()) != 0 {
 		t.Fatalf("flush: %d reports", len(tr.reports))
 	}
 }

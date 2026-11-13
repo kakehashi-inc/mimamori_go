@@ -49,7 +49,7 @@ func (f *cmdTransport) Report(r *ReportRequest) error {
 func newCommandRuntime(t *testing.T, tr AgentTransport) *AgentRuntime {
 	t.Helper()
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func defsOf(sets ...CommandSetDef) *CommandDefinitions {
 // queuedRuns returns the run reports queued in the outbox, in order.
 func queuedReports(t *testing.T, rt *AgentRuntime) []ReportRequest {
 	t.Helper()
-	items, err := models.ListOutbox(rt.DB)
+	items, err := models.ListOutbox(rt.DB.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestCommandSetOnProblems(t *testing.T) {
 		if len(runs) != 1+c.executed {
 			t.Errorf("%s: %d reports", c.name, len(runs))
 		}
-		if open, _ := models.ListUnfinishedCommandExecutions(rt.DB); len(open) != 0 {
+		if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
 			t.Errorf("%s: the run must be recorded as finished", c.name)
 		}
 	}
@@ -249,7 +249,9 @@ func TestCommandRequestsRunOnce(t *testing.T) {
 		t.Fatalf("no new run: %d reports", n)
 	}
 	// Even a direct attempt is refused by the local record.
-	err := models.InsertCommandExecution(rt.DB, &models.CommandExecution{RunUID: "x", SetID: 1, RequestID: 7, Trigger: TriggerManual, StartedAt: now})
+	err := rt.DB.Write(func(tx models.Writer) error {
+		return models.InsertCommandExecution(tx, &models.CommandExecution{RunUID: "x", SetID: 1, RequestID: 7, Trigger: TriggerManual, StartedAt: now})
+	})
 	if err != models.ErrAlreadyExecuted {
 		t.Fatalf("local record: %v", err)
 	}
@@ -273,8 +275,10 @@ func TestCommandSetInvalidOnAgent(t *testing.T) {
 func TestCommandRunInterrupted(t *testing.T) {
 	rt := newCommandRuntime(t, &cmdTransport{})
 	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "sleep 100", "true")))
-	if err := models.InsertCommandExecution(rt.DB, &models.CommandExecution{RunUID: "u1", SetID: 1, SetRevision: 1, RequestID: 3,
-		Trigger: TriggerManual, StartedAt: 100}); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error {
+		return models.InsertCommandExecution(tx, &models.CommandExecution{RunUID: "u1", SetID: 1, SetRevision: 1, RequestID: 3,
+			Trigger: TriggerManual, StartedAt: 100})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// The agent starts again and finds the run unfinished.
@@ -286,7 +290,7 @@ func TestCommandRunInterrupted(t *testing.T) {
 		r.CommandsTotal != 2 || r.RequestID != 3 || r.StartedAt != 100 {
 		t.Fatalf("interrupted run: %+v", r)
 	}
-	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB); len(open) != 0 {
+	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
 		t.Fatal("the interrupted run must be closed")
 	}
 }
@@ -304,21 +308,23 @@ func TestCommandRunInterruptedCommand(t *testing.T) {
 		{RunUID: "older", SetID: 1, SetRevision: 0, Trigger: TriggerSchedule, ScheduledFor: 60, StartedAt: 90},
 		{RunUID: "between", SetID: 1, SetRevision: 1, Trigger: TriggerManual, StartedAt: 110},
 	} {
-		if err := models.InsertCommandExecution(rt.DB, e); err != nil {
+		if err := rt.DB.Write(func(tx models.Writer) error { return models.InsertCommandExecution(tx, e) }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := models.SetCommandExecutionRunning(rt.DB, "same", 1, 105); err != nil {
-		t.Fatal(err)
-	}
-	if err := models.SetCommandExecutionRunning(rt.DB, "older", 1, 95); err != nil {
-		t.Fatal(err)
-	}
-	// "between" ended between two commands: its last command was reported.
-	if err := models.SetCommandExecutionRunning(rt.DB, "between", 0, 111); err != nil {
-		t.Fatal(err)
-	}
-	if err := models.ClearCommandExecutionRunning(rt.DB, "between"); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error {
+		if err := models.SetCommandExecutionRunning(tx, "same", 1, 105); err != nil {
+			return err
+		}
+		if err := models.SetCommandExecutionRunning(tx, "older", 1, 95); err != nil {
+			return err
+		}
+		// "between" ended between two commands: its last command was reported.
+		if err := models.SetCommandExecutionRunning(tx, "between", 0, 111); err != nil {
+			return err
+		}
+		return models.ClearCommandExecutionRunning(tx, "between")
+	}); err != nil {
 		t.Fatal(err)
 	}
 	before := len(queuedReports(t, rt))
@@ -358,7 +364,7 @@ func TestCommandRunRecordsRunningCommand(t *testing.T) {
 	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true", "sleep 1")))
 	var seen []*models.CommandExecution
 	tr.onSync = func(int) {
-		runs, err := models.ListUnfinishedCommandExecutions(rt.DB)
+		runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
 		if err != nil {
 			t.Error(err)
 		}
@@ -371,7 +377,7 @@ func TestCommandRunRecordsRunningCommand(t *testing.T) {
 	if len(seen) != 1 || seen[0].RunningPosition != 1 || seen[0].RunningStartedAt < start {
 		t.Fatalf("running command seen during the run: %+v", seen)
 	}
-	e, err := models.CommandExecutionByRequest(rt.DB, 5)
+	e, err := models.CommandExecutionByRequest(rt.DB.Read(), 5)
 	if err != nil || e == nil || e.FinishedAt == 0 || e.RunningPosition != -1 || e.RunningStartedAt != 0 {
 		t.Fatalf("after the run: %+v %v", e, err)
 	}
@@ -436,12 +442,12 @@ func TestCommandSchedules(t *testing.T) {
 	// Unchanged definitions delivered again keep the schedule state; a
 	// changed schedule is armed again.
 	rt.storeCommandDefinitions(defsOf(every, daily, manual))
-	if st, _ := models.GetCommandSchedule(rt.DB, 1); st.LastDue != time.Date(2026, 11, 12, 9, 20, 0, 0, loc).Unix() {
+	if st, _ := models.GetCommandSchedule(rt.DB.Read(), 1); st.LastDue != time.Date(2026, 11, 12, 9, 20, 0, 0, loc).Unix() {
 		t.Fatalf("schedule state: %+v", st)
 	}
 	every.Schedule.Every = 10
 	rt.storeCommandDefinitions(defsOf(every, daily))
-	if st, _ := models.GetCommandSchedule(rt.DB, 1); st.LastDue != 0 || st.ArmedAt != now.Unix() {
+	if st, _ := models.GetCommandSchedule(rt.DB.Read(), 1); st.LastDue != 0 || st.ArmedAt != now.Unix() {
 		t.Fatalf("re-armed: %+v", st)
 	}
 	if job := rt.nextCommandJob(); job != nil {
@@ -515,7 +521,7 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	if last.State != ResultError || n != 1 || last.Results[0].Reason != ReasonInterrupted || string(last.Results[0].Output) != "started\n" {
 		t.Fatalf("stopped run: %+v", last)
 	}
-	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB); len(open) != 0 {
+	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
 		t.Fatal("a stopped run is reported, not left unfinished")
 	}
 }
@@ -563,14 +569,14 @@ func TestCommandOutbox(t *testing.T) {
 	rt.queueCommandReport(mk(PurposeRunOnly, false))
 	rt.queueCommandReport(&ReportRequest{CommandRequestAcks: []CommandRequestAck{{RequestID: 1, Status: RequestAckStarted}}})
 	// A regular report does not replace queued command set reports.
-	if err := rt.enqueue(&ReportRequest{}); err != nil {
+	if err := queueReport(rt, &ReportRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if n := models.CountOutbox(rt.DB); n != 4 {
+	if n := models.CountOutbox(rt.DB.Read()); n != 4 {
 		t.Fatalf("command set reports must be kept: %d", n)
 	}
 	// Over the limit: the output of run_only sets goes first.
-	total := models.OutboxCommandBytes(rt.DB)
+	total := models.OutboxCommandBytes(rt.DB.Read())
 	rt.cmdOutboxLimit = total - 1000
 	rt.enforceCommandOutboxLimit()
 	runs := runReports(queuedReports(t, rt))
@@ -580,7 +586,7 @@ func TestCommandOutbox(t *testing.T) {
 	// Far over the limit: outputs, then whole reports, oldest first.
 	rt.cmdOutboxLimit = 10
 	rt.queueCommandReport(mk(PurposeCollectOutput, true))
-	if b := models.OutboxCommandBytes(rt.DB); b > 10 {
+	if b := models.OutboxCommandBytes(rt.DB.Read()); b > 10 {
 		t.Fatalf("the limit must hold: %d", b)
 	}
 	if acks := acksOf(queuedReports(t, rt)); len(acks) != 1 {

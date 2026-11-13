@@ -746,7 +746,7 @@ func TestCommandSetEndToEnd(t *testing.T) {
 	setID := itoa64(int64(set["id"].(float64)))
 	e.admin("POST", base+"/command-sets/"+setID+"/run", nil)
 
-	db, err := modules.OpenSQLitePool(filepath.Join(t.TempDir(), "agent.db"), modules.SchemaAgentLocal)
+	db, err := modules.OpenSQLite(filepath.Join(t.TempDir(), "agent.db"), modules.SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}

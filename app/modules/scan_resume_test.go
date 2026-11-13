@@ -99,7 +99,7 @@ func TestWritableScanContinues(t *testing.T) {
 		for _, d := range rt.scanFiles(c, res, time.Unix(start+int64(i)*10, 0)) {
 			seen[d.Target]++
 		}
-		resume := models.GetLocalState(rt.DB, stateWritableResume)
+		resume := models.GetLocalState(rt.DB.Read(), stateWritableResume)
 		if (i < checks-1) != (resume != "") {
 			t.Fatalf("check %d: resume %q", i, resume)
 		}
@@ -118,14 +118,14 @@ func TestWritableScanContinues(t *testing.T) {
 	if len(seen) != len(files) {
 		t.Fatalf("reported: %v", seen)
 	}
-	if got := models.GetLocalState(rt.DB, stateLastFullScan); got != fmt.Sprint(start) {
+	if got := models.GetLocalState(rt.DB.Read(), stateLastFullScan); got != fmt.Sprint(start) {
 		t.Fatalf("last full scan %s, want the start of the pass %d", got, start)
 	}
 	if sc := rt.incompleteScans(); len(sc) != 0 {
 		t.Fatalf("complete: %+v", sc)
 	}
 	// Before the interval: nothing scanned.
-	if out := rt.scanFiles(c, res, time.Unix(start+60, 0)); len(out) != 0 || models.GetLocalState(rt.DB, stateWritableResume) != "" {
+	if out := rt.scanFiles(c, res, time.Unix(start+60, 0)); len(out) != 0 || models.GetLocalState(rt.DB.Read(), stateWritableResume) != "" {
 		t.Fatal("scanned before the interval")
 	}
 	// The next pass reports nothing again (the findings of the parts
@@ -135,7 +135,7 @@ func TestWritableScanContinues(t *testing.T) {
 			t.Fatalf("second pass check %d reported %+v", i, out)
 		}
 	}
-	if models.GetLocalState(rt.DB, stateWritableResume) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateWritableResume) != "" {
 		t.Fatal("the second pass did not complete")
 	}
 }
@@ -219,12 +219,12 @@ func TestExecScanContinues(t *testing.T) {
 	if out := rt.scanFiles(c, res, time.Unix(t0+10, 0)); len(out) != 0 {
 		t.Fatalf("check 1: %+v", out)
 	}
-	stop1 := models.GetLocalState(rt.DB, stateExecResume)
+	stop1 := models.GetLocalState(rt.DB.Read(), stateExecResume)
 	if stop1 != filepath.Join(base, "a/storage/f3.php") {
 		t.Fatalf("first stop %q", stop1)
 	}
 	var segs []sinceSegment
-	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateExecSince)), &segs)
+	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateExecSince)), &segs)
 	if len(segs) != 2 || segs[0].Since != t0+9 || segs[1].From != stop1 || segs[1].Since != t0-1 {
 		t.Fatalf("since times after the first part: %+v", segs)
 	}
@@ -245,7 +245,7 @@ func TestExecScanContinues(t *testing.T) {
 	if len(reported) != 1 || reported[0] != changed {
 		t.Fatalf("the changed file must be reported once: %v", reported)
 	}
-	if models.GetLocalState(rt.DB, stateExecResume) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateExecResume) != "" {
 		t.Fatal("the pass did not complete")
 	}
 	// The next pass reports nothing again.
@@ -290,7 +290,7 @@ func TestNewRootKeepsSinceUntilWalked(t *testing.T) {
 		t.Fatalf("file in a new root: %v", reported)
 	}
 	var rs map[string]int64
-	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateRootSince)), &rs)
+	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateRootSince)), &rs)
 	if len(rs) != 0 {
 		t.Fatalf("own since times left: %v", rs)
 	}

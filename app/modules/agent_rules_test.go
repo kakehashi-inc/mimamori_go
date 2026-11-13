@@ -182,8 +182,8 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 
 	ra := &RuleAssignment{ID: 3, Version: 2, Name: "web"}
 	b, _ := json.Marshal(ra)
-	_ = models.SetLocalState(rt.DB, stateRule, string(b))
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	setLocalState(t, rt.DB, stateRule, string(b))
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
 	rt.removeAudit = func(*AuditGlobals) error {
 		removed++
@@ -203,7 +203,7 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	if removed != 3 || rt.rule != nil || rt.lastApply == nil || rt.lastApply.Status != ApplyStatusNone || rt.lastApply.RuleID != 0 {
 		t.Fatalf("removal: %d %+v %+v", removed, rt.rule, rt.lastApply)
 	}
-	if models.GetLocalState(rt.DB, stateRule) != "" || models.GetLocalState(rt.DB, stateApply) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateRule) != "" || models.GetLocalState(rt.DB.Read(), stateApply) != "" {
 		t.Fatal("the stored rule and application result must be cleared")
 	}
 	// The report carries the result, so the central shows nothing applied.
@@ -229,12 +229,12 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 func TestResetStoredRule(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
-	if err := resetStoredRule(rt.DB); err != nil || models.GetLocalState(rt.DB, stateApply) != "" {
+	if err := rt.DB.Write(resetStoredRule); err != nil || models.GetLocalState(rt.DB.Read(), stateApply) != "" {
 		t.Fatalf("nothing stored: nothing to do (%v)", err)
 	}
-	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
-	if err := resetStoredRule(rt.DB); err != nil {
+	setLocalState(t, rt.DB, stateRule, `{"id":3,"version":2}`)
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	if err := rt.DB.Write(resetStoredRule); err != nil {
 		t.Fatal(err)
 	}
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
@@ -262,8 +262,8 @@ func TestClearStoredRule(t *testing.T) {
 	if _, err := os.Stat(calls); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("without a record no audit command may run")
 	}
-	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	setLocalState(t, rt.DB, stateRule, `{"id":3,"version":2}`)
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
 	if err := os.WriteFile(auditRulesFile, []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestClearStoredRule(t *testing.T) {
 	if _, err := os.Stat(auditRulesFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the rules file must be removed")
 	}
-	if models.GetLocalState(rt.DB, stateRule) != "" || models.GetLocalState(rt.DB, stateApply) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateRule) != "" || models.GetLocalState(rt.DB.Read(), stateApply) != "" {
 		t.Fatal("the record must be cleared")
 	}
 	// Once: the next call finds no record.

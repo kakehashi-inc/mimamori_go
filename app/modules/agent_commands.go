@@ -60,7 +60,7 @@ func (rt *AgentRuntime) commandSignature() string {
 
 // loadCommandDefinitions restores the stored definitions at start.
 func (rt *AgentRuntime) loadCommandDefinitions() {
-	v := models.GetLocalState(rt.DB, StateCommandDefinitions)
+	v := models.GetLocalState(rt.DB.Read(), StateCommandDefinitions)
 	if v == "" {
 		return
 	}
@@ -75,11 +75,12 @@ func (rt *AgentRuntime) loadCommandDefinitions() {
 // acceptCommandDefinitions takes definitions into use: the valid sets can run
 // (a set that fails validation on the agent is not run and is reported), and
 // the schedule state of each scheduled set is armed when it is new or
-// changed.
+// changed. The schedule states are armed and the old ones removed in one
+// transaction (arming reads the stored state to decide).
 func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []CommandApplyProblem {
 	problems := []CommandApplyProblem{}
 	valid := map[int64]*CommandSetDef{}
-	var scheduled []int64
+	var scheduled []*CommandSetDef
 	now := rt.now().Unix()
 	for i := range defs.Sets {
 		d := defs.Sets[i]
@@ -89,13 +90,25 @@ func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []Com
 		}
 		valid[d.ID] = &d
 		if d.RunMode == RunModeSchedule && d.Schedule != nil {
-			scheduled = append(scheduled, d.ID)
-			if _, err := models.ArmCommandSchedule(rt.DB, d.ID, ScheduleSignature(&d), now); err != nil {
-				rt.logf("command set %q: storing the schedule state failed: %v", d.Name, err)
-			}
+			scheduled = append(scheduled, &d)
 		}
 	}
-	if err := models.DeleteCommandSchedulesExcept(rt.DB, scheduled); err != nil {
+	var failedSet *CommandSetDef // the set whose schedule state could not be stored
+	err := rt.DB.Write(func(tx models.Writer) error {
+		ids := make([]int64, 0, len(scheduled))
+		for _, d := range scheduled {
+			ids = append(ids, d.ID)
+			if _, err := models.ArmCommandSchedule(tx, d.ID, ScheduleSignature(d), now); err != nil {
+				failedSet = d
+				return err
+			}
+		}
+		return models.DeleteCommandSchedulesExcept(tx, ids)
+	})
+	switch {
+	case err != nil && failedSet != nil:
+		rt.logf("command set %q: storing the schedule state failed: %v", failedSet.Name, err)
+	case err != nil:
 		rt.logf("removing old schedule states failed: %v", err)
 	}
 	rt.cmdDefs = defs
@@ -115,7 +128,9 @@ func (rt *AgentRuntime) storeCommandDefinitions(defs *CommandDefinitions) {
 		rt.logf("command set definitions not stored: %v", err)
 		return
 	}
-	if err := models.SetLocalState(rt.DB, StateCommandDefinitions, string(b)); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error {
+		return models.SetLocalState(tx, StateCommandDefinitions, string(b))
+	}); err != nil {
 		// Not taken into use; the central delivers them again.
 		rt.logf("command set definitions not stored: %v", err)
 		return
@@ -141,7 +156,7 @@ func (rt *AgentRuntime) receiveCommandRequests(reqs []CommandRunRequest) {
 		if rt.cmdAcked[r.ID] || slices.ContainsFunc(rt.cmdRequests, func(q CommandRunRequest) bool { return q.ID == r.ID }) {
 			continue
 		}
-		if e, err := models.CommandExecutionByRequest(rt.DB, r.ID); err == nil && e != nil {
+		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), r.ID); err == nil && e != nil {
 			acks = append(acks, CommandRequestAck{RequestID: r.ID, Status: RequestAckStarted, RunUID: e.RunUID, At: now})
 			continue
 		}
@@ -178,7 +193,7 @@ func (rt *AgentRuntime) nextCommandJob() *commandJob {
 	for len(rt.cmdRequests) > 0 {
 		r := rt.cmdRequests[0]
 		rt.cmdRequests = rt.cmdRequests[1:]
-		if e, err := models.CommandExecutionByRequest(rt.DB, r.ID); err == nil && e != nil {
+		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), r.ID); err == nil && e != nil {
 			rt.queueAcks([]CommandRequestAck{{RequestID: r.ID, Status: RequestAckStarted, RunUID: e.RunUID, At: now.Unix()}})
 			continue
 		}
@@ -192,7 +207,7 @@ func (rt *AgentRuntime) nextCommandJob() *commandJob {
 	var best *commandJob
 	for _, id := range rt.scheduledSetIDs() {
 		def := rt.cmdValid[id]
-		st, err := models.GetCommandSchedule(rt.DB, id)
+		st, err := models.GetCommandSchedule(rt.DB.Read(), id)
 		if err != nil || st == nil {
 			continue
 		}
@@ -232,14 +247,17 @@ func (rt *AgentRuntime) nextScheduleDue() (time.Time, bool) {
 }
 
 // runCommandJob runs a set to its end with the definition of the job. It
-// returns false when the run could not be started.
+// returns false when the run could not be started. Each record of the run is
+// its own transaction: the commands run between them.
 func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	def := job.def
 	now := rt.now().Unix()
 	if job.trigger == TriggerSchedule {
 		// Recorded before the run, so that an occurrence is never run twice
 		// (a run cut short by a crash is reported as interrupted).
-		if err := models.SetCommandScheduleLastDue(rt.DB, def.ID, job.scheduledFor); err != nil {
+		if err := rt.DB.Write(func(tx models.Writer) error {
+			return models.SetCommandScheduleLastDue(tx, def.ID, job.scheduledFor)
+		}); err != nil {
 			rt.logf("command set %q: recording the schedule failed, not run: %v", def.Name, err)
 			return false
 		}
@@ -251,9 +269,10 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	}
 	exec := &models.CommandExecution{RunUID: uid, SetID: def.ID, SetRevision: def.Revision, RequestID: job.requestID,
 		Trigger: job.trigger, ScheduledFor: job.scheduledFor, StartedAt: now}
-	if err := models.InsertCommandExecution(rt.DB, exec); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error { return models.InsertCommandExecution(tx, exec) }); err != nil {
 		if errors.Is(err, models.ErrAlreadyExecuted) {
-			if e, err := models.CommandExecutionByRequest(rt.DB, job.requestID); err == nil && e != nil {
+			// Only for the answer: the run that was recorded first.
+			if e, err := models.CommandExecutionByRequest(rt.DB.Read(), job.requestID); err == nil && e != nil {
 				rt.queueAcks([]CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: e.RunUID, At: now}})
 			}
 			return true
@@ -299,7 +318,10 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 		c := &def.Commands[i]
 		// Recorded while the command runs, so that a run cut short by the end
 		// of the agent reports this command as interrupted at the next start.
-		if err := models.SetCommandExecutionRunning(rt.DB, uid, i, time.Now().Unix()); err != nil {
+		startedAt := time.Now().Unix()
+		if err := rt.DB.Write(func(tx models.Writer) error {
+			return models.SetCommandExecutionRunning(tx, uid, i, startedAt)
+		}); err != nil {
 			rt.logf("command set %q: recording the running command of run %s failed: %v", def.Name, uid, err)
 		}
 		res := ExecuteCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
@@ -316,7 +338,7 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			closed = true
 		}
 		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
-		if err := models.ClearCommandExecutionRunning(rt.DB, uid); err != nil {
+		if err := rt.DB.Write(func(tx models.Writer) error { return models.ClearCommandExecutionRunning(tx, uid) }); err != nil {
 			rt.logf("command set %q: recording the end of a command of run %s failed: %v", def.Name, uid, err)
 		}
 		if last {
@@ -333,7 +355,8 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 		finish(&rep, reason)
 		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
 	}
-	if err := models.FinishCommandExecution(rt.DB, uid, rt.now().Unix()); err != nil {
+	finishedAt := rt.now().Unix()
+	if err := rt.DB.Write(func(tx models.Writer) error { return models.FinishCommandExecution(tx, uid, finishedAt) }); err != nil {
 		rt.logf("command set %q: recording the end of run %s failed: %v", def.Name, uid, err)
 	}
 	rt.logf("command set %q finished: %s", def.Name, RunState(kinds))
@@ -343,9 +366,11 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 // recoverInterruptedRuns reports the runs found unfinished at start (the
 // agent ended while they ran) as interrupted. The command that was running
 // gets an interrupted result (the central keeps a result already reported
-// for its position).
+// for its position). The report of a run is queued and the run is recorded
+// as finished in one transaction, so that a run is never reported twice nor
+// finished without its report.
 func (rt *AgentRuntime) recoverInterruptedRuns() {
-	runs, err := models.ListUnfinishedCommandExecutions(rt.DB)
+	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
 	if err != nil {
 		rt.logf("reading unfinished command set runs failed: %v", err)
 		return
@@ -372,9 +397,27 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 			}
 			rep.Results = append(rep.Results, res)
 		}
-		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
-		if err := models.FinishCommandExecution(rt.DB, e.RunUID, now); err != nil {
+		item, err := rt.commandReportItem(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
+		if err != nil {
+			rt.logf("failed to queue a command set report: %v", err)
+		}
+		queueFailed := false
+		err = rt.DB.Write(func(tx models.Writer) error {
+			if item != nil {
+				if err := models.InsertOutbox(tx, item); err != nil {
+					queueFailed = true
+					return err
+				}
+			}
+			return models.FinishCommandExecution(tx, e.RunUID, now)
+		})
+		switch {
+		case err != nil && queueFailed:
+			rt.logf("failed to queue a command set report: %v", err)
+		case err != nil:
 			rt.logf("recording the end of run %s failed: %v", e.RunUID, err)
+		case item != nil:
+			rt.enforceCommandOutboxLimit()
 		}
 		rt.logf("command set run %s was interrupted (the agent ended while it ran)", e.RunUID)
 	}
@@ -396,17 +439,27 @@ func (rt *AgentRuntime) findCommandSet(id int64) *CommandSetDef {
 // queueCommandReport queues a report about command sets in the outbox; it is
 // sent with the next report.
 func (rt *AgentRuntime) queueCommandReport(req *ReportRequest) {
-	req.CreatedAt = rt.now().Unix()
-	b, err := json.Marshal(req)
+	item, err := rt.commandReportItem(req)
 	if err != nil {
 		rt.logf("failed to queue a command set report: %v", err)
 		return
 	}
-	if err := models.InsertOutbox(rt.DB, &models.OutboxItem{Payload: string(b), CommandBytes: commandBytesOf(req, len(b))}); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error { return models.InsertOutbox(tx, item) }); err != nil {
 		rt.logf("failed to queue a command set report: %v", err)
 		return
 	}
 	rt.enforceCommandOutboxLimit()
+}
+
+// commandReportItem stamps a report about command sets with the current time
+// and returns the outbox row that queues it.
+func (rt *AgentRuntime) commandReportItem(req *ReportRequest) (*models.OutboxItem, error) {
+	req.CreatedAt = rt.now().Unix()
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	return &models.OutboxItem{Payload: string(b), CommandBytes: commandBytesOf(req, len(b))}, nil
 }
 
 // commandBytesOf is the size counted against the outbox limit of command set
@@ -423,76 +476,95 @@ func commandBytesOf(req *ReportRequest, size int) int64 {
 // run_only sets, then of collect_output sets (their values are kept, the
 // results are marked truncated), then the reports of commands that do not
 // close a run, and last the closing reports.
+//
+// The total is checked on the read side first (it is under the limit on
+// almost every report); the rows are then listed and rewritten in one
+// transaction.
 func (rt *AgentRuntime) enforceCommandOutboxLimit() {
 	limit := int64(MaxOutboxCommandBytes)
 	if rt.cmdOutboxLimit > 0 {
 		limit = rt.cmdOutboxLimit
 	}
-	total := models.OutboxCommandBytes(rt.DB)
-	if total <= limit {
+	if models.OutboxCommandBytes(rt.DB.Read()) <= limit {
 		return
 	}
-	items, err := models.ListOutbox(rt.DB)
-	if err != nil {
-		return
-	}
-	dropped := 0
-	for pass := 0; pass < 4 && total > limit; pass++ {
-		for _, it := range items {
-			if total <= limit {
-				break
-			}
-			if it.CommandBytes == 0 {
-				continue
-			}
-			var req ReportRequest
-			if json.Unmarshal([]byte(it.Payload), &req) != nil {
-				continue
-			}
-			changed := false
-			kept := req.CommandRuns[:0]
-			for _, run := range req.CommandRuns {
-				switch pass {
-				case 0, 1:
-					if (pass == 0) != (run.Purpose == PurposeRunOnly) {
-						break
-					}
-					for j := range run.Results {
-						if len(run.Results[j].Output) > 0 {
-							run.Results[j].Output = nil
-							run.Results[j].Truncated = true
+	over, dropped := false, 0
+	err := rt.DB.Write(func(tx models.Writer) error {
+		over, dropped = false, 0
+		total := models.OutboxCommandBytes(tx)
+		if total <= limit {
+			return nil
+		}
+		over = true
+		items, err := models.ListOutbox(tx)
+		if err != nil {
+			return err
+		}
+		for pass := 0; pass < 4 && total > limit; pass++ {
+			for _, it := range items {
+				if total <= limit {
+					break
+				}
+				if it.CommandBytes == 0 {
+					continue
+				}
+				var req ReportRequest
+				if json.Unmarshal([]byte(it.Payload), &req) != nil {
+					continue
+				}
+				changed := false
+				kept := req.CommandRuns[:0]
+				for _, run := range req.CommandRuns {
+					switch pass {
+					case 0, 1:
+						if (pass == 0) != (run.Purpose == PurposeRunOnly) {
+							break
+						}
+						for j := range run.Results {
+							if len(run.Results[j].Output) > 0 {
+								run.Results[j].Output = nil
+								run.Results[j].Truncated = true
+								changed = true
+							}
+						}
+					case 2, 3:
+						if (pass == 3) == run.Finished {
 							changed = true
+							dropped++
+							continue
 						}
 					}
-				case 2, 3:
-					if (pass == 3) == run.Finished {
-						changed = true
-						dropped++
-						continue
-					}
+					kept = append(kept, run)
 				}
-				kept = append(kept, run)
+				req.CommandRuns = kept
+				if !changed {
+					continue
+				}
+				if len(req.CommandRuns) == 0 && len(req.Detections) == 0 && len(req.CommandRequestAcks) == 0 &&
+					req.CommandApply == nil && req.Dropped == 0 && req.HostInfo == nil && req.Apply == nil {
+					if err := models.DeleteOutbox(tx, it.ID); err != nil {
+						return err
+					}
+					total -= it.CommandBytes
+					it.CommandBytes = 0
+					continue
+				}
+				b, err := json.Marshal(&req)
+				if err != nil {
+					continue
+				}
+				nb := commandBytesOf(&req, len(b))
+				total -= it.CommandBytes - nb
+				it.Payload, it.CommandBytes = string(b), nb
+				if err := models.UpdateOutbox(tx, it); err != nil {
+					return err
+				}
 			}
-			req.CommandRuns = kept
-			if !changed {
-				continue
-			}
-			if len(req.CommandRuns) == 0 && len(req.Detections) == 0 && len(req.CommandRequestAcks) == 0 &&
-				req.CommandApply == nil && req.Dropped == 0 && req.HostInfo == nil && req.Apply == nil {
-				_ = models.DeleteOutbox(rt.DB, it.ID)
-				total -= it.CommandBytes
-				it.CommandBytes = 0
-				continue
-			}
-			b, err := json.Marshal(&req)
-			if err != nil {
-				continue
-			}
-			nb := commandBytesOf(&req, len(b))
-			total -= it.CommandBytes - nb
-			it.Payload, it.CommandBytes = string(b), nb
-			_ = models.UpdateOutbox(rt.DB, it)
 		}
+		return nil
+	})
+	if err != nil || !over {
+		return
 	}
 	if dropped > 0 {
 		rt.logf("report storage limit reached: dropped %d command set report(s)", dropped)
@@ -503,5 +575,9 @@ func (rt *AgentRuntime) enforceCommandOutboxLimit() {
 
 // pruneCommandExecutions removes old records of finished runs.
 func (rt *AgentRuntime) pruneCommandExecutions() {
-	_, _ = models.DeleteFinishedCommandExecutionsBefore(rt.DB, rt.now().Add(-commandExecutionKeep).Unix())
+	cut := rt.now().Add(-commandExecutionKeep).Unix()
+	_ = rt.DB.Write(func(tx models.Writer) error {
+		_, err := models.DeleteFinishedCommandExecutionsBefore(tx, cut)
+		return err
+	})
 }

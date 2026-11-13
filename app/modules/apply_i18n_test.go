@@ -71,7 +71,7 @@ func TestApplyValidationFailedMessage(t *testing.T) {
 		}
 		// The stored result keeps both.
 		var stored ApplyResult
-		if err := json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateApply)), &stored); err != nil || stored.Message != want {
+		if err := json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateApply)), &stored); err != nil || stored.Message != want {
 			t.Fatalf("content %d: stored %+v (%v)", i, stored, err)
 		}
 		checkCoded(t, fmt.Sprint("stored content ", i), stored.MessageI18n, "apply.validation_failed", want)
@@ -152,7 +152,7 @@ func TestRulesFileMessages(t *testing.T) {
 func TestRemoveFailureMessage(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
 	cause := errors.Join(M("apply.immutable"), errors.New("auditctl: exit 1: busy"))
 	rt.removeAudit = func(*AuditGlobals) error { return cause }
@@ -177,12 +177,12 @@ func TestRemoveFailureMessage(t *testing.T) {
 func TestResetStoredRuleMessage(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
-	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
-	if err := resetStoredRule(rt.DB); err != nil {
+	setLocalState(t, rt.DB, stateRule, `{"id":3,"version":2}`)
+	if err := rt.DB.Write(resetStoredRule); err != nil {
 		t.Fatal(err)
 	}
 	var ap ApplyResult
-	if err := json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateApply)), &ap); err != nil {
+	if err := json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateApply)), &ap); err != nil {
 		t.Fatal(err)
 	}
 	want := "the stored rule was cleared when the agent was initialized again; the next sync decides"

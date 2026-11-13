@@ -149,12 +149,13 @@ func (c *AgentStatusCmd) Run() error {
 	dbPath := filepath.Join(dir, AgentLocalDBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
 		fmt.Printf("%-16s not initialized (run agent init)\n", "configuration:")
-	} else if db, err := OpenSQLitePool(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
+	} else if db, err := OpenSQLite(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	} else if err != nil {
 		fmt.Printf("%-16s %v\n", "local database:", err)
 	} else {
-		if cfg, err := LoadAgentConfig(db); err == nil {
+		rd := db.Read()
+		if cfg, err := LoadAgentConfig(rd); err == nil {
 			fmt.Printf("%-16s %s\n", "central:", cfg.CentralAddress())
 			fmt.Printf("%-16s %s\n", "token name:", cfg.TokenName)
 			if cfg.TokenExpiresAt > 0 {
@@ -164,16 +165,16 @@ func (c *AgentStatusCmd) Run() error {
 			fmt.Printf("%-16s %v\n", "configuration:", err)
 		}
 		var rule RuleAssignment
-		if json.Unmarshal([]byte(models.GetLocalState(db, stateRule)), &rule) == nil && rule.ID > 0 {
+		if json.Unmarshal([]byte(models.GetLocalState(rd, stateRule)), &rule) == nil && rule.ID > 0 {
 			fmt.Printf("%-16s %s (version %d)\n", "rule:", rule.Name, rule.Version)
 		} else {
 			fmt.Printf("%-16s none\n", "rule:")
 		}
 		var ap ApplyResult
-		if json.Unmarshal([]byte(models.GetLocalState(db, stateApply)), &ap) == nil && ap.Status != "" {
+		if json.Unmarshal([]byte(models.GetLocalState(rd, stateApply)), &ap) == nil && ap.Status != "" {
 			fmt.Printf("%-16s %s: %s\n", "last apply:", ap.Status, ap.Message)
 		}
-		fmt.Printf("%-16s %d report(s), %d detection(s)\n", "unsent:", outboxRows(db), models.OutboxDetectionCount(db))
+		fmt.Printf("%-16s %d report(s), %d detection(s)\n", "unsent:", outboxRows(rd), models.OutboxDetectionCount(rd))
 		db.Close()
 	}
 	if !running {

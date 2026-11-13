@@ -48,7 +48,7 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 	if _, err := os.Stat(path); err != nil {
 		return
 	}
-	db, err := modules.OpenSQLitePool(path, modules.SchemaAgentLocal)
+	db, err := modules.OpenSQLite(path, modules.SchemaAgentLocal)
 	if err != nil {
 		c.logger.Printf("built-in agent: local database: %v", err)
 		return
@@ -88,7 +88,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 		c.setBuiltinStatus(false, modules.M("builtin.auditd_unusable", "cause", modules.AsMsg(err)))
 		return none
 	}
-	db, err := modules.OpenSQLitePool(filepath.Join(c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
+	db, err := modules.OpenSQLite(filepath.Join(c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	if err != nil {
 		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
 		return none

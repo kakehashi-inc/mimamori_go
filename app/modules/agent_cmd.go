@@ -96,12 +96,12 @@ func AgentInit(o AgentInitOptions) error {
 	agentID := ""
 	var created []string
 	if _, err := os.Stat(dbPath); err == nil {
-		db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
+		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 		if err != nil {
 			return DBOpenFailed(err, ExitFileIO, "local database")
 		}
-		agentID = models.GetLocalState(db, agentCfgID)
-		_, cfgErr := LoadAgentConfig(db)
+		agentID = models.GetLocalState(db.Read(), agentCfgID)
+		_, cfgErr := LoadAgentConfig(db.Read())
 		db.Close()
 		if !errors.Is(cfgErr, ErrAgentNotInitialized) && !o.Overwrite {
 			return NewExitError(ExitArgument, "the agent is already initialized; use --overwrite to replace it")
@@ -142,7 +142,7 @@ func AgentInit(o AgentInitOptions) error {
 			}
 		}
 	}
-	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
 		removeCreated(created)
 		return DBOpenFailed(err, ExitFileIO, "local database")
@@ -160,11 +160,13 @@ func AgentInit(o AgentInitOptions) error {
 	}
 	// 5. save the configuration; a rule stored by the previous
 	// initialization is cleared (the next sync applies the assigned rule or
-	// removes the audit rules)
-	err = withLocalTx(db, cfg.Save)
-	if err == nil {
-		err = resetStoredRule(db)
-	}
+	// removes the audit rules). Both are one transaction.
+	err = db.Write(func(tx models.Writer) error {
+		if err := cfg.Save(tx); err != nil {
+			return err
+		}
+		return resetStoredRule(tx)
+	})
 	db.Close()
 	if err != nil {
 		removeCreated(created)
@@ -309,12 +311,12 @@ func AgentSetCentral(dataDir, host string, port int) error {
 		return NewExitError(ExitConfig, "the agent is running; stop it before changing the central host")
 	}
 	defer lock.Release()
-	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	}
 	defer db.Close()
-	cfg, err := LoadAgentConfig(db)
+	cfg, err := LoadAgentConfig(db.Read())
 	if err != nil {
 		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}
@@ -330,11 +332,11 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	// Report the rule in effect so the central's view does not change.
 	req := &SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)}
 	var rule RuleAssignment
-	if json.Unmarshal([]byte(models.GetLocalState(db, stateRule)), &rule) == nil && rule.ID > 0 {
+	if json.Unmarshal([]byte(models.GetLocalState(db.Read(), stateRule)), &rule) == nil && rule.ID > 0 {
 		req.RuleID, req.RuleVersion = rule.ID, rule.Version
 	}
 	var ap ApplyResult
-	if json.Unmarshal([]byte(models.GetLocalState(db, stateApply)), &ap) == nil && ap.Status != "" {
+	if json.Unmarshal([]byte(models.GetLocalState(db.Read(), stateApply)), &ap) == nil && ap.Status != "" {
 		req.LastApply = &ap
 	}
 	resp, err := syncCheck(tr, req)
@@ -347,7 +349,7 @@ func AgentSetCentral(dataDir, host string, port int) error {
 		return NewExitErrorf(code, "cannot use %s: %v (nothing was changed)", cfg.CentralAddress(), err)
 	}
 	cfg.applySyncResponse(resp)
-	if err := withLocalTx(db, cfg.Save); err != nil {
+	if err := db.Write(cfg.Save); err != nil {
 		return NewExitErrorf(ExitFileIO, "local database: %v", err)
 	}
 	fmt.Printf("Central changed from %s to %s.\n", prev, cfg.CentralAddress())
@@ -369,12 +371,12 @@ func AgentStart(dataDir string) error {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	}
 	defer db.Close()
-	cfg, err := LoadAgentConfig(db)
+	cfg, err := LoadAgentConfig(db.Read())
 	if err != nil {
 		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}

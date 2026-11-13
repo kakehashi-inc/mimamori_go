@@ -65,13 +65,14 @@ func TestScanFilesAfterScanConfigChange(t *testing.T) {
 	if out := rt.scanFiles(c3, res3, time.Unix(now+30, 0)); len(out) != 1 || out[0].Target != inUploads {
 		t.Fatalf("scan after an allowed path was added: %+v", out)
 	}
-	if models.GetLocalState(rt.DB, stateScanPrevRoots) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateScanPrevRoots) != "" {
 		t.Error("the remembered roots were not cleared after the full scan")
 	}
 }
 
-// Transactions that read and then write must wait for each other instead of
-// failing with "database is locked".
+// Transactions of the agent's runtime that read and then write wait for
+// each other instead of failing with "database is locked", and none loses
+// the update of another.
 func TestWriteTransactionsWait(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
@@ -82,18 +83,11 @@ func TestWriteTransactionsWait(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
-				tx, err := rt.DB.Begin()
+				err := rt.DB.Write(func(tx models.Writer) error {
+					v := models.GetLocalState(tx, "counter")
+					return models.SetLocalState(tx, "counter", v+"x")
+				})
 				if err != nil {
-					errs <- err
-					return
-				}
-				v := models.GetLocalState(tx, "counter")
-				if err := models.SetLocalState(tx, "counter", v+"x"); err != nil {
-					_ = tx.Rollback()
-					errs <- err
-					return
-				}
-				if err := tx.Commit(); err != nil {
 					errs <- err
 					return
 				}
@@ -105,7 +99,7 @@ func TestWriteTransactionsWait(t *testing.T) {
 	for err := range errs {
 		t.Fatalf("transaction failed: %v", err)
 	}
-	if got := len(models.GetLocalState(rt.DB, "counter")); got != 160 {
+	if got := len(models.GetLocalState(rt.DB.Read(), "counter")); got != 160 {
 		t.Errorf("counter length = %d, want 160 (an update was lost)", got)
 	}
 }

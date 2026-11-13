@@ -45,14 +45,14 @@ func TestAuditGlobalsRecordedAndRestored(t *testing.T) {
 	if got := globalsFromFake(t); got != appliedGlobals {
 		t.Fatalf("settings after apply: %+v", got)
 	}
-	if g := storedAuditGlobals(rt.DB); calls != 1 || g == nil || *g != fakeOriginalGlobals {
+	if g := storedAuditGlobals(rt.DB.Read()); calls != 1 || g == nil || *g != fakeOriginalGlobals {
 		t.Fatalf("record after the first application: %d %+v", calls, g)
 	}
 	// Applied again (rules of this system are loaded): no new record.
 	if _, err := ApplyAuditRules([]string{ownConnectRule}, record); err != nil {
 		t.Fatal(err)
 	}
-	if g := storedAuditGlobals(rt.DB); calls != 1 || *g != fakeOriginalGlobals {
+	if g := storedAuditGlobals(rt.DB.Read()); calls != 1 || *g != fakeOriginalGlobals {
 		t.Fatalf("a later application must keep the record: %d %+v", calls, g)
 	}
 
@@ -66,7 +66,7 @@ func TestAuditGlobalsRecordedAndRestored(t *testing.T) {
 	if got := globalsFromFake(t); got != fakeOriginalGlobals {
 		t.Fatalf("settings after removal: %+v", got)
 	}
-	if readFile(t, state) != "" || models.GetLocalState(rt.DB, stateAuditGlobals) != "" {
+	if readFile(t, state) != "" || models.GetLocalState(rt.DB.Read(), stateAuditGlobals) != "" {
 		t.Fatal("the rules and the record must be gone")
 	}
 
@@ -78,7 +78,7 @@ func TestAuditGlobalsRecordedAndRestored(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := AuditGlobals{BacklogLimit: 320, BacklogWaitTime: 60000, Failure: 1}
-	if g := storedAuditGlobals(rt.DB); calls != 2 || g == nil || *g != want {
+	if g := storedAuditGlobals(rt.DB.Read()); calls != 2 || g == nil || *g != want {
 		t.Fatalf("record after applying again: %d %+v", calls, g)
 	}
 }
@@ -106,7 +106,7 @@ func TestAuditGlobalsRestoreFailure(t *testing.T) {
 	if rt.lastApply.Status != "error" || !strings.Contains(rt.lastApply.Message, "setting the global audit settings back") {
 		t.Fatalf("the failure must be reported: %+v", rt.lastApply)
 	}
-	if g := storedAuditGlobals(rt.DB); g == nil || *g != fakeOriginalGlobals || rt.rule == nil {
+	if g := storedAuditGlobals(rt.DB.Read()); g == nil || *g != fakeOriginalGlobals || rt.rule == nil {
 		t.Fatalf("the record must stay for the next try: %+v %+v", g, rt.rule)
 	}
 	// The other settings were set back all the same.
@@ -118,7 +118,7 @@ func TestAuditGlobalsRestoreFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.removeRule()
-	if rt.lastApply.Status != ApplyStatusNone || storedAuditGlobals(rt.DB) != nil {
+	if rt.lastApply.Status != ApplyStatusNone || storedAuditGlobals(rt.DB.Read()) != nil {
 		t.Fatalf("the next try: %+v", rt.lastApply)
 	}
 	if got := globalsFromFake(t); got != fakeOriginalGlobals {
@@ -186,15 +186,15 @@ func TestClearStoredRuleRestoresGlobals(t *testing.T) {
 	if _, err := ApplyAuditRules([]string{ownConnectRule}, func(g AuditGlobals) error { return recordAuditGlobals(rt.DB, g) }); err != nil {
 		t.Fatal(err)
 	}
-	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	setLocalState(t, rt.DB, stateRule, `{"id":3,"version":2}`)
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
 	if removed, err := ClearStoredRule(rt.DB); !removed || err != nil {
 		t.Fatalf("clear: %v %v", removed, err)
 	}
 	if got := globalsFromFake(t); got != fakeOriginalGlobals || readFile(t, state) != "" {
 		t.Fatalf("settings after the cleanup: %+v", got)
 	}
-	if models.GetLocalState(rt.DB, stateAuditGlobals) != "" {
+	if models.GetLocalState(rt.DB.Read(), stateAuditGlobals) != "" {
 		t.Fatal("the record must be cleared")
 	}
 
@@ -234,17 +234,17 @@ func TestAuditGlobalsKeptAcrossReapplyAndReinit(t *testing.T) {
 	if _, err := ApplyAuditRules([]string{ownConnectRule}, record); err != nil {
 		t.Fatal(err)
 	}
-	if g := storedAuditGlobals(rt.DB); g == nil || *g != fakeOriginalGlobals {
+	if g := storedAuditGlobals(rt.DB.Read()); g == nil || *g != fakeOriginalGlobals {
 		t.Fatalf("the record must keep the values from before the first application: %+v", g)
 	}
 
 	// agent init --overwrite between the application and the removal.
-	_ = models.SetLocalState(rt.DB, stateRule, `{"id":3,"version":2}`)
-	_ = models.SetLocalState(rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
-	if err := resetStoredRule(rt.DB); err != nil {
+	setLocalState(t, rt.DB, stateRule, `{"id":3,"version":2}`)
+	setLocalState(t, rt.DB, stateApply, `{"rule_id":3,"version":2,"status":"ok"}`)
+	if err := rt.DB.Write(resetStoredRule); err != nil {
 		t.Fatal(err)
 	}
-	if g := storedAuditGlobals(rt.DB); g == nil || *g != fakeOriginalGlobals {
+	if g := storedAuditGlobals(rt.DB.Read()); g == nil || *g != fakeOriginalGlobals {
 		t.Fatalf("agent init must keep the record: %+v", g)
 	}
 
@@ -254,7 +254,7 @@ func TestAuditGlobalsKeptAcrossReapplyAndReinit(t *testing.T) {
 	if got := globalsFromFake(t); got != fakeOriginalGlobals || readFile(t, state) != "" {
 		t.Fatalf("settings after the removal: %+v", got)
 	}
-	if storedAuditGlobals(rt.DB) != nil {
+	if storedAuditGlobals(rt.DB.Read()) != nil {
 		t.Fatal("the record must be forgotten")
 	}
 	// Set back once: a later check changes nothing.

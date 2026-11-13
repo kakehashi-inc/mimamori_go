@@ -37,20 +37,20 @@ func (s *scanTwin) cover(t *testing.T, c *RuleContent, res *ResolvedRule, after 
 	t.Helper()
 	for {
 		var lastFull int64
-		_, _ = fmt.Sscan(models.GetLocalState(s.rt.DB, stateLastFullScan), &lastFull)
-		if models.GetLocalState(s.rt.DB, stateWritableResume) == "" && lastFull > after {
+		_, _ = fmt.Sscan(models.GetLocalState(s.rt.DB.Read(), stateLastFullScan), &lastFull)
+		if models.GetLocalState(s.rt.DB.Read(), stateWritableResume) == "" && lastFull > after {
 			break
 		}
 		s.check(t, c, res)
 	}
 	started := false
 	for {
-		pre := models.GetLocalState(s.rt.DB, stateExecResume)
+		pre := models.GetLocalState(s.rt.DB.Read(), stateExecResume)
 		s.check(t, c, res)
 		if pre == "" {
 			started = true
 		}
-		if started && models.GetLocalState(s.rt.DB, stateExecResume) == "" {
+		if started && models.GetLocalState(s.rt.DB.Read(), stateExecResume) == "" {
 			return
 		}
 	}

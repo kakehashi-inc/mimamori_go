@@ -1,7 +1,6 @@
 package modules
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,8 +48,13 @@ const (
 // AgentRuntime performs the periodic processing of an agent. Everything runs
 // sequentially in the calling flow: syncing, applying rules, reading the
 // audit log, scanning files and reporting.
+//
+// DB is the handle of the agent's local database. What the runtime reads it
+// reads through DB.Read; every change is a DB.Write, and what decides a
+// change is read inside that Write. A request to the central, an external
+// program, a file walk or a running command never happens inside a Write.
 type AgentRuntime struct {
-	DB        *sql.DB
+	DB        *DB
 	Transport AgentTransport
 	Config    *AgentConfig // nil for the built-in agent
 	Logger    *log.Logger
@@ -93,17 +97,17 @@ type AgentRuntime struct {
 }
 
 // NewAgentRuntime loads the stored state.
-func NewAgentRuntime(db *sql.DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
+func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
 	rt := &AgentRuntime{DB: db, Transport: tr, Logger: logger,
 		defaultInterval: DefaultCheckIntervalSec, cmdValid: map[int64]*CommandSetDef{}, cmdAcked: map[int64]bool{}}
-	if v := models.GetLocalState(db, stateRule); v != "" {
+	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
 			r.Content.Normalize()
 			rt.rule = &r
 		}
 	}
-	if v := models.GetLocalState(db, stateApply); v != "" {
+	if v := models.GetLocalState(db.Read(), stateApply); v != "" {
 		var a ApplyResult
 		if json.Unmarshal([]byte(v), &a) == nil {
 			rt.lastApply = &a
@@ -301,7 +305,7 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 	if !changed {
 		return
 	}
-	if err := withLocalTx(rt.DB, cfg.Save); err != nil {
+	if err := rt.DB.Write(cfg.Save); err != nil {
 		// Keep using the old token; the central hands out the same new value
 		// again on the next connection.
 		rt.logf("failed to save configuration (token renewal or CA update postponed): %v", err)
@@ -373,7 +377,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	}
 	rt.noteScanConfig(ra.Content.Writable.Base + "|" + fmt.Sprint(ra.Content.Writable.AllowedPaths))
 	b, _ := json.Marshal(ra)
-	if err := models.SetLocalState(rt.DB, stateRule, string(b)); err != nil {
+	if err := rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateRule, string(b)) }); err != nil {
 		rt.logf("failed to store the applied rule: %v", err)
 	}
 	rt.rule = ra
@@ -401,7 +405,7 @@ func holdsRule(rule *RuleAssignment, apply *ApplyResult) bool {
 // failure the rule stays in effect, the error is reported and the next
 // check tries again.
 func (rt *AgentRuntime) removeRule() {
-	restore := storedAuditGlobals(rt.DB)
+	restore := storedAuditGlobals(rt.DB.Read())
 	if !holdsRule(rt.rule, rt.lastApply) && restore == nil {
 		return
 	}
@@ -419,7 +423,12 @@ func (rt *AgentRuntime) removeRule() {
 		}
 		return
 	}
-	if err := models.DeleteLocalState(rt.DB, stateRule, stateApply, stateAuditGlobals); err != nil {
+	// The audit rules were removed by an external program, so the records
+	// are cleared in a transaction of their own after it (by key: nothing
+	// read before decides what is deleted).
+	if err := rt.DB.Write(func(tx models.Writer) error {
+		return models.DeleteLocalState(tx, stateRule, stateApply, stateAuditGlobals)
+	}); err != nil {
 		rt.logf("failed to clear the stored rule: %v", err)
 	}
 	rt.rule, rt.lastOK, rt.failedRule = nil, nil, ""
@@ -440,21 +449,23 @@ func restoredNote(g *AuditGlobals) string {
 // recordAuditGlobals stores the global audit settings before the first
 // application of audit rules. An existing record is kept: it holds the
 // values from before this system changed them (an unreadable one is
-// replaced).
-func recordAuditGlobals(db *sql.DB, g AuditGlobals) error {
-	if storedAuditGlobals(db) != nil {
-		return nil
-	}
+// replaced). The check for a record and the write are one transaction.
+func recordAuditGlobals(db *DB, g AuditGlobals) error {
 	b, err := json.Marshal(g)
 	if err != nil {
 		return err
 	}
-	return models.SetLocalState(db, stateAuditGlobals, string(b))
+	return db.Write(func(tx models.Writer) error {
+		if storedAuditGlobals(tx) != nil {
+			return nil
+		}
+		return models.SetLocalState(tx, stateAuditGlobals, string(b))
+	})
 }
 
 // storedAuditGlobals returns the recorded global audit settings, or nil when
 // there is no (readable) record.
-func storedAuditGlobals(db *sql.DB) *AuditGlobals {
+func storedAuditGlobals(db models.Reader) *AuditGlobals {
 	v := models.GetLocalState(db, stateAuditGlobals)
 	if v == "" {
 		return nil
@@ -472,13 +483,17 @@ func storedAuditGlobals(db *sql.DB) *AuditGlobals {
 // clears the records. It reports whether anything was removed; without a
 // record nothing is touched. The central uses it for the built-in agent
 // while it is disabled.
-func ClearStoredRule(db *sql.DB) (bool, error) {
+//
+// The records are read on the read side: an external program removes the
+// audit rules between the read and the write, and the write deletes by key.
+func ClearStoredRule(db *DB) (bool, error) {
+	rd := db.Read()
 	var rule *RuleAssignment
-	if v := models.GetLocalState(db, stateRule); v != "" {
+	if v := models.GetLocalState(rd, stateRule); v != "" {
 		rule = &RuleAssignment{}
 	}
 	var apply *ApplyResult
-	if v := models.GetLocalState(db, stateApply); v != "" {
+	if v := models.GetLocalState(rd, stateApply); v != "" {
 		var a ApplyResult
 		if json.Unmarshal([]byte(v), &a) == nil {
 			apply = &a
@@ -486,28 +501,31 @@ func ClearStoredRule(db *sql.DB) (bool, error) {
 			apply = &ApplyResult{}
 		}
 	}
-	restore := storedAuditGlobals(db)
+	restore := storedAuditGlobals(rd)
 	if !holdsRule(rule, apply) && restore == nil {
 		return false, nil
 	}
 	if err := RemoveAuditRules(restore); err != nil {
 		return false, err
 	}
-	return true, models.DeleteLocalState(db, stateRule, stateApply, stateAuditGlobals)
+	return true, db.Write(func(tx models.Writer) error {
+		return models.DeleteLocalState(tx, stateRule, stateApply, stateAuditGlobals)
+	})
 }
 
 // resetStoredRule is used by "agent init --overwrite": the stored rule is
 // cleared, and when audit rules may be loaded the application result is
 // replaced by a pending one, so that the next sync decides (it applies the
-// assigned rule, or removes the audit rules when none is assigned).
-func resetStoredRule(db *sql.DB) error {
+// assigned rule, or removes the audit rules when none is assigned). It runs
+// inside the write transaction tx, which reads what it decides on.
+func resetStoredRule(tx models.Writer) error {
 	var apply *ApplyResult
-	if v := models.GetLocalState(db, stateApply); v != "" {
+	if v := models.GetLocalState(tx, stateApply); v != "" {
 		apply = &ApplyResult{}
 		_ = json.Unmarshal([]byte(v), apply)
 	}
 	var rule *RuleAssignment
-	if models.GetLocalState(db, stateRule) != "" {
+	if models.GetLocalState(tx, stateRule) != "" {
 		rule = &RuleAssignment{}
 	}
 	if !holdsRule(rule, apply) {
@@ -519,10 +537,10 @@ func resetStoredRule(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if err := models.DeleteLocalState(db, stateRule); err != nil {
+	if err := models.DeleteLocalState(tx, stateRule); err != nil {
 		return err
 	}
-	return models.SetLocalState(db, stateApply, string(b))
+	return models.SetLocalState(tx, stateApply, string(b))
 }
 
 // firstProblems returns at most n problems followed by "and N more" when
@@ -542,20 +560,23 @@ func firstProblems(ps []Problem, n int) []any {
 func (rt *AgentRuntime) setApply(r *ApplyResult) {
 	rt.lastApply = r
 	if b, err := json.Marshal(r); err == nil {
-		_ = models.SetLocalState(rt.DB, stateApply, string(b))
+		_ = rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateApply, string(b)) })
 	}
 }
 
+// collectAudit reads the audit log from the stored position on. The position
+// is read on the read side and written after the audit tool has run: only
+// one monitoring step runs at a time, so nothing else moves it between.
 func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []DetectionReport {
 	var last AuditEventID
-	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB, stateLastAuditEvent)), &last)
+	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateLastAuditEvent)), &last)
 	events, next, err := CollectAuditEvents(last)
 	if err != nil {
 		rt.logf("reading the audit log failed: %v", err)
 		return nil
 	}
 	if b, err := json.Marshal(next); err == nil {
-		_ = models.SetLocalState(rt.DB, stateLastAuditEvent, string(b))
+		_ = rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateLastAuditEvent, string(b)) })
 	}
 	return AggregateAuditEvents(events, c, users)
 }
@@ -568,19 +589,32 @@ func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []Det
 // until the first full scan of the new configuration completes, so that the
 // executed-file scan keeps walking them meanwhile.
 func (rt *AgentRuntime) noteScanConfig(sig string) {
-	if models.GetLocalState(rt.DB, stateScanSignature) == sig {
+	// The configuration is unchanged on almost every application: checked on
+	// the read side first, and again inside the transaction that changes it.
+	if models.GetLocalState(rt.DB.Read(), stateScanSignature) == sig {
 		return
 	}
-	if models.GetLocalState(rt.DB, stateScanPrevRoots) == "" {
-		if old, err := models.ListScanRoots(rt.DB); err == nil {
-			if b, err := json.Marshal(old); err == nil {
-				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, string(b))
+	_ = rt.DB.Write(func(tx models.Writer) error {
+		if models.GetLocalState(tx, stateScanSignature) == sig {
+			return nil
+		}
+		if models.GetLocalState(tx, stateScanPrevRoots) == "" {
+			if old, err := models.ListScanRoots(tx); err == nil {
+				if b, err := json.Marshal(old); err == nil {
+					if err := models.SetLocalState(tx, stateScanPrevRoots, string(b)); err != nil {
+						return err
+					}
+				}
 			}
 		}
-	}
-	_ = models.SetLocalState(rt.DB, stateScanSignature, sig)
-	_ = models.SetLocalState(rt.DB, stateLastFullScan, "0")
-	_ = models.DeleteLocalState(rt.DB, stateWritableResume, stateWritablePass)
+		if err := models.SetLocalState(tx, stateScanSignature, sig); err != nil {
+			return err
+		}
+		if err := models.SetLocalState(tx, stateLastFullScan, "0"); err != nil {
+			return err
+		}
+		return models.DeleteLocalState(tx, stateWritableResume, stateWritablePass)
+	})
 }
 
 // scanEntryLimit is the number of entries one walk visits in one check.
@@ -650,29 +684,36 @@ func markScanned(segs []sinceSegment, from, to string, t int64) []sinceSegment {
 	return merged
 }
 
-func (rt *AgentRuntime) loadJSONState(key string, v any) {
-	if s := models.GetLocalState(rt.DB, key); s != "" {
+// loadJSONState reads the state key into v through db (the read side or a
+// write transaction).
+func loadJSONState(db models.Reader, key string, v any) {
+	if s := models.GetLocalState(db, key); s != "" {
 		_ = json.Unmarshal([]byte(s), v)
 	}
 }
 
-func (rt *AgentRuntime) saveJSONState(key string, v any) {
-	if b, err := json.Marshal(v); err == nil {
-		_ = models.SetLocalState(rt.DB, key, string(b))
+// saveJSONState stores v as JSON under the state key inside the write
+// transaction tx.
+func saveJSONState(tx models.Writer, key string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
 	}
+	return models.SetLocalState(tx, key, string(b))
 }
 
 // incompleteScans returns the walks whose pass is split over several checks
 // because they reached the entry limit.
 func (rt *AgentRuntime) incompleteScans() []IncompleteScan {
 	var out []IncompleteScan
-	if at := models.GetLocalState(rt.DB, stateWritableResume); at != "" {
+	rd := rt.DB.Read()
+	if at := models.GetLocalState(rd, stateWritableResume); at != "" {
 		var pass writablePass
-		rt.loadJSONState(stateWritablePass, &pass)
+		loadJSONState(rd, stateWritablePass, &pass)
 		out = append(out, IncompleteScan{Kind: ScanKindWritable, ResumeAt: at, Limit: rt.scanEntryLimit(), StartedAt: pass.StartedAt})
 	}
-	if at := models.GetLocalState(rt.DB, stateExecResume); at != "" {
-		started, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecPassStart), 10, 64)
+	if at := models.GetLocalState(rd, stateExecResume); at != "" {
+		started, _ := strconv.ParseInt(models.GetLocalState(rd, stateExecPassStart), 10, 64)
 		out = append(out, IncompleteScan{Kind: ScanKindExecFiles, ResumeAt: at, Limit: rt.scanEntryLimit(), StartedAt: started})
 	}
 	return out
@@ -682,6 +723,12 @@ func (rt *AgentRuntime) incompleteScans() []IncompleteScan {
 // entry limit; a walk that reaches it continues at the same place in the
 // next check, and starts at the beginning again once it reached the end
 // (see chapter 10 of the system specification in Documents).
+//
+// The state is read on the read side before the walks: a walk lies between
+// the read and the write, and only one monitoring step runs at a time. The
+// findings of a walk and the state it leaves are written together in one
+// transaction after the walk, which also reads what decides them (whether a
+// finding is known, the roots known so far).
 func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart time.Time) []DetectionReport {
 	var out []DetectionReport
 	now := cycleStart.Unix()
@@ -692,7 +739,8 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	for _, u := range res.UIDs {
 		uids[u] = true
 	}
-	lastFull, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateLastFullScan), 10, 64)
+	rd := rt.DB.Read()
+	lastFull, _ := strconv.ParseInt(models.GetLocalState(rd, stateLastFullScan), 10, 64)
 	// Since times of allowed roots that the executed-file scan has not
 	// walked to the end yet: roots found for the first time by a full scan
 	// (files created in them before they became roots are older than the
@@ -701,17 +749,32 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	// (scanned like the roots of a first scan: the files already in them are
 	// reported).
 	rootSince := map[string]int64{}
-	rt.loadJSONState(stateRootSince, &rootSince)
+	loadJSONState(rd, stateRootSince, &rootSince)
 	setRootSince := func(r string, v int64) {
 		if old, ok := rootSince[r]; !ok || v < old {
 			rootSince[r] = v
 		}
 	}
-	wResume := models.GetLocalState(rt.DB, stateWritableResume)
+	// touchFindings records the fingerprints of a walk inside tx and returns
+	// the reports of those not known before.
+	touchFindings := func(tx models.Writer, found []FileFinding) ([]DetectionReport, error) {
+		var fresh []DetectionReport
+		for _, f := range found {
+			fp := f.Fingerprint()
+			if !models.FindingExists(tx, fp) {
+				fresh = append(fresh, f.ToReport(users, groups, now))
+			}
+			if err := models.TouchFinding(tx, fp, now); err != nil {
+				return nil, err
+			}
+		}
+		return fresh, nil
+	}
+	wResume := models.GetLocalState(rd, stateWritableResume)
 	if wResume != "" || now-lastFull >= int64(c.ScanInterval()) {
 		var pass writablePass
 		if wResume != "" {
-			rt.loadJSONState(stateWritablePass, &pass)
+			loadJSONState(rd, stateWritablePass, &pass)
 			rt.logf("writable scan of %s continues at %s", c.Writable.Base, wResume)
 		} else {
 			pass = writablePass{StartedAt: now}
@@ -720,96 +783,111 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		if err != nil {
 			rt.logf("writable scan of %s failed: %v", c.Writable.Base, err)
 		} else {
-			if c.WritableEnabled() {
-				for _, f := range wr.Findings {
-					fp := f.Fingerprint()
-					if !models.FindingExists(rt.DB, fp) {
-						out = append(out, f.ToReport(users, groups, now))
-					}
-					_ = models.TouchFinding(rt.DB, fp, now)
-				}
-			}
-			known := map[string]bool{}
-			if old, err := models.ListScanRoots(rt.DB); err == nil {
-				for _, r := range old {
-					known[r] = true
-				}
-			}
-			if prev := models.GetLocalState(rt.DB, stateScanPrevRoots); prev != "" {
-				var old []string
-				_ = json.Unmarshal([]byte(prev), &old)
-				before := map[string]bool{}
-				for _, r := range old {
-					before[r] = true
-				}
-				for _, r := range wr.AllowedRoots {
-					if !before[r] {
-						setRootSince(r, 0)
-					}
-				}
-			} else {
-				// From the second before the start of the previous full
-				// pass: a root made in that same second after the pass had
-				// walked past its place has files of that second (as the
-				// since times of the executed-file scan, which end one
-				// second before the check).
-				rootFrom := lastFull
-				if rootFrom > 0 {
-					rootFrom--
-				}
-				for _, r := range wr.AllowedRoots {
-					if !known[r] {
-						setRootSince(r, rootFrom)
-					}
-				}
-			}
-			seen := map[string]bool{}
-			var passRoots []string
-			for _, r := range append(pass.Roots, wr.AllowedRoots...) {
-				if !seen[r] {
-					seen[r] = true
-					passRoots = append(passRoots, r)
-				}
-			}
-			pass.Roots = passRoots
-			if wr.Truncated {
-				// The roots of the previous pass stay until this one is complete.
-				all := passRoots
-				for r := range known {
-					if !seen[r] {
-						all = append(all, r)
-					}
-				}
-				_ = models.ReplaceScanRoots(rt.DB, all)
-				rt.saveJSONState(stateWritablePass, &pass)
-				_ = models.SetLocalState(rt.DB, stateWritableResume, wr.ResumeAt)
-				rt.logf("writable scan of %s stopped after %d entries; the next check continues at %s", c.Writable.Base, limit, wr.ResumeAt)
-			} else {
-				_ = models.ReplaceScanRoots(rt.DB, passRoots)
+			// As before the transaction, a failure to store the result is not
+			// logged: the next check walks again.
+			_ = rt.DB.Write(func(tx models.Writer) error {
 				if c.WritableEnabled() {
-					_ = models.PruneFindings(rt.DB, TypeWritable+"|", pass.StartedAt)
+					fresh, err := touchFindings(tx, wr.Findings)
+					if err != nil {
+						return err
+					}
+					out = append(out, fresh...)
 				}
-				_ = models.SetLocalState(rt.DB, stateScanPrevRoots, "")
-				_ = models.SetLocalState(rt.DB, stateLastFullScan, strconv.FormatInt(pass.StartedAt, 10))
-				_ = models.DeleteLocalState(rt.DB, stateWritableResume, stateWritablePass)
-				if wResume != "" {
-					rt.logf("writable scan of %s completed the pass started at %s", c.Writable.Base,
-						time.Unix(pass.StartedAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
+				known := map[string]bool{}
+				if old, err := models.ListScanRoots(tx); err == nil {
+					for _, r := range old {
+						known[r] = true
+					}
 				}
+				if prev := models.GetLocalState(tx, stateScanPrevRoots); prev != "" {
+					var old []string
+					_ = json.Unmarshal([]byte(prev), &old)
+					before := map[string]bool{}
+					for _, r := range old {
+						before[r] = true
+					}
+					for _, r := range wr.AllowedRoots {
+						if !before[r] {
+							setRootSince(r, 0)
+						}
+					}
+				} else {
+					// From the second before the start of the previous full
+					// pass: a root made in that same second after the pass had
+					// walked past its place has files of that second (as the
+					// since times of the executed-file scan, which end one
+					// second before the check).
+					rootFrom := lastFull
+					if rootFrom > 0 {
+						rootFrom--
+					}
+					for _, r := range wr.AllowedRoots {
+						if !known[r] {
+							setRootSince(r, rootFrom)
+						}
+					}
+				}
+				seen := map[string]bool{}
+				var passRoots []string
+				for _, r := range append(pass.Roots, wr.AllowedRoots...) {
+					if !seen[r] {
+						seen[r] = true
+						passRoots = append(passRoots, r)
+					}
+				}
+				pass.Roots = passRoots
+				if wr.Truncated {
+					// The roots of the previous pass stay until this one is complete.
+					all := passRoots
+					for r := range known {
+						if !seen[r] {
+							all = append(all, r)
+						}
+					}
+					if err := models.ReplaceScanRoots(tx, all); err != nil {
+						return err
+					}
+					if err := saveJSONState(tx, stateWritablePass, &pass); err != nil {
+						return err
+					}
+					return models.SetLocalState(tx, stateWritableResume, wr.ResumeAt)
+				}
+				if err := models.ReplaceScanRoots(tx, passRoots); err != nil {
+					return err
+				}
+				if c.WritableEnabled() {
+					if err := models.PruneFindings(tx, TypeWritable+"|", pass.StartedAt); err != nil {
+						return err
+					}
+				}
+				if err := models.SetLocalState(tx, stateScanPrevRoots, ""); err != nil {
+					return err
+				}
+				if err := models.SetLocalState(tx, stateLastFullScan, strconv.FormatInt(pass.StartedAt, 10)); err != nil {
+					return err
+				}
+				return models.DeleteLocalState(tx, stateWritableResume, stateWritablePass)
+			})
+			if wr.Truncated {
+				rt.logf("writable scan of %s stopped after %d entries; the next check continues at %s", c.Writable.Base, limit, wr.ResumeAt)
+			} else if wResume != "" {
+				rt.logf("writable scan of %s completed the pass started at %s", c.Writable.Base,
+					time.Unix(pass.StartedAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
 			}
 		}
 	}
 	if c.ExecFilesEnabled() {
-		roots, err := models.ListScanRoots(rt.DB)
+		// Read after the writable scan, which may have changed the roots.
+		roots, err := models.ListScanRoots(rd)
 		if err == nil {
 			var segs []sinceSegment
-			rt.loadJSONState(stateExecSince, &segs)
+			loadJSONState(rd, stateExecSince, &segs)
 			if len(segs) == 0 {
 				// The watermark of earlier versions covers everything.
-				wm, _ := strconv.ParseInt(models.GetLocalState(rt.DB, stateExecWatermark), 10, 64)
+				wm, _ := strconv.ParseInt(models.GetLocalState(rd, stateExecWatermark), 10, 64)
 				segs = []sinceSegment{{From: "", Since: wm}}
 			}
-			eResume := models.GetLocalState(rt.DB, stateExecResume)
+			eResume := models.GetLocalState(rd, stateExecResume)
 			since := func(root, p string) int64 {
 				v := sinceAt(segs, p)
 				if o, ok := rootSince[root]; ok && o < v {
@@ -824,24 +902,10 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 			if err != nil {
 				rt.logf("executed-file scan failed: %v", err)
 			} else {
-				for _, f := range found {
-					fp := f.Fingerprint()
-					if !models.FindingExists(rt.DB, fp) {
-						out = append(out, f.ToReport(users, groups, now))
-					}
-					_ = models.TouchFinding(rt.DB, fp, now)
-				}
-				// Files of a first scan that are not reported are remembered,
-				// so the next scan (which also looks at the second of this one)
-				// does not report them either.
-				for _, f := range skipped {
-					_ = models.TouchFinding(rt.DB, f.Fingerprint(), now)
-				}
 				// The walked part is scanned up to the second before the cycle
 				// start: files whose status changed at or after it are picked
-				// up again next time (duplicates are filtered above).
+				// up again next time (duplicates are filtered by the findings).
 				segs = markScanned(segs, eResume, stop, now-1)
-				rt.saveJSONState(stateExecSince, segs)
 				// A root walked to its end in this check needs no own since
 				// time any more.
 				for r := range rootSince {
@@ -849,21 +913,48 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 						delete(rootSince, r)
 					}
 				}
-				if stop != "" {
-					if eResume == "" {
-						_ = models.SetLocalState(rt.DB, stateExecPassStart, strconv.FormatInt(now, 10))
+				_ = rt.DB.Write(func(tx models.Writer) error {
+					fresh, err := touchFindings(tx, found)
+					if err != nil {
+						return err
 					}
-					_ = models.SetLocalState(rt.DB, stateExecResume, stop)
+					out = append(out, fresh...)
+					// Files of a first scan that are not reported are
+					// remembered, so the next scan (which also looks at the
+					// second of this one) does not report them either.
+					for _, f := range skipped {
+						if err := models.TouchFinding(tx, f.Fingerprint(), now); err != nil {
+							return err
+						}
+					}
+					if err := saveJSONState(tx, stateExecSince, segs); err != nil {
+						return err
+					}
+					if stop != "" {
+						if eResume == "" {
+							if err := models.SetLocalState(tx, stateExecPassStart, strconv.FormatInt(now, 10)); err != nil {
+								return err
+							}
+						}
+						if err := models.SetLocalState(tx, stateExecResume, stop); err != nil {
+							return err
+						}
+					} else if eResume != "" {
+						if err := models.DeleteLocalState(tx, stateExecResume, stateExecPassStart); err != nil {
+							return err
+						}
+					}
+					return models.PruneFindings(tx, TypeExecFile+"|", now-7*24*3600)
+				})
+				if stop != "" {
 					rt.logf("executed-file scan stopped after %d entries; the next check continues at %s", limit, stop)
 				} else if eResume != "" {
-					_ = models.DeleteLocalState(rt.DB, stateExecResume, stateExecPassStart)
 					rt.logf("executed-file scan completed its pass")
 				}
-				_ = models.PruneFindings(rt.DB, TypeExecFile+"|", now-7*24*3600)
 			}
 		}
 	}
-	rt.saveJSONState(stateRootSince, rootSince)
+	_ = rt.DB.Write(func(tx models.Writer) error { return saveJSONState(tx, stateRootSince, rootSince) })
 	return out
 }
 
@@ -881,13 +972,21 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	}
 	hi := CollectHostInfo(in)
 
-	dropped, _ := strconv.Atoi(models.GetLocalState(rt.DB, stateDroppedPending))
-	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.lastApply, Dropped: dropped}
-	if err := rt.enqueue(req); err != nil {
+	// The dropped count is read, reported in the queued report and reset in
+	// one transaction, so that a count is neither lost nor reported twice.
+	createdAt := time.Now().Unix()
+	err := rt.DB.Write(func(tx models.Writer) error {
+		dropped, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
+		req := &ReportRequest{CreatedAt: createdAt, Detections: detections, HostInfo: hi, Apply: rt.lastApply, Dropped: dropped}
+		if err := enqueue(tx, req); err != nil {
+			return err
+		}
+		return models.SetLocalState(tx, stateDroppedPending, "0")
+	})
+	if err != nil {
 		rt.logf("failed to queue the report: %v", err)
 		return
 	}
-	_ = models.SetLocalState(rt.DB, stateDroppedPending, "0")
 	rt.enforceOutboxLimit()
 	rt.flushOutbox()
 }
@@ -908,21 +1007,19 @@ func countCategories(ds []DetectionReport) (alerts, normals int) {
 // with nothing else to deliver (no detections, no dropped count, nothing
 // about command sets and the same application result as the new one) is
 // replaced by the new report.
-func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
+//
+// It runs inside the write transaction tx, which also lists the queued
+// reports it rewrites.
+func enqueue(tx models.Writer, req *ReportRequest) error {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
 	apply, _ := json.Marshal(req.Apply)
-	items, err := models.ListOutbox(rt.DB)
+	items, err := models.ListOutbox(tx)
 	if err != nil {
 		return err
 	}
-	tx, err := rt.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 	for _, it := range items {
 		var old ReportRequest
 		if json.Unmarshal([]byte(it.Payload), &old) != nil {
@@ -950,70 +1047,88 @@ func (rt *AgentRuntime) enqueue(req *ReportRequest) error {
 		}
 	}
 	a, n := countCategories(req.Detections)
-	if err := models.InsertOutbox(tx, &models.OutboxItem{Payload: string(b), AlertCount: a, NormalCount: n}); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return models.InsertOutbox(tx, &models.OutboxItem{Payload: string(b), AlertCount: a, NormalCount: n})
 }
 
 // enforceOutboxLimit keeps the stored detections under the limit by dropping
 // normal detections oldest first (then alerts oldest first if still needed)
 // and remembers how many were dropped so the count is reported.
+//
+// The total is checked on the read side first (it is under the limit on
+// almost every report); the rows are then listed, rewritten and the count
+// stored in one transaction.
 func (rt *AgentRuntime) enforceOutboxLimit() {
-	total := models.OutboxDetectionCount(rt.DB)
-	if total <= DefaultOutboxMaxDetection {
-		return
-	}
-	excess := total - DefaultOutboxMaxDetection
-	items, err := models.ListOutbox(rt.DB)
-	if err != nil {
+	if models.OutboxDetectionCount(rt.DB.Read()) <= DefaultOutboxMaxDetection {
 		return
 	}
 	dropped := 0
-	for _, pass := range []string{CategoryNormal, CategoryAlert} {
-		for _, it := range items {
-			if excess <= 0 {
-				break
-			}
-			var req ReportRequest
-			if json.Unmarshal([]byte(it.Payload), &req) != nil {
-				continue
-			}
-			kept := req.Detections[:0]
-			for _, d := range req.Detections {
-				isPass := (pass == CategoryAlert && d.Category == CategoryAlert) || (pass == CategoryNormal && d.Category != CategoryAlert)
-				if excess > 0 && isPass {
-					excess--
-					dropped++
+	err := rt.DB.Write(func(tx models.Writer) error {
+		dropped = 0
+		total := models.OutboxDetectionCount(tx)
+		if total <= DefaultOutboxMaxDetection {
+			return nil
+		}
+		excess := total - DefaultOutboxMaxDetection
+		items, err := models.ListOutbox(tx)
+		if err != nil {
+			return err
+		}
+		for _, pass := range []string{CategoryNormal, CategoryAlert} {
+			for _, it := range items {
+				if excess <= 0 {
+					break
+				}
+				var req ReportRequest
+				if json.Unmarshal([]byte(it.Payload), &req) != nil {
 					continue
 				}
-				kept = append(kept, d)
+				kept := req.Detections[:0]
+				for _, d := range req.Detections {
+					isPass := (pass == CategoryAlert && d.Category == CategoryAlert) || (pass == CategoryNormal && d.Category != CategoryAlert)
+					if excess > 0 && isPass {
+						excess--
+						dropped++
+						continue
+					}
+					kept = append(kept, d)
+				}
+				req.Detections = kept
+				b, _ := json.Marshal(&req)
+				it.Payload = string(b)
+				it.CommandBytes = commandBytesOf(&req, len(b))
+				it.AlertCount, it.NormalCount = countCategories(kept)
+				if err := models.UpdateOutbox(tx, it); err != nil {
+					return err
+				}
 			}
-			req.Detections = kept
-			b, _ := json.Marshal(&req)
-			it.Payload = string(b)
-			it.CommandBytes = commandBytesOf(&req, len(b))
-			it.AlertCount, it.NormalCount = countCategories(kept)
-			_ = models.UpdateOutbox(rt.DB, it)
 		}
-	}
-	if dropped > 0 {
-		prev, _ := strconv.Atoi(models.GetLocalState(rt.DB, stateDroppedPending))
-		_ = models.SetLocalState(rt.DB, stateDroppedPending, strconv.Itoa(prev+dropped))
+		if dropped == 0 {
+			return nil
+		}
+		prev, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
+		return models.SetLocalState(tx, stateDroppedPending, strconv.Itoa(prev+dropped))
+	})
+	if err == nil && dropped > 0 {
 		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
 	}
 }
 
 // flushOutbox sends queued reports in order and stops at the first failure.
+// The queue is listed on the read side; each report is deleted by its ID in
+// a transaction of its own after the central took it (the request to the
+// central is never made inside a transaction).
 func (rt *AgentRuntime) flushOutbox() {
-	items, err := models.ListOutbox(rt.DB)
+	items, err := models.ListOutbox(rt.DB.Read())
 	if err != nil {
 		return
+	}
+	deleteItem := func(id int64) {
+		_ = rt.DB.Write(func(tx models.Writer) error { return models.DeleteOutbox(tx, id) })
 	}
 	for i, it := range items {
 		var req ReportRequest
 		if err := json.Unmarshal([]byte(it.Payload), &req); err != nil {
-			_ = models.DeleteOutbox(rt.DB, it.ID)
+			deleteItem(it.ID)
 			continue
 		}
 		// Only the newest report needs the host information.
@@ -1024,6 +1139,6 @@ func (rt *AgentRuntime) flushOutbox() {
 			rt.logConnectionError("report", err)
 			return
 		}
-		_ = models.DeleteOutbox(rt.DB, it.ID)
+		deleteItem(it.ID)
 	}
 }
