@@ -60,7 +60,6 @@ const (
 	DefaultRememberDays       = 30
 	DefaultTrustDays          = 30
 	DefaultSMTPTimeoutSec     = 30
-	DefaultHTTPTimeoutSec     = 30
 	DefaultOutboxMaxDetection = 10000
 )
 

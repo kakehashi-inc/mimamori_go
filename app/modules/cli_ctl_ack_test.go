@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ackTestClient serves the two routes ctl detections ack uses for the
@@ -45,7 +44,7 @@ func ackTestClient(t *testing.T, known map[string]bool, acked *[]string) *ctlCli
 	t.Cleanup(srv.Close)
 	tlsCfg := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	tlsCfg.ServerName = ctlServerName
-	hc := &HTTPSClient{Address: srv.Listener.Addr().String(), TLS: tlsCfg, Timeout: 10 * time.Second, Headers: map[string]string{}}
+	hc := &HTTPSClient{Address: srv.Listener.Addr().String(), TLS: tlsCfg, Headers: map[string]string{}}
 	return &ctlClient{http: hc, json: true}
 }
 

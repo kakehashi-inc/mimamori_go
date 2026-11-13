@@ -352,6 +352,10 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	switch {
 	case errors.As(err, &he) && he.Status == 401:
 		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another agent instance). Re-initialize the agent with a valid token", op)
+	case IsSilenceCut(err):
+		// The row of a cut report stays queued and is sent again at the next
+		// monitoring step.
+		rt.logf("%s: the central sent nothing for %d seconds: %v", op, int(IdleTimeout/time.Second), err)
 	case IsCertificateError(err):
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
 	default:

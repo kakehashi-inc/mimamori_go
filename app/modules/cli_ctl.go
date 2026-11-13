@@ -85,7 +85,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	// The server certificate always contains the loopback addresses but not
 	// necessarily the listen address, so it is verified under the IPv4
 	// loopback address whatever address is connected to.
-	hc, err := NewHTTPSClient(host, portNum, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: ctlServerName}, 60*time.Second)
+	hc, err := NewHTTPSClient(host, portNum, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: ctlServerName})
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())
 	}
@@ -181,6 +181,10 @@ func (cl *ctlClient) callError(err error) error {
 	}
 	if IsCertificateError(err) {
 		return NewExitErrorf(ExitAuth, "the certificate of the central cannot be verified with %s (it does not match the central's CA): %v", CABundleFileName, err)
+	}
+	if IsSilenceCut(err) {
+		// A request cut while the central works on it is still carried out.
+		return NewExitErrorf(ExitExec, "the central sent nothing for %d seconds; it may still carry out the request: %v", int(IdleTimeout/time.Second), err)
 	}
 	return NewExitError(ExitExec, err.Error())
 }

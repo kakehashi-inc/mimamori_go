@@ -603,7 +603,7 @@ func TestConnServerLargeBodyAndManyClients(t *testing.T) {
 		}
 		want := fmt.Sprintf("%d %d", len(body), sum)
 		pool, _ := modules.CertPoolFromPEMs(ts.e.c.currentCAPEMs(), time.Now())
-		hc, err := modules.NewHTTPSClient("127.0.0.1", ts.srv.specs[1].ln.Addr().(*net.TCPAddr).Port, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, 60*time.Second)
+		hc, err := modules.NewHTTPSClient("127.0.0.1", ts.srv.specs[1].ln.Addr().(*net.TCPAddr).Port, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12})
 		if err != nil {
 			t.Fatal(err)
 		}

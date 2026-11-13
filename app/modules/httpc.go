@@ -16,18 +16,23 @@ import (
 	"time"
 )
 
-// HTTPSClient is a minimal HTTPS client that runs in the calling flow.
-// Unlike net/http.Client it starts no goroutines of its own: it dials,
-// performs the TLS handshake, writes one request and reads one response, all
-// bounded by a deadline on the connection. (When the host is a name rather
-// than an IP address, the standard library's name resolution may use
-// goroutines internally while the call waits for it.)
+// HTTPSClient is a minimal HTTPS client that runs in the calling flow: it
+// dials, performs the TLS handshake, writes one request and reads one
+// response over one connection per request. Nothing limits the total time of
+// a request: every wait for the server (connecting, each step of the TLS
+// handshake, the progress of sending, the wait for the answer and the
+// progress of receiving it) ends only after idle of silence (IdleConn). It
+// sets no deadline of its own. (When the host is a name rather than an IP
+// address, the standard library's name resolution may use goroutines
+// internally while the call waits for it.)
 type HTTPSClient struct {
 	// Address is host:port of the server.
 	Address string
 	TLS     *tls.Config
-	Timeout time.Duration
 	Headers map[string]string
+	// idle is the longest silence waited for: IdleTimeout (zero), less in
+	// tests.
+	idle time.Duration
 }
 
 // HTTPError is returned for a non-2xx response.
@@ -51,25 +56,32 @@ func (e *HTTPError) Error() string {
 }
 
 // NewHTTPSClient prepares a client for host and port.
-func NewHTTPSClient(host string, port int, tlsCfg *tls.Config, timeout time.Duration) (*HTTPSClient, error) {
+func NewHTTPSClient(host string, port int, tlsCfg *tls.Config) (*HTTPSClient, error) {
 	if host == "" || port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid host %q or port %d", host, port)
 	}
-	return &HTTPSClient{Address: net.JoinHostPort(host, strconv.Itoa(port)), TLS: tlsCfg, Timeout: timeout, Headers: map[string]string{}}, nil
+	return &HTTPSClient{Address: net.JoinHostPort(host, strconv.Itoa(port)), TLS: tlsCfg, Headers: map[string]string{}}, nil
+}
+
+// IsSilenceCut reports whether err is the idle limit of the connection: the
+// server sent nothing, or took nothing of the request, for IdleTimeout (the
+// client sets no other deadline).
+func IsSilenceCut(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // Do sends one request and returns the status and body.
 func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) {
-	deadline := time.Now().Add(c.Timeout)
-	d := net.Dialer{Deadline: deadline, FallbackDelay: -1}
-	raw, err := d.Dial("tcp", c.Address)
+	idle := c.idle
+	if idle <= 0 {
+		idle = IdleTimeout
+	}
+	raw, err := DialIdle(c.Address, idle)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer raw.Close()
-	if err := raw.SetDeadline(deadline); err != nil {
-		return 0, nil, err
-	}
+	defer func() { _ = raw.Close() }()
 	cfg := c.TLS.Clone()
 	if cfg.ServerName == "" {
 		cfg.ServerName, _, _ = net.SplitHostPort(c.Address)

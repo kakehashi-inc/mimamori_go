@@ -31,7 +31,7 @@ func NewRemoteTransport(cfg *AgentConfig) (*RemoteTransport, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := NewHTTPSClient(cfg.CentralHost, cfg.CentralPort, tlsCfg, DefaultHTTPTimeoutSec*time.Second)
+	c, err := NewHTTPSClient(cfg.CentralHost, cfg.CentralPort, tlsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 	// Receive the CA without verification first (trust on first use, or the
 	// fingerprint given by the administrator), then verify the server
 	// certificate against it.
-	probe, err := NewHTTPSClient(o.CentralHost, o.CentralPort, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, DefaultHTTPTimeoutSec*time.Second) //nolint:gosec // the CA is verified below
+	probe, err := NewHTTPSClient(o.CentralHost, o.CentralPort, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) //nolint:gosec // the CA is verified below
 	if err != nil {
 		return nil, nil, err
 	}
