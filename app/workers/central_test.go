@@ -36,13 +36,17 @@ func newTestEnv(t *testing.T) *testEnv {
 	modules.MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
 	modules.SetDataDir(dir)
+	handle, err := modules.OpenSQLite(filepath.Join(dir, modules.CentralDBFileName), modules.SchemaCentral)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
 	db, err := modules.OpenSQLitePool(filepath.Join(dir, modules.CentralDBFileName), modules.SchemaCentral)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	cfg := modules.DefaultCentralConfig()
-	c := newCore(db, cfg, dir, log.New(io.Discard, "", 0))
-	t.Cleanup(func() { c.closeTargets(); db.Close() })
+	c := newCore(handle, db, cfg, dir, log.New(io.Discard, "", 0))
+	t.Cleanup(func() { c.closeTargets(); db.Close(); handle.Close() })
 	c.spaFS = fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>shell</title>")}}
 	if err := c.ensureServerKey(); err != nil {
 		t.Fatal(err)
@@ -133,7 +137,7 @@ func TestAgentFlow(t *testing.T) {
 		t.Fatalf("token value %q", tok)
 	}
 	var stored int
-	_ = e.c.db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE hash = ?`, tok).Scan(&stored)
+	_ = e.c.pool.QueryRow(`SELECT COUNT(*) FROM tokens WHERE hash = ?`, tok).Scan(&stored)
 	if stored != 0 {
 		t.Fatal("the token value itself must not be stored")
 	}
@@ -153,7 +157,7 @@ func TestAgentFlow(t *testing.T) {
 	if rec := e.agentCall("sync", tok, "machine-2", modules.SyncRequest{}); rec.Code != 401 || strings.Contains(rec.Body.String(), "machine") {
 		t.Fatalf("other machine: %d %s", rec.Code, rec.Body.String())
 	}
-	items, _, _ := models.ListHistory(e.c.db, models.HistRejected, "", nil, 10, 0)
+	items, _, _ := models.ListHistory(e.c.pool, models.HistRejected, "", nil, 10, 0)
 	if len(items) == 0 || items[0].Action != "instance id mismatch" {
 		t.Fatalf("rejected connection not recorded: %+v", items)
 	}
@@ -188,12 +192,12 @@ func TestAgentFlow(t *testing.T) {
 		}
 	}
 	// The detections live in the target's own database file.
-	a, _ := models.GetAgentByToken(e.c.db, int64(issued["token"].(map[string]any)["id"].(float64)))
+	a, _ := models.GetAgentByToken(e.c.pool, int64(issued["token"].(map[string]any)["id"].(float64)))
 	if _, err := os.Stat(modules.TargetDBPath(e.c.dataDir, a.DBFile)); err != nil {
 		t.Fatalf("per-target database: %v", err)
 	}
 	var n int
-	_ = e.c.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'detections'`).Scan(&n)
+	_ = e.c.pool.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'detections'`).Scan(&n)
 	if n != 0 {
 		t.Fatal("detections must not be stored in the central database")
 	}
@@ -331,7 +335,7 @@ func TestLoginLockout(t *testing.T) {
 
 func TestBuiltinTransport(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	e.admin("POST", "/rules", map[string]any{"name": "r"})
 	e.admin("POST", "/rules/1/apply", map[string]any{"version": 1, "agent_ids": []int64{b.ID}})
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
@@ -349,14 +353,14 @@ func TestBuiltinTransport(t *testing.T) {
 
 func TestNotificationCompose(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
 	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{
 		{Type: "exec", Category: "normal", OSUser: "nginx", Exe: "/bin/sh", Target: "sh -c id"},
 		{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"},
 	}})
 	e.c.composeNotification(time.Now())
-	list, _ := models.ListUnsentNotifications(e.c.db)
+	list, _ := models.ListUnsentNotifications(e.c.pool)
 	if len(list) != 1 || !strings.Contains(list[0].Subject, "ALERT") {
 		t.Fatalf("notification: %+v", list)
 	}
@@ -410,7 +414,7 @@ func TestLoginRemember(t *testing.T) {
 			t.Fatalf("login: %d", rec.Code)
 		}
 		ck := rec.Result().Cookies()[0]
-		s, err := models.GetSession(e.c.db, modules.HashSecret(ck.Value))
+		s, err := models.GetSession(e.c.pool, modules.HashSecret(ck.Value))
 		if err != nil {
 			t.Fatal(err)
 		}

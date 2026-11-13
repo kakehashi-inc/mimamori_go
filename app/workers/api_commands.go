@@ -556,7 +556,7 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, modules.M("command.import_select"))
 		return
 	}
-	src, err := models.GetAgent(c.db, in.SourceAgentID)
+	src, err := models.GetAgent(c.pool, in.SourceAgentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusBadRequest, modules.M("command.import_source_not_found"))
 		return
@@ -789,7 +789,7 @@ func (c *core) handleAgentCommandResults(w http.ResponseWriter, r *http.Request)
 
 func (c *core) handleCommandResultsByName(w http.ResponseWriter, r *http.Request) {
 	want := r.URL.Query().Get("name")
-	agents, err := models.ListAgents(c.db)
+	agents, err := models.ListAgents(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return

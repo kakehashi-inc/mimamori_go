@@ -22,7 +22,7 @@ import (
 // too.
 func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *modules.SyncResponse, now int64) error {
 	if req.CommandSig != agent.CommandSig {
-		if err := models.RecordAgentCommandSig(c.db, agent.ID, req.CommandSig); err != nil {
+		if err := models.RecordAgentCommandSig(c.pool, agent.ID, req.CommandSig); err != nil {
 			return err
 		}
 		agent.CommandSig = req.CommandSig
@@ -249,12 +249,12 @@ func (c *core) recordCommandApply(agent *models.Agent, ap *modules.CommandApplyR
 		ap.Problems = ap.Problems[:1000]
 	}
 	b, _ := json.Marshal(ap)
-	if err := models.RecordAgentCommandApply(c.db, agent.ID, string(b)); err != nil {
+	if err := models.RecordAgentCommandApply(c.pool, agent.ID, string(b)); err != nil {
 		return err
 	}
 	if ap.Signature != "" && ap.Signature != agent.CommandSig {
 		agent.CommandSig = ap.Signature
-		return models.RecordAgentCommandSig(c.db, agent.ID, ap.Signature)
+		return models.RecordAgentCommandSig(c.pool, agent.ID, ap.Signature)
 	}
 	return nil
 }
@@ -321,7 +321,7 @@ func agentCommandProblems(agent *models.Agent) map[int64]*setProblems {
 // expireCommandRequests ends the run requests that were not delivered
 // within their expiry and records them in the history.
 func (c *core) expireCommandRequests(now time.Time) {
-	agents, err := models.ListAgents(c.db)
+	agents, err := models.ListAgents(c.pool)
 	if err != nil {
 		return
 	}

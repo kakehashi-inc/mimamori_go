@@ -26,7 +26,10 @@ import (
 // worker flows and the built-in agent on its own flow, so everything shared
 // is either in the databases or guarded here.
 type core struct {
-	db *sql.DB
+	// db is the handle of central.db. pool is the connection pool the
+	// central used before the handle; the code moves from it to db.
+	db   *modules.DB
+	pool *sql.DB
 	// cfg is the configuration in effect; it is replaced when the stored
 	// configuration changes (see reloadConfig). started is the configuration
 	// read at start, which keeps the items that apply only at start.
@@ -74,9 +77,9 @@ type targetEntry struct {
 	err   error
 }
 
-func newCore(db *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
+func newCore(db *modules.DB, pool *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
 	h, _ := os.Hostname()
-	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*targetEntry{}, refusedTargets: map[int64]bool{}, sendMail: modules.SendMailTo}
+	c := &core{db: db, pool: pool, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*targetEntry{}, refusedTargets: map[int64]bool{}, sendMail: modules.SendMailTo}
 	c.cfg.Store(cfg)
 	return c
 }
@@ -88,7 +91,7 @@ func (c *core) conf() *modules.CentralConfig { return c.cfg.Load() }
 // settings screen or with "central config" take effect without a restart
 // (except the items that apply only at start).
 func (c *core) reloadConfig() {
-	cfg, err := modules.LoadCentralConfig(c.db)
+	cfg, err := modules.LoadCentralConfig(c.pool)
 	if err != nil {
 		c.logger.Printf("configuration not reloaded: %v", err)
 		return
@@ -164,7 +167,7 @@ func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 	file := a.DBFile
 	if file == "" {
 		file = fmt.Sprintf("agent-%d.db", a.ID)
-		if err := models.SetAgentDBFile(c.db, a.ID, file); err != nil {
+		if err := models.SetAgentDBFile(c.pool, a.ID, file); err != nil {
 			return nil, err
 		}
 		a.DBFile = file
@@ -182,7 +185,7 @@ func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 
 // openAllTargets opens (and migrates) the database of every monitored target.
 func (c *core) openAllTargets() error {
-	agents, err := models.ListAgents(c.db)
+	agents, err := models.ListAgents(c.pool)
 	if err != nil {
 		return err
 	}
@@ -218,11 +221,11 @@ func (c *core) closeTargets() {
 
 // createAgent inserts an agent row and its per-target database file.
 func (c *core) createAgent(a *models.Agent) error {
-	if err := models.InsertAgent(c.db, a); err != nil {
+	if err := models.InsertAgent(c.pool, a); err != nil {
 		return err
 	}
 	a.DBFile = fmt.Sprintf("agent-%d.db", a.ID)
-	if err := models.SetAgentDBFile(c.db, a.ID, a.DBFile); err != nil {
+	if err := models.SetAgentDBFile(c.pool, a.ID, a.DBFile); err != nil {
 		return err
 	}
 	_, err := c.targetDB(a)
@@ -231,7 +234,7 @@ func (c *core) createAgent(a *models.Agent) error {
 
 // ensureBuiltinAgent creates the built-in agent row on first start.
 func (c *core) ensureBuiltinAgent() (*models.Agent, error) {
-	a, err := models.GetBuiltinAgent(c.db)
+	a, err := models.GetBuiltinAgent(c.pool)
 	if err == nil {
 		return a, nil
 	}
@@ -261,7 +264,7 @@ func (c *core) writeCLISecret() error {
 
 // ensureServerKey loads or creates the secret used to derive renewed tokens.
 func (c *core) ensureServerKey() error {
-	v, found, err := models.GetSettingStrict(c.db, settingServerKey)
+	v, found, err := models.GetSettingStrict(c.pool, settingServerKey)
 	if err != nil {
 		return err
 	}
@@ -270,10 +273,10 @@ func (c *core) ensureServerKey() error {
 		if err != nil {
 			return err
 		}
-		if err := models.InsertSettingIfAbsent(c.db, settingServerKey, v); err != nil {
+		if err := models.InsertSettingIfAbsent(c.pool, settingServerKey, v); err != nil {
 			return err
 		}
-		v = models.GetSetting(c.db, settingServerKey)
+		v = models.GetSetting(c.pool, settingServerKey)
 	}
 	c.serverKey = []byte(v)
 	return nil
@@ -285,7 +288,7 @@ func (c *core) agentDisplayName(a *models.Agent) string {
 		return modules.BuiltinAgentName
 	}
 	if a.TokenID.Valid {
-		if t, err := models.GetToken(c.db, a.TokenID.Int64); err == nil {
+		if t, err := models.GetToken(c.pool, a.TokenID.Int64); err == nil {
 			return t.Name
 		}
 	}
@@ -317,7 +320,7 @@ func (c *core) historyMsg(p *principal, category, action string, target, detail 
 	}
 	h := &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target.Text(), Detail: detail.Text(),
 		I18n: modules.HistoryTextsJSON(target, detail)}
-	if err := models.InsertHistory(c.db, h); err != nil {
+	if err := models.InsertHistory(c.pool, h); err != nil {
 		c.logger.Printf("history: %v", err)
 	}
 }
@@ -389,7 +392,7 @@ func (c *core) operatorShown(r *http.Request) func(string) string {
 		}
 		if names == nil {
 			names = map[string]string{}
-			if list, err := models.ListAccounts(c.db); err == nil {
+			if list, err := models.ListAccounts(c.pool); err == nil {
 				for _, a := range list {
 					names[foldASCII(a.Email)] = a.DisplayName
 				}

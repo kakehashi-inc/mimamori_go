@@ -18,7 +18,7 @@ func TestTargetDBOfOtherBuild(t *testing.T) {
 	e := newTestEnv(t)
 	var logged bytes.Buffer
 	e.c.logger = log.New(&logged, "", 0)
-	agents, err := models.ListAgents(e.c.db)
+	agents, err := models.ListAgents(e.c.pool)
 	if err != nil || len(agents) == 0 {
 		t.Fatalf("agents: %v %d", err, len(agents))
 	}

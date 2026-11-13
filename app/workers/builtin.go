@@ -18,7 +18,7 @@ type inProcessTransport struct {
 }
 
 func (t *inProcessTransport) agent() (*models.Agent, error) {
-	return models.GetAgent(t.c.db, t.agentID)
+	return models.GetAgent(t.c.pool, t.agentID)
 }
 
 func (t *inProcessTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse, error) {
@@ -65,7 +65,7 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 	m := modules.M("apply.builtin_disabled")
 	msg := m.Text()
 	c.logger.Printf("%s (key %s, %s)", msg, modules.AuditKey, modules.AuditRulesFile)
-	if err := models.SetAgentApplyNone(c.db, agent.ID, msg, applyI18nText(&m, nil), time.Now().Unix()); err != nil {
+	if err := models.SetAgentApplyNone(c.pool, agent.ID, msg, applyI18nText(&m, nil), time.Now().Unix()); err != nil {
 		c.logger.Printf("built-in agent: %v", err)
 	}
 	c.history(nil, models.HistRule, "apply_result_"+modules.ApplyStatusNone, c.agentDisplayName(agent), m)

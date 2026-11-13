@@ -185,7 +185,7 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		}
 		s.CAUpToDate = true
 	} else if a.TokenID.Valid {
-		if t, err := models.GetToken(c.db, a.TokenID.Int64); err == nil {
+		if t, err := models.GetToken(c.pool, a.TokenID.Int64); err == nil {
 			s.Token = &tokenRefJSON{ID: t.ID, Name: t.Name, Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt)}
 		}
 		var fps []string
@@ -202,7 +202,7 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 	if a.AssignedRuleID.Valid {
 		r := rules[a.AssignedRuleID.Int64]
 		if r == nil {
-			r, _ = models.GetRule(c.db, a.AssignedRuleID.Int64)
+			r, _ = models.GetRule(c.pool, a.AssignedRuleID.Int64)
 		}
 		if r != nil {
 			ar := &agentRuleJSON{ID: r.ID, Name: r.Name, AssignedVersion: a.AssignedRuleVersion, LatestVersion: r.LatestVersion,
@@ -257,7 +257,7 @@ func (c *core) latestCAFingerprints() []string {
 
 func (c *core) rulesByID() map[int64]*models.Rule {
 	m := map[int64]*models.Rule{}
-	if list, err := models.ListRules(c.db); err == nil {
+	if list, err := models.ListRules(c.pool); err == nil {
 		for _, r := range list {
 			m[r.ID] = r
 		}
@@ -266,7 +266,7 @@ func (c *core) rulesByID() map[int64]*models.Rule {
 }
 
 func (c *core) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListAgents(c.db)
+	list, err := models.ListAgents(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -286,7 +286,7 @@ func (c *core) loadAgent(w http.ResponseWriter, r *http.Request, name string) *m
 		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
 	}
-	a, err := models.GetAgent(c.db, id)
+	a, err := models.GetAgent(c.pool, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
@@ -329,7 +329,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	name := out.DisplayName
 	if a.Kind == models.AgentToken {
-		items, _, err := models.ListHistory(c.db, models.HistToken, name, nil, 100, 0)
+		items, _, err := models.ListHistory(c.pool, models.HistToken, name, nil, 100, 0)
 		if err == nil {
 			show := c.operatorShown(r)
 			for _, h := range items {
@@ -373,14 +373,14 @@ func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.conf().DefaultCheckIntervalSec)+600
 		out.ExpiringUnconnected = near && stale
 	}
-	if a, err := models.GetAgentByToken(c.db, t.ID); err == nil {
+	if a, err := models.GetAgentByToken(c.pool, t.ID); err == nil {
 		out.AgentID = a.ID
 	}
 	return out
 }
 
 func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListTokens(c.db)
+	list, err := models.ListTokens(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -398,7 +398,7 @@ func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
 		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
 	}
-	t, err := models.GetToken(c.db, id)
+	t, err := models.GetToken(c.pool, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
@@ -449,7 +449,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := &models.Agent{Kind: models.AgentToken}
 	if in.RuleID != nil && *in.RuleID > 0 {
-		rule, err := models.GetRule(c.db, *in.RuleID)
+		rule, err := models.GetRule(c.pool, *in.RuleID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("rule.not_found"))
 			return
@@ -458,7 +458,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		if in.RuleVersion != nil && *in.RuleVersion > 0 {
 			ver = *in.RuleVersion
 		}
-		if _, err := models.GetRuleVersion(c.db, rule.ID, ver); err != nil {
+		if _, err := models.GetRuleVersion(c.pool, rule.ID, ver); err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("rule.rule_version_not_found"))
 			return
 		}
@@ -473,7 +473,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principalFrom(r)
 	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.operator()}
-	if err := models.InsertToken(c.db, tok); err != nil {
+	if err := models.InsertToken(c.pool, tok); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, modules.M("token.name_taken"))
 			return
@@ -485,7 +485,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	if err := c.createAgent(agent); err != nil {
 		// Undo the token, so no token is left without its agent (the agent
 		// row, if it was created, goes with it).
-		if derr := models.DeleteToken(c.db, tok.ID); derr != nil {
+		if derr := models.DeleteToken(c.pool, tok.ID); derr != nil {
 			c.logger.Printf("token %d: undo after a failed issue: %v", tok.ID, derr)
 		}
 		c.internalError(w, r, err)
@@ -530,7 +530,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 	t.ExpiresAt = now + int64(days)*86400
 	t.PendingHash, t.PendingExpiresAt = "", 0
 	t.UsedAt, t.RevokedAt, t.ReissuedAt = 0, 0, now
-	if err := models.ReissueToken(c.db, t); err != nil {
+	if err := models.ReissueToken(c.pool, t); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -545,7 +545,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 	}
 	prev := t.InstanceID
 	t.InstanceID, t.BoundAt = "", 0
-	if err := models.UnbindToken(c.db, t.ID); err != nil {
+	if err := models.UnbindToken(c.pool, t.ID); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -561,7 +561,7 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	if t.RevokedAt == 0 {
 		t.RevokedAt = time.Now().Unix()
 		t.PendingHash, t.PendingExpiresAt = "", 0
-		if err := models.RevokeToken(c.db, t.ID, t.RevokedAt); err != nil {
+		if err := models.RevokeToken(c.pool, t.ID, t.RevokedAt); err != nil {
 			c.internalError(w, r, err)
 			return
 		}

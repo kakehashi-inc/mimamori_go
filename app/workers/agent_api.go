@@ -89,7 +89,7 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	fps, _ := json.Marshal(req.CAFingerprints)
-	if err := models.RecordAgentSync(c.db, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
+	if err := models.RecordAgentSync(c.pool, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
 		return nil, err
 	}
 	resp := &modules.SyncResponse{
@@ -125,7 +125,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 			// Stored only while the token is unchanged since it was read; when
 			// it was revoked, reissued or renewed meanwhile, no value is handed
 			// out this time.
-			err := models.SetTokenRenewal(c.db, tok, prevPending, prevCounter)
+			err := models.SetTokenRenewal(c.pool, tok, prevPending, prevCounter)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 				offer = false
@@ -159,11 +159,11 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 }
 
 func (c *core) ruleAssignment(ruleID int64, version int) (*modules.RuleAssignment, error) {
-	rule, err := models.GetRule(c.db, ruleID)
+	rule, err := models.GetRule(c.pool, ruleID)
 	if err != nil {
 		return nil, err
 	}
-	rv, err := models.GetRuleVersion(c.db, ruleID, version)
+	rv, err := models.GetRuleVersion(c.pool, ruleID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	if err != nil {
 		return err
 	}
-	sups, err := models.ListSuppressions(c.db)
+	sups, err := models.ListSuppressions(c.pool)
 	if err != nil {
 		return err
 	}
@@ -284,7 +284,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			detail := applyResultText(ap, checked)
 			if ap.RuleID > 0 {
 				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
-				if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
+				if r, err := models.GetRule(c.pool, ap.RuleID); err == nil {
 					ruleName = modules.Raw(r.Name)
 				}
 				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
@@ -295,7 +295,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	if req.Dropped > 0 {
 		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), modules.M("history.detail.dropped", "count", req.Dropped))
 	}
-	return models.RecordAgentReport(c.db, agent.ID, f)
+	return models.RecordAgentReport(c.pool, agent.ID, f)
 }
 
 // storeDetections stores the detections and the host information of a

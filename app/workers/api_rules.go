@@ -88,12 +88,12 @@ func (c *core) ruleSummary(r *models.Rule, agents []*models.Agent) ruleSummaryJS
 }
 
 func (c *core) handleListRules(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListRules(c.db)
+	list, err := models.ListRules(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
 	}
-	agents, _ := models.ListAgents(c.db)
+	agents, _ := models.ListAgents(c.pool)
 	out := make([]ruleSummaryJSON, 0, len(list))
 	for _, rule := range list {
 		out = append(out, c.ruleSummary(rule, agents))
@@ -107,7 +107,7 @@ func (c *core) loadRule(w http.ResponseWriter, r *http.Request) *models.Rule {
 		writeError(w, http.StatusNotFound, modules.M("rule.not_found"))
 		return nil
 	}
-	rule, err := models.GetRule(c.db, id)
+	rule, err := models.GetRule(c.pool, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("rule.not_found"))
 		return nil
@@ -122,9 +122,9 @@ func (c *core) loadRule(w http.ResponseWriter, r *http.Request) *models.Rule {
 // ruleDetail converts a rule with its versions for the API; show converts
 // the recorded operators (see operatorShown).
 func (c *core) ruleDetail(rule *models.Rule, show func(string) string) (*ruleDetailJSON, error) {
-	agents, _ := models.ListAgents(c.db)
+	agents, _ := models.ListAgents(c.pool)
 	out := &ruleDetailJSON{ruleSummaryJSON: c.ruleSummary(rule, agents), Versions: []ruleVersionMetaJSON{}}
-	versions, err := models.ListRuleVersions(c.db, rule.ID)
+	versions, err := models.ListRuleVersions(c.pool, rule.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (c *core) handleGetRuleVersion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
 	}
-	v, err := models.GetRuleVersion(c.db, rule.ID, ver)
+	v, err := models.GetRuleVersion(c.pool, rule.ID, ver)
 	if err != nil {
 		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
@@ -200,7 +200,7 @@ func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := func(ver int) (string, error) {
-		v, err := models.GetRuleVersion(c.db, rule.ID, ver)
+		v, err := models.GetRuleVersion(c.pool, rule.ID, ver)
 		if err != nil {
 			return "", err
 		}
@@ -228,7 +228,7 @@ func (c *core) templateContent(name string) (*modules.RuleContent, error) {
 	if t, ok := modules.FindBuiltinTemplate(name); ok {
 		return &t.Content, nil
 	}
-	t, err := models.GetTemplateByName(c.db, name)
+	t, err := models.GetTemplateByName(c.pool, name)
 	if err != nil {
 		return nil, modules.M("rule.template_not_found_named", "name", strconv.Quote(name))
 	}
@@ -336,7 +336,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r)
-	tx, err := c.db.Begin()
+	tx, err := c.pool.Begin()
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -398,7 +398,7 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		desc = strings.TrimSpace(*in.Description)
 	}
 	p := principalFrom(r)
-	tx, err := c.db.Begin()
+	tx, err := c.pool.Begin()
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -423,7 +423,7 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(p, models.HistRule, "saved", rule.Name, modules.M("history.detail.rule_saved", "version", next, "comment", in.Comment))
-	rule, _ = models.GetRule(c.db, rule.ID)
+	rule, _ = models.GetRule(c.pool, rule.ID)
 	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
@@ -448,7 +448,7 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 	if in.Version == 0 {
 		in.Version = rule.LatestVersion
 	}
-	if _, err := models.GetRuleVersion(c.db, rule.ID, in.Version); err != nil {
+	if _, err := models.GetRuleVersion(c.pool, rule.ID, in.Version); err != nil {
 		writeError(w, http.StatusBadRequest, modules.M("rule.version_not_found"))
 		return
 	}
@@ -469,7 +469,7 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
 	var names []string
 	for _, id := range in.AgentIDs {
-		a, err := models.GetAgent(c.db, id)
+		a, err := models.GetAgent(c.pool, id)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("agent.id_not_found", "id", id))
 			return
@@ -477,7 +477,7 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 		names = append(names, c.agentDisplayName(a))
 	}
 	for _, id := range in.AgentIDs {
-		if err := models.AssignRule(c.db, id, rule.ID, in.Version); err != nil {
+		if err := models.AssignRule(c.pool, id, rule.ID, in.Version); err != nil {
 			c.internalError(w, r, err)
 			return
 		}
@@ -508,7 +508,7 @@ func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[id] = true
-		a, err := models.GetAgent(c.db, id)
+		a, err := models.GetAgent(c.pool, id)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("agent.id_not_found", "id", id))
 			return
@@ -521,12 +521,12 @@ func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
 		if !a.AssignedRuleID.Valid {
 			continue
 		}
-		if err := models.UnassignRule(c.db, a.ID); err != nil {
+		if err := models.UnassignRule(c.pool, a.ID); err != nil {
 			c.internalError(w, r, err)
 			return
 		}
 		ruleName := modules.M("history.detail.rule_fallback", "id", a.AssignedRuleID.Int64)
-		if rule, err := models.GetRule(c.db, a.AssignedRuleID.Int64); err == nil {
+		if rule, err := models.GetRule(c.pool, a.AssignedRuleID.Int64); err == nil {
 			ruleName = modules.Raw(rule.Name)
 		}
 		c.historyMsg(p, models.HistRule, "unassigned", ruleName,
@@ -553,7 +553,7 @@ func (c *core) handleRuleToTemplate(w http.ResponseWriter, r *http.Request) {
 	if in.Version == 0 {
 		in.Version = rule.LatestVersion
 	}
-	v, err := models.GetRuleVersion(c.db, rule.ID, in.Version)
+	v, err := models.GetRuleVersion(c.pool, rule.ID, in.Version)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, modules.M("rule.version_not_found"))
 		return
@@ -572,7 +572,7 @@ func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	if rule == nil {
 		return
 	}
-	n, err := models.CountAgentsUsingRule(c.db, rule.ID)
+	n, err := models.CountAgentsUsingRule(c.pool, rule.ID)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -581,7 +581,7 @@ func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, modules.M("rule.in_use"))
 		return
 	}
-	if err := models.DeleteRule(c.db, rule.ID); err != nil {
+	if err := models.DeleteRule(c.pool, rule.ID); err != nil {
 		if strings.Contains(err.Error(), "FOREIGN KEY") {
 			writeError(w, http.StatusConflict, modules.M("rule.in_use"))
 			return
@@ -616,7 +616,7 @@ func (c *core) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	for _, t := range modules.BuiltinTemplates() {
 		out = append(out, templateJSON{Name: t.Name, Builtin: true, Description: t.Description, DescriptionI18n: builtinDescriptionI18n(&t)})
 	}
-	list, err := models.ListTemplates(c.db)
+	list, err := models.ListTemplates(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -635,7 +635,7 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 			Content: &content})
 		return
 	}
-	t, err := models.GetTemplateByName(c.db, name)
+	t, err := models.GetTemplateByName(c.pool, name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 		return
@@ -664,7 +664,7 @@ func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc
 	}
 	p := principalFrom(r)
 	t := &models.Template{Name: name, Description: strings.TrimSpace(desc), Content: content.JSON(), CreatedBy: p.operator()}
-	if err := models.InsertTemplate(c.db, t); err != nil {
+	if err := models.InsertTemplate(c.pool, t); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, modules.M("template.name_taken"))
 			return
@@ -705,11 +705,11 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	case in.FromRule != nil:
 		if in.FromRule.Version == 0 {
 			// Without a version the latest one is used, as elsewhere.
-			if rule, err := models.GetRule(c.db, in.FromRule.RuleID); err == nil {
+			if rule, err := models.GetRule(c.pool, in.FromRule.RuleID); err == nil {
 				in.FromRule.Version = rule.LatestVersion
 			}
 		}
-		v, err := models.GetRuleVersion(c.db, in.FromRule.RuleID, in.FromRule.Version)
+		v, err := models.GetRuleVersion(c.pool, in.FromRule.RuleID, in.FromRule.Version)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("rule.rule_version_not_found"))
 			return
@@ -762,7 +762,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		desc = strings.TrimSpace(*in.Description)
 	} else {
 		// Without a description the stored one is kept.
-		cur, err := models.GetTemplateByName(c.db, name)
+		cur, err := models.GetTemplateByName(c.pool, name)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusNotFound, modules.M("template.not_found"))
@@ -773,7 +773,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 		desc = cur.Description
 	}
-	if err := models.UpdateTemplate(c.db, name, desc, content.JSON()); err != nil {
+	if err := models.UpdateTemplate(c.pool, name, desc, content.JSON()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 			return
@@ -791,7 +791,7 @@ func (c *core) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, modules.M("template.builtin_undeletable"))
 		return
 	}
-	if err := models.DeleteTemplate(c.db, name); err != nil {
+	if err := models.DeleteTemplate(c.pool, name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 			return

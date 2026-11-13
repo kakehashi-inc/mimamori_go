@@ -19,7 +19,7 @@ func (c *core) storePair(kind, status, issuerFP string, p *modules.CertKeyPair) 
 		Names: string(names), CertPEM: p.CertPEM, KeyPEM: p.KeyPEM,
 		NotBefore: p.Cert.NotBefore.Unix(), NotAfter: p.Cert.NotAfter.Unix(), Status: status,
 	}
-	return row, models.InsertCertificate(c.db, row)
+	return row, models.InsertCertificate(c.pool, row)
 }
 
 func pickStatus(list []*models.Certificate, status string) *models.Certificate {
@@ -36,18 +36,18 @@ func pickStatus(list []*models.Certificate, status string) *models.Certificate {
 // start and as a periodic task.
 func (c *core) manageCertificates() error {
 	now := time.Now()
-	cas, err := models.ListCertificates(c.db, "ca")
+	cas, err := models.ListCertificates(c.pool, "ca")
 	if err != nil {
 		return err
 	}
 	// Discard expired CAs that are not active.
 	for _, ca := range cas {
 		if ca.Status != models.CertActive && ca.NotAfter < now.Unix() {
-			_ = models.DeleteCertificate(c.db, ca.ID)
+			_ = models.DeleteCertificate(c.pool, ca.ID)
 			c.history(nil, models.HistCertificate, "ca_discarded", modules.FormatFingerprint(ca.Fingerprint), modules.M("history.detail.ca_discarded"))
 		}
 	}
-	cas, _ = models.ListCertificates(c.db, "ca")
+	cas, _ = models.ListCertificates(c.pool, "ca")
 	active := pickStatus(cas, models.CertActive)
 	if active == nil || active.NotAfter < now.Unix() {
 		pair, err := modules.GenerateCA(now)
@@ -55,13 +55,13 @@ func (c *core) manageCertificates() error {
 			return err
 		}
 		if active != nil {
-			_ = models.SetCertificateStatus(c.db, active.ID, models.CertRetired)
+			_ = models.SetCertificateStatus(c.pool, active.ID, models.CertRetired)
 		}
 		if active, err = c.storePair("ca", models.CertActive, "", pair); err != nil {
 			return err
 		}
 		c.history(nil, models.HistCertificate, "ca_created", modules.FormatFingerprint(active.Fingerprint), modules.M("history.detail.ca_created"))
-		cas, _ = models.ListCertificates(c.db, "ca")
+		cas, _ = models.ListCertificates(c.pool, "ca")
 	}
 	next := pickStatus(cas, models.CertNext)
 	// Roll-over step 1: create the next CA and distribute it.
@@ -79,10 +79,10 @@ func (c *core) manageCertificates() error {
 	// Roll-over step 2: after the distribution period, switch to the new CA.
 	forceServer := false
 	if next != nil && now.Unix() >= next.CreatedAt+int64(modules.CASwitchAfter/time.Second) {
-		if err := models.SetCertificateStatus(c.db, active.ID, models.CertRetired); err != nil {
+		if err := models.SetCertificateStatus(c.pool, active.ID, models.CertRetired); err != nil {
 			return err
 		}
-		if err := models.SetCertificateStatus(c.db, next.ID, models.CertActive); err != nil {
+		if err := models.SetCertificateStatus(c.pool, next.ID, models.CertActive); err != nil {
 			return err
 		}
 		c.history(nil, models.HistCertificate, "ca_switched", modules.FormatFingerprint(next.Fingerprint), modules.M("history.detail.ca_switched"))
@@ -93,7 +93,7 @@ func (c *core) manageCertificates() error {
 		return err
 	}
 
-	servers, err := models.ListCertificates(c.db, "server")
+	servers, err := models.ListCertificates(c.pool, "server")
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (c *core) manageCertificates() error {
 			return err
 		}
 		for _, s := range servers {
-			_ = models.DeleteCertificate(c.db, s.ID)
+			_ = models.DeleteCertificate(c.pool, s.ID)
 		}
 		c.history(nil, models.HistCertificate, "server_cert_issued", modules.FormatFingerprint(row.Fingerprint),
 			modules.M("history.detail.server_cert_names", "names", modules.CertNames(pair.Cert)))
@@ -141,7 +141,7 @@ func (c *core) manageCertificates() error {
 
 // trustedCAs returns the CA certificates agents should trust (not expired).
 func (c *core) trustedCAs() []*models.Certificate {
-	cas, _ := models.ListCertificates(c.db, "ca")
+	cas, _ := models.ListCertificates(c.pool, "ca")
 	now := time.Now().Unix()
 	var out []*models.Certificate
 	for _, ca := range cas {

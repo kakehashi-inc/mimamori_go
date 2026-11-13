@@ -14,7 +14,7 @@ import (
 // reportAlert stores one new alert detection of the built-in agent.
 func reportAlert(t *testing.T, e *testEnv, target string) {
 	t.Helper()
-	b, err := models.GetBuiltinAgent(e.c.db)
+	b, err := models.GetBuiltinAgent(e.c.pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func reportAlert(t *testing.T, e *testEnv, target string) {
 
 func pendingDetections(t *testing.T, e *testEnv) int {
 	t.Helper()
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	tdb, err := e.c.targetDB(b)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestNotificationRecipientsFromAccounts(t *testing.T) {
 	if len(mb.sent) != 0 {
 		t.Fatalf("mail without recipients: %+v", mb.sent)
 	}
-	if list, _ := models.ListUnsentNotifications(e.c.db); len(list) != 0 {
+	if list, _ := models.ListUnsentNotifications(e.c.pool); len(list) != 0 {
 		t.Fatalf("a notification was composed without recipients: %d", len(list))
 	}
 	if n := pendingDetections(t, e); n != 1 {
@@ -92,7 +92,7 @@ func TestNotificationRecipientsFromAccounts(t *testing.T) {
 
 	// Recipients are read when a mail is sent: an undelivered mail goes to
 	// the recipients chosen meanwhile, and waits while there are none.
-	_ = models.SetSetting(e.c.db, settingLastNotifyAt, "0")
+	_ = models.SetSetting(e.c.pool, settingLastNotifyAt, "0")
 	reportAlert(t, e, "curl c")
 	e.c.notify(time.Now())
 	if len(mb.sent) != 1 || pendingDetections(t, e) != 1 {
@@ -106,7 +106,7 @@ func TestNotificationRecipientsFromAccounts(t *testing.T) {
 
 	// Without smtp.from nothing is sent even with recipients.
 	setConfig(e, func(c *modules.CentralConfig) { c.SMTP.From = "" })
-	_ = models.SetSetting(e.c.db, settingLastNotifyAt, "0")
+	_ = models.SetSetting(e.c.pool, settingLastNotifyAt, "0")
 	reportAlert(t, e, "curl d")
 	e.c.notify(time.Now())
 	if len(mb.sent) != 2 {
@@ -168,10 +168,10 @@ func TestAccountNotifyAPI(t *testing.T) {
 	// The flag survives disabling (and is kept for when it is enabled again).
 	e.admin("POST", "/accounts/"+strconv.FormatInt(id, 10)+"/disable", nil)
 	e.admin("PUT", path, map[string]any{"notify": true})
-	if a, _ := models.GetAccount(e.c.db, id); !a.Notify || !a.Disabled {
+	if a, _ := models.GetAccount(e.c.pool, id); !a.Notify || !a.Disabled {
 		t.Fatalf("disabled account flag: %+v", a)
 	}
-	if list, _ := models.ListNotifyEmails(e.c.db); len(list) != 0 {
+	if list, _ := models.ListNotifyEmails(e.c.pool); len(list) != 0 {
 		t.Fatalf("disabled account listed as recipient: %v", list)
 	}
 }
@@ -184,7 +184,7 @@ func TestDeleteSuppressionReleases(t *testing.T) {
 	e := newTestEnv(t)
 	mb := useMailbox(e)
 	e.admin("PUT", "/accounts/1/notify", map[string]any{"notify": true})
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	tdb, err := e.c.targetDB(b)
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestDeleteSuppressionReleases(t *testing.T) {
 	if d := ds["curl c"]; !d.Suppressed || d.SuppressionID != s2ID || d.NotifyState != models.NotifySkipped {
 		t.Fatalf("curl c must stay suppressed by the other suppression: %+v", d)
 	}
-	hist, _, _ := models.ListHistory(e.c.db, models.HistSuppression, "", nil, 10, 0)
+	hist, _, _ := models.ListHistory(e.c.pool, models.HistSuppression, "", nil, 10, 0)
 	if len(hist) == 0 || hist[0].Action != "deleted" || !strings.Contains(hist[0].Detail, "1 detection(s) no longer suppressed") {
 		t.Fatalf("history: %+v", hist)
 	}

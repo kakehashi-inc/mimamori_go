@@ -65,7 +65,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	a, err := models.GetAccountByEmail(c.db, strings.TrimSpace(in.Email))
+	a, err := models.GetAccountByEmail(c.pool, strings.TrimSpace(in.Email))
 	if err != nil {
 		// Spend the same time as a real check so addresses cannot be probed.
 		modules.VerifyPassword(dummyPasswordHash(), in.Password)
@@ -78,7 +78,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.Disabled || !modules.VerifyPassword(a.PasswordHash, in.Password) {
 		lock := now + int64(modules.LoginLockDuration/time.Second)
-		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
+		if locked, _ := models.RecordLoginFailure(c.pool, a.ID, modules.LoginMaxFailures, lock); locked {
 			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, modules.M("history.detail.login_locked", "host", remoteHost(r.RemoteAddr)))
 		}
 		writeError(w, http.StatusUnauthorized, modules.M("auth.login_failed"))
@@ -100,7 +100,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 // completeLogin ends a successful login: it clears the failure counter,
 // starts a session, records the login and answers Me.
 func (c *core) completeLogin(w http.ResponseWriter, r *http.Request, a *models.Account, remember bool, detail modules.Msg) {
-	_ = models.ResetLoginFailures(c.db, a.ID)
+	_ = models.ResetLoginFailures(c.pool, a.ID)
 	if err := c.startSession(w, a.ID, remember); err != nil {
 		c.internalError(w, r, err)
 		return
@@ -133,7 +133,7 @@ func (c *core) startSession(w http.ResponseWriter, accountID int64, remember boo
 		expires = now + int64(maxAge)
 		cookie.MaxAge = maxAge
 	}
-	if err := models.InsertSession(c.db, &models.Session{ID: modules.HashSecret(value), AccountID: accountID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now, Remember: remember}); err != nil {
+	if err := models.InsertSession(c.pool, &models.Session{ID: modules.HashSecret(value), AccountID: accountID, CreatedAt: now, ExpiresAt: expires, LastSeenAt: now, Remember: remember}); err != nil {
 		return err
 	}
 	http.SetCookie(w, cookie)
@@ -143,7 +143,7 @@ func (c *core) startSession(w http.ResponseWriter, accountID int64, remember boo
 func (c *core) handleLogout(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
 	if p.SessionID != "" {
-		_ = models.DeleteSession(c.db, p.SessionID)
+		_ = models.DeleteSession(c.pool, p.SessionID)
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]any{})
@@ -168,7 +168,7 @@ func (c *core) handleOwnLanguage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, modules.M("account.language_invalid"))
 		return
 	}
-	if err := models.UpdateAccountLanguage(c.db, p.AccountID, in.Language); err != nil {
+	if err := models.UpdateAccountLanguage(c.pool, p.AccountID, in.Language); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -185,7 +185,7 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	a, err := models.GetAccount(c.db, p.AccountID)
+	a, err := models.GetAccount(c.pool, p.AccountID)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -203,7 +203,7 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	if err := models.UpdateAccountPassword(c.db, a.ID, hash); err != nil {
+	if err := models.UpdateAccountPassword(c.pool, a.ID, hash); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -213,7 +213,7 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *core) handleListAccounts(w http.ResponseWriter, r *http.Request) {
-	list, err := models.ListAccounts(c.db)
+	list, err := models.ListAccounts(c.pool)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -268,7 +268,7 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := &models.Account{Email: email, DisplayName: display, Role: in.Role, Language: in.Language, PasswordHash: hash}
-	if err := models.InsertAccount(c.db, a); err != nil {
+	if err := models.InsertAccount(c.pool, a); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, duplicateEmail)
 			return
@@ -287,7 +287,7 @@ func (c *core) loadAccount(w http.ResponseWriter, r *http.Request) *models.Accou
 		writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 		return nil
 	}
-	a, err := models.GetAccount(c.db, id)
+	a, err := models.GetAccount(c.pool, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 		return nil
@@ -305,7 +305,7 @@ func (c *core) loadAccount(w http.ResponseWriter, r *http.Request) *models.Accou
 // count, so the transaction already holds the write lock while it counts and
 // concurrent changes of two administrators cannot both pass the check.
 func (c *core) changeKeepingAdmin(a *models.Account, change func(models.Writer) error) (lastAdmin bool, err error) {
-	tx, err := c.db.Begin()
+	tx, err := c.pool.Begin()
 	if err != nil {
 		return false, err
 	}
@@ -381,7 +381,7 @@ func (c *core) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	if err := models.UpdateAccountPassword(c.db, a.ID, hash); err != nil {
+	if err := models.UpdateAccountPassword(c.pool, a.ID, hash); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -415,7 +415,7 @@ func (c *core) handleAccountEmail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.accountOut(a))
 		return
 	}
-	if err := models.UpdateAccountEmail(c.db, a.ID, email); err != nil {
+	if err := models.UpdateAccountEmail(c.pool, a.ID, email); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, duplicateEmail)
 			return
@@ -452,7 +452,7 @@ func (c *core) handleAccountDisplayName(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, c.accountOut(a))
 		return
 	}
-	if err := models.UpdateAccountDisplayName(c.db, a.ID, display); err != nil {
+	if err := models.UpdateAccountDisplayName(c.pool, a.ID, display); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -484,7 +484,7 @@ func (c *core) handleAccountNotify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.accountOut(a))
 		return
 	}
-	if err := models.SetAccountNotify(c.db, a.ID, *in.Notify); err != nil {
+	if err := models.SetAccountNotify(c.pool, a.ID, *in.Notify); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 			return

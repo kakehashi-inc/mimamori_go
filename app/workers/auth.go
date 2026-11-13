@@ -43,7 +43,7 @@ func (c *core) sessionPrincipal(r *http.Request) (*principal, *models.Session) {
 		return nil, nil
 	}
 	if a == nil || a.Disabled {
-		_ = models.DeleteSession(c.db, s.ID)
+		_ = models.DeleteSession(c.pool, s.ID)
 		return nil, nil
 	}
 	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: s.ID, StepUpAt: s.StepUpAt}, s
@@ -57,11 +57,11 @@ func (c *core) findSession(r *http.Request) (*models.Session, *models.Account) {
 	if err != nil || !strings.HasPrefix(ck.Value, modules.SessionPrefix) {
 		return nil, nil
 	}
-	s, err := models.GetSession(c.db, modules.HashSecret(ck.Value))
+	s, err := models.GetSession(c.pool, modules.HashSecret(ck.Value))
 	if err != nil || s.ExpiresAt < time.Now().Unix() {
 		return nil, nil
 	}
-	a, err := models.GetAccount(c.db, s.AccountID)
+	a, err := models.GetAccount(c.pool, s.AccountID)
 	if err != nil {
 		return s, nil
 	}
@@ -105,7 +105,7 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 			if s.Remember {
 				expires = s.ExpiresAt
 			}
-			_ = models.TouchSession(c.db, s.ID, now, expires)
+			_ = models.TouchSession(c.pool, s.ID, now, expires)
 		}
 		next := viewer
 		if p.isAdmin() {
@@ -174,14 +174,14 @@ func requireAny(h http.HandlerFunc) http.HandlerFunc {
 
 // invalidateAccount ends every session of an account (a role change).
 func (c *core) invalidateAccount(id int64) {
-	_ = models.DeleteAccountSessions(c.db, id, "")
+	_ = models.DeleteAccountSessions(c.pool, id, "")
 }
 
 // revokeAccountAuth ends the sessions (all but keepSession), the browser
 // verifications and the pending codes of an account (a password or e-mail
 // address change, disabling).
 func (c *core) revokeAccountAuth(id int64, keepSession string) {
-	if err := modules.RevokeAccountAuth(c.db, id, keepSession); err != nil {
+	if err := modules.RevokeAccountAuth(c.pool, id, keepSession); err != nil {
 		c.logger.Printf("revoke account %d: %v", id, err)
 	}
 }
@@ -197,7 +197,7 @@ var errAgentAuth = errors.New("unauthorized")
 // Every failure is answered without details and recorded in the history.
 func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent, error) {
 	reject := func(reason, target string) (*models.Token, *models.Agent, error) {
-		if err := models.RecordRejected(c.db, remoteHost(r.RemoteAddr), reason, target, 600); err != nil {
+		if err := models.RecordRejected(c.pool, remoteHost(r.RemoteAddr), reason, target, 600); err != nil {
 			c.logger.Printf("history: %v", err)
 		}
 		return nil, nil, errAgentAuth
@@ -220,7 +220,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	// the row as it is.
 	for attempt := 1; ; attempt++ {
 		var err error
-		t, err = models.FindTokenByHash(c.db, h)
+		t, err = models.FindTokenByHash(c.pool, h)
 		if errors.Is(err, sql.ErrNoRows) {
 			return reject("invalid token", "")
 		}
@@ -249,7 +249,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		// Only the columns changed here are written, and only while the token
 		// is unchanged since it was read: a concurrent revoke, reissue or
 		// unbind wins.
-		err = models.RecordTokenUse(c.db, t, &prev)
+		err = models.RecordTokenUse(c.pool, t, &prev)
 		if err == nil {
 			break
 		}
@@ -266,7 +266,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	if bound {
 		c.history(nil, models.HistToken, "bound", t.Name, modules.M("history.detail.token_bound", "instance", instance))
 	}
-	a, err := models.GetAgentByToken(c.db, t.ID)
+	a, err := models.GetAgentByToken(c.pool, t.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -358,7 +358,7 @@ func (c *core) agentTokenValid(r *http.Request) bool {
 		return false
 	}
 	h := modules.HashSecret(v)
-	t, err := models.FindTokenByHash(c.db, h)
+	t, err := models.FindTokenByHash(c.pool, h)
 	if err != nil {
 		return false
 	}

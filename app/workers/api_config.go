@@ -32,7 +32,7 @@ type configUpdateJSON struct {
 }
 
 func (c *core) configOut() (*configJSON, error) {
-	cfg, stored, err := modules.CentralConfigState(c.db)
+	cfg, stored, err := modules.CentralConfigState(c.pool)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (c *core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // applyConfigChanges checks and saves the changes in one transaction of the
 // central database. It returns the names of the changed items.
 func (c *core) applyConfigChanges(set map[string]string, unset []string) ([]string, error) {
-	tx, err := c.db.Begin()
+	tx, err := c.pool.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(changed) > 0 {
 		// The history shows the values as saved (lists normalized).
-		saved, _, savedErr := modules.CentralConfigState(c.db)
+		saved, _, savedErr := modules.CentralConfigState(c.pool)
 		sort.Strings(changed)
 		unset := map[string]bool{}
 		for _, n := range in.Unset {

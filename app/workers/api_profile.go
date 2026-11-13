@@ -27,7 +27,7 @@ func (c *core) handleOwnDisplayName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if display != p.DisplayName {
-		if err := models.UpdateAccountDisplayName(c.db, p.AccountID, display); err != nil {
+		if err := models.UpdateAccountDisplayName(c.pool, p.AccountID, display); err != nil {
 			c.internalError(w, r, err)
 			return
 		}
@@ -40,7 +40,7 @@ func (c *core) handleOwnDisplayName(w http.ResponseWriter, r *http.Request) {
 // other sessions, its browser verifications and its pending codes.
 // It reports false after answering an error.
 func (c *core) applyOwnEmail(w http.ResponseWriter, r *http.Request, p *principal, email string) bool {
-	if err := models.UpdateAccountEmail(c.db, p.AccountID, email); err != nil {
+	if err := models.UpdateAccountEmail(c.pool, p.AccountID, email); err != nil {
 		if isUniqueErr(err) {
 			writeError(w, http.StatusConflict, duplicateEmail)
 			return false
@@ -75,7 +75,7 @@ func (c *core) handleOwnEmail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, modules.M("account.email_unchanged"))
 		return
 	}
-	other, err := models.GetAccountByEmail(c.db, email)
+	other, err := models.GetAccountByEmail(c.pool, email)
 	if err == nil && other.ID != p.AccountID {
 		writeError(w, http.StatusConflict, duplicateEmail)
 		return
@@ -91,7 +91,7 @@ func (c *core) handleOwnEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A new request replaces an earlier one that was not confirmed.
-	_ = models.DeleteAccountAuthCodes(c.db, p.AccountID, models.CodePurposeEmailChange)
+	_ = models.DeleteAccountAuthCodes(c.pool, p.AccountID, models.CodePurposeEmailChange)
 	row := newAuthCode(r, models.CodePurposeEmailChange, p.AccountID, time.Now().Unix())
 	row.SessionID = p.SessionID
 	row.NewEmail = email
@@ -105,7 +105,7 @@ func (c *core) handleOwnEmail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}
-	if err := models.InsertAuthCode(c.db, row); err != nil {
+	if err := models.InsertAuthCode(c.pool, row); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -126,7 +126,7 @@ func (c *core) handleOwnEmailVerify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	row, err := models.GetEmailChangeCode(c.db, p.AccountID, p.SessionID)
+	row, err := models.GetEmailChangeCode(c.pool, p.AccountID, p.SessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusGone, emailCodeExpired)
 		return
@@ -136,13 +136,13 @@ func (c *core) handleOwnEmailVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row.ExpiresAt <= time.Now().Unix() {
-		_ = models.DeleteAuthCode(c.db, row.ID)
+		_ = models.DeleteAuthCode(c.pool, row.ID)
 		writeError(w, http.StatusGone, emailCodeExpired)
 		return
 	}
 	if !c.codeMatches(row, in.Code) {
-		if n, err := models.RecordAuthCodeAttempt(c.db, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
-			_ = models.DeleteAuthCode(c.db, row.ID)
+		if n, err := models.RecordAuthCodeAttempt(c.pool, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
+			_ = models.DeleteAuthCode(c.pool, row.ID)
 			writeError(w, http.StatusGone, emailCodeExpired)
 			return
 		}
@@ -151,7 +151,7 @@ func (c *core) handleOwnEmailVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// Used up atomically, so a code admits one confirmation and concurrent
 	// guesses cannot pass the attempt limit.
-	consumed, err := models.ConsumeAuthCode(c.db, row.ID, modules.AuthCodeMaxAttempts, time.Now().Unix())
+	consumed, err := models.ConsumeAuthCode(c.pool, row.ID, modules.AuthCodeMaxAttempts, time.Now().Unix())
 	if err != nil {
 		c.internalError(w, r, err)
 		return

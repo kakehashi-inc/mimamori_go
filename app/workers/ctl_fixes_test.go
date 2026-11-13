@@ -23,11 +23,11 @@ func TestTemplateUpdateKeepsDescription(t *testing.T) {
 	if out["description"] != "first" {
 		t.Errorf("response description = %v", out["description"])
 	}
-	if tpl, err := models.GetTemplateByName(e.c.db, "tpl"); err != nil || tpl.Description != "first" {
+	if tpl, err := models.GetTemplateByName(e.c.pool, "tpl"); err != nil || tpl.Description != "first" {
 		t.Errorf("stored description = %v, %v", tpl, err)
 	}
 	e.admin("PUT", "/templates/tpl", map[string]any{"content": content, "description": "second"})
-	if tpl, _ := models.GetTemplateByName(e.c.db, "tpl"); tpl.Description != "second" {
+	if tpl, _ := models.GetTemplateByName(e.c.pool, "tpl"); tpl.Description != "second" {
 		t.Errorf("description not changed: %q", tpl.Description)
 	}
 	if code, _ := e.adminRaw("PUT", "/templates/missing", map[string]any{"content": content}); code != 404 {
@@ -53,7 +53,7 @@ func TestTemplateFromRuleLatestVersion(t *testing.T) {
 // An agent given more than once is applied and counted once.
 func TestApplyRuleCountsAgentOnce(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	e.admin("POST", "/rules", map[string]any{"name": "r"})
 	out := e.admin("POST", "/rules/1/apply", map[string]any{"agent_ids": []int64{b.ID, b.ID}})
 	if out["applied"] != float64(1) {

@@ -27,7 +27,7 @@ func TestUnassignRule(t *testing.T) {
 	if rec := e.agentCall("report", tok, "m1", modules.ReportRequest{Apply: ap}); rec.Code != 200 {
 		t.Fatalf("report: %d", rec.Code)
 	}
-	a, _ := models.GetAgentByToken(e.c.db, int64(issued["token"].(map[string]any)["id"].(float64)))
+	a, _ := models.GetAgentByToken(e.c.pool, int64(issued["token"].(map[string]any)["id"].(float64)))
 
 	if rec := e.do(e.agent, "POST", "/admin/v1/rules/unassign", map[string]any{"agent_ids": []int64{}}, map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:1"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("no agent: %d", rec.Code)
@@ -38,7 +38,7 @@ func TestUnassignRule(t *testing.T) {
 	if out := e.admin("POST", "/rules/unassign", map[string]any{"agent_ids": []int64{a.ID, a.ID}}); out["unassigned"].(float64) != 1 {
 		t.Fatalf("unassign: %v", out)
 	}
-	got, _ := models.GetAgent(e.c.db, a.ID)
+	got, _ := models.GetAgent(e.c.pool, a.ID)
 	if got.AssignedRuleID.Valid || got.ApplyStatus != "pending" {
 		t.Fatalf("after unassign: %+v", got)
 	}
@@ -52,7 +52,7 @@ func TestUnassignRule(t *testing.T) {
 	if rec := e.agentCall("report", tok, "m1", modules.ReportRequest{Apply: none}); rec.Code != 200 {
 		t.Fatalf("report: %d", rec.Code)
 	}
-	got, _ = models.GetAgent(e.c.db, a.ID)
+	got, _ = models.GetAgent(e.c.pool, a.ID)
 	if got.ApplyStatus != modules.ApplyStatusNone || got.ReportedRuleID != 0 || got.ReportedRuleVersion != 0 {
 		t.Fatalf("after the agent's report: %+v", got)
 	}
@@ -66,7 +66,7 @@ func TestUnassignRule(t *testing.T) {
 	if out := e.admin("POST", "/rules/unassign", map[string]any{"agent_ids": []int64{a.ID}}); out["unassigned"].(float64) != 0 {
 		t.Fatalf("unassign without a rule: %v", out)
 	}
-	items, _, _ := models.ListHistory(e.c.db, models.HistRule, "", nil, 20, 0)
+	items, _, _ := models.ListHistory(e.c.pool, models.HistRule, "", nil, 20, 0)
 	found := false
 	for _, h := range items {
 		if h.Action == "unassigned" && h.Target == "web" {
@@ -79,14 +79,14 @@ func TestUnassignRule(t *testing.T) {
 
 	// The browser API has the same route for administrators.
 	e.admin("POST", "/rules", map[string]any{"name": "r2"})
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	e.admin("POST", "/rules/2/apply", map[string]any{"version": 1, "agent_ids": []int64{b.ID}})
 	cookie := login(t, e, testAdminEmail, "Admin-pass-123")
 	rec = e.do(e.web, "POST", "/api/v1/rules/unassign", map[string]any{"agent_ids": []int64{b.ID}}, map[string]string{"Cookie": sessionCookie + "=" + cookie, csrfHeader: "1"}, "192.0.2.1:1")
 	if rec.Code != 200 {
 		t.Fatalf("browser unassign: %d %s", rec.Code, rec.Body.String())
 	}
-	got, _ = models.GetAgent(e.c.db, b.ID)
+	got, _ = models.GetAgent(e.c.pool, b.ID)
 	if got.AssignedRuleID.Valid || got.ApplyStatus != "none" {
 		t.Fatalf("built-in agent that never applied the rule: %+v", got)
 	}
@@ -103,7 +103,7 @@ func TestDisabledBuiltinWithoutRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.pool)
 	off := false
 	cfg := e.c.conf()
 	cfg.BuiltinAgent = &off

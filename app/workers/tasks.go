@@ -25,7 +25,7 @@ func (c *core) periodicTasks() {
 }
 
 func (c *core) settingInt(key string) int64 {
-	v, _ := strconv.ParseInt(models.GetSetting(c.db, key), 10, 64)
+	v, _ := strconv.ParseInt(models.GetSetting(c.pool, key), 10, 64)
 	return v
 }
 
@@ -33,7 +33,7 @@ func (c *core) settingInt(key string) int64 {
 // drops renewal values that were never used before their expiry.
 func (c *core) processTokenExpiry(now time.Time) {
 	last := c.settingInt(settingLastTokenCheck)
-	tokens, err := models.ListTokens(c.db)
+	tokens, err := models.ListTokens(c.pool)
 	if err != nil {
 		return
 	}
@@ -43,10 +43,10 @@ func (c *core) processTokenExpiry(now time.Time) {
 			c.history(nil, models.HistToken, "expired", t.Name, modules.M("history.detail.token_expired"))
 		}
 		if t.PendingHash != "" && t.PendingExpiresAt <= n {
-			_ = models.DropExpiredTokenRenewal(c.db, t.ID, n)
+			_ = models.DropExpiredTokenRenewal(c.pool, t.ID, n)
 		}
 	}
-	_ = models.SetSetting(c.db, settingLastTokenCheck, strconv.FormatInt(n, 10))
+	_ = models.SetSetting(c.pool, settingLastTokenCheck, strconv.FormatInt(n, 10))
 }
 
 // retention deletes detections, command runs and ended run requests older
@@ -57,7 +57,7 @@ func (c *core) retention(now time.Time) {
 		return
 	}
 	cut := now.Add(-time.Duration(c.conf().RetentionDays) * 24 * time.Hour).Unix()
-	agents, err := models.ListAgents(c.db)
+	agents, err := models.ListAgents(c.pool)
 	if err != nil {
 		return
 	}
@@ -90,12 +90,12 @@ func (c *core) retention(now time.Time) {
 			c.logger.Printf("retention: removed %d command run(s) of %s", runs, c.agentDisplayName(a))
 		}
 	}
-	_ = models.DeleteRejectedHistoryBefore(c.db, cut)
-	_ = models.DeleteExpiredSessions(c.db, now.Unix())
-	_ = models.DeleteExpiredAuthCodes(c.db, now.Unix())
-	_ = models.DeleteExpiredBrowserVerifications(c.db, now.Unix())
-	_ = models.DeleteSentNotificationsBefore(c.db, now.Add(-30*24*time.Hour).Unix())
-	_ = models.SetSetting(c.db, settingLastRetentionAt, strconv.FormatInt(now.Unix(), 10))
+	_ = models.DeleteRejectedHistoryBefore(c.pool, cut)
+	_ = models.DeleteExpiredSessions(c.pool, now.Unix())
+	_ = models.DeleteExpiredAuthCodes(c.pool, now.Unix())
+	_ = models.DeleteExpiredBrowserVerifications(c.pool, now.Unix())
+	_ = models.DeleteSentNotificationsBefore(c.pool, now.Add(-30*24*time.Hour).Unix())
+	_ = models.SetSetting(c.pool, settingLastRetentionAt, strconv.FormatInt(now.Unix(), 10))
 }
 
 type pendingGroup struct {
@@ -120,7 +120,7 @@ func (c *core) notify(now time.Time) {
 	if len(c.notificationRecipients()) == 0 {
 		return
 	}
-	unsent, err := models.ListUnsentNotifications(c.db)
+	unsent, err := models.ListUnsentNotifications(c.pool)
 	if err != nil {
 		return
 	}
@@ -130,7 +130,7 @@ func (c *core) notify(now time.Time) {
 			return
 		}
 		c.composeNotification(now)
-		if unsent, err = models.ListUnsentNotifications(c.db); err != nil {
+		if unsent, err = models.ListUnsentNotifications(c.pool); err != nil {
 			return
 		}
 	}
@@ -141,13 +141,13 @@ func (c *core) notify(now time.Time) {
 		}
 		err := c.sendMail(c.conf().SMTP, to, n.Subject, n.Body)
 		if err != nil {
-			_ = models.MarkNotificationAttempt(c.db, n.ID, 0, err.Error())
+			_ = models.MarkNotificationAttempt(c.pool, n.ID, 0, err.Error())
 			c.logger.Printf("notification %d: send failed (will retry): %v", n.ID, err)
 			return
 		}
 		sent := time.Now().Unix()
-		_ = models.MarkNotificationAttempt(c.db, n.ID, sent, "")
-		_ = models.SetSetting(c.db, settingLastNotifyAt, strconv.FormatInt(sent, 10))
+		_ = models.MarkNotificationAttempt(c.pool, n.ID, sent, "")
+		_ = models.SetSetting(c.pool, settingLastNotifyAt, strconv.FormatInt(sent, 10))
 	}
 }
 
@@ -155,7 +155,7 @@ func (c *core) notify(now time.Time) {
 // mails: the addresses of the enabled accounts chosen as recipients. On a
 // database error it returns none, so nothing is sent until the next try.
 func (c *core) notificationRecipients() []string {
-	accounts, err := models.ListNotifyEmails(c.db)
+	accounts, err := models.ListNotifyEmails(c.pool)
 	if err != nil {
 		c.logger.Printf("notification recipients: %v", err)
 		return nil
@@ -164,7 +164,7 @@ func (c *core) notificationRecipients() []string {
 }
 
 func (c *core) composeNotification(now time.Time) {
-	agents, err := models.ListAgents(c.db)
+	agents, err := models.ListAgents(c.pool)
 	if err != nil {
 		return
 	}
@@ -219,7 +219,7 @@ func (c *core) composeNotification(now time.Time) {
 	if omitted > 0 {
 		fmt.Fprintf(&b, "\n... %d more detection(s) not listed. See the detections screen.\n", omitted)
 	}
-	if err := models.InsertNotification(c.db, &models.Notification{Subject: subject, Body: b.String()}); err != nil {
+	if err := models.InsertNotification(c.pool, &models.Notification{Subject: subject, Body: b.String()}); err != nil {
 		c.logger.Printf("notification: %v", err)
 		return
 	}

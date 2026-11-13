@@ -35,7 +35,13 @@ func startCentral() error {
 		return modules.NewExitError(modules.ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := modules.OpenSQLitePool(filepath.Join(dataDir, modules.CentralDBFileName), modules.SchemaCentral)
+	dbPath := filepath.Join(dataDir, modules.CentralDBFileName)
+	handle, err := modules.OpenSQLite(dbPath, modules.SchemaCentral)
+	if err != nil {
+		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
+	}
+	defer handle.Close()
+	db, err := modules.OpenSQLitePool(dbPath, modules.SchemaCentral)
 	if err != nil {
 		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
 	}
@@ -56,7 +62,7 @@ func startCentral() error {
 		}
 	}()
 
-	c := newCore(db, cfg, dataDir, logger)
+	c := newCore(handle, db, cfg, dataDir, logger)
 	defer c.closeTargets()
 	if err := c.ensureServerKey(); err != nil {
 		return err

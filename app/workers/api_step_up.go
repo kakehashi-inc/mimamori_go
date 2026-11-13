@@ -59,7 +59,7 @@ func (c *core) handleStepUpRequest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"required": false})
 		return
 	}
-	_ = models.DeleteSessionAuthCodes(c.db, models.CodePurposeStepUp, p.AccountID, p.SessionID)
+	_ = models.DeleteSessionAuthCodes(c.pool, models.CodePurposeStepUp, p.AccountID, p.SessionID)
 	row := newAuthCode(r, models.CodePurposeStepUp, p.AccountID, time.Now().Unix())
 	row.SessionID = p.SessionID
 	code, err := c.seal(row)
@@ -73,7 +73,7 @@ func (c *core) handleStepUpRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}
-	if err := models.InsertAuthCode(c.db, row); err != nil {
+	if err := models.InsertAuthCode(c.pool, row); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -100,7 +100,7 @@ func (c *core) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"required": false})
 		return
 	}
-	row, err := models.GetSessionAuthCode(c.db, models.CodePurposeStepUp, p.AccountID, p.SessionID)
+	row, err := models.GetSessionAuthCode(c.pool, models.CodePurposeStepUp, p.AccountID, p.SessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusGone, stepUpCodeExpired)
 		return
@@ -110,20 +110,20 @@ func (c *core) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row.ExpiresAt <= now {
-		_ = models.DeleteAuthCode(c.db, row.ID)
+		_ = models.DeleteAuthCode(c.pool, row.ID)
 		writeError(w, http.StatusGone, stepUpCodeExpired)
 		return
 	}
 	if !c.codeMatches(row, in.Code) {
-		if n, err := models.RecordAuthCodeAttempt(c.db, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
-			_ = models.DeleteAuthCode(c.db, row.ID)
+		if n, err := models.RecordAuthCodeAttempt(c.pool, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
+			_ = models.DeleteAuthCode(c.pool, row.ID)
 			writeError(w, http.StatusGone, stepUpCodeExpired)
 			return
 		}
 		writeError(w, http.StatusBadRequest, invalidCode)
 		return
 	}
-	consumed, err := models.ConsumeAuthCode(c.db, row.ID, modules.AuthCodeMaxAttempts, now)
+	consumed, err := models.ConsumeAuthCode(c.pool, row.ID, modules.AuthCodeMaxAttempts, now)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -133,7 +133,7 @@ func (c *core) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The session may have ended meanwhile (logout, a password change).
-	if err := models.SetSessionStepUp(c.db, p.SessionID, now); errors.Is(err, sql.ErrNoRows) {
+	if err := models.SetSessionStepUp(c.pool, p.SessionID, now); errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, modules.M("auth.login_required"))
 		return
 	} else if err != nil {

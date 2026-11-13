@@ -82,7 +82,7 @@ func (c *core) browserVerified(r *http.Request, accountID int64, cfg *modules.Ce
 	if err != nil || !strings.HasPrefix(ck.Value, modules.VerifyPrefix) {
 		return false
 	}
-	v, err := models.GetBrowserVerification(c.db, modules.HashSecret(ck.Value))
+	v, err := models.GetBrowserVerification(c.pool, modules.HashSecret(ck.Value))
 	if err != nil || v.AccountID != accountID || v.ExpiresAt <= now {
 		return false
 	}
@@ -99,7 +99,7 @@ func (c *core) browserVerified(r *http.Request, accountID int64, cfg *modules.Ce
 // on the server, so the browser shows nothing about it.
 func (c *core) rememberBrowser(w http.ResponseWriter, r *http.Request, accountID int64, trusted bool, now int64) error {
 	if old, err := r.Cookie(verifyCookie); err == nil && old.Value != "" {
-		_ = models.DeleteBrowserVerification(c.db, modules.HashSecret(old.Value))
+		_ = models.DeleteBrowserVerification(c.pool, modules.HashSecret(old.Value))
 	}
 	value, err := modules.GenerateSecret(modules.VerifyPrefix)
 	if err != nil {
@@ -112,7 +112,7 @@ func (c *core) rememberBrowser(w http.ResponseWriter, r *http.Request, accountID
 	if trusted {
 		expires = now + int64(modules.MaxTrustDays)*86400
 	}
-	if err := models.InsertBrowserVerification(c.db, &models.BrowserVerification{ID: modules.HashSecret(value), AccountID: accountID, Trusted: trusted,
+	if err := models.InsertBrowserVerification(c.pool, &models.BrowserVerification{ID: modules.HashSecret(value), AccountID: accountID, Trusted: trusted,
 		CreatedAt: now, ExpiresAt: expires, RemoteAddr: remoteHost(r.RemoteAddr)}); err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (c *core) rememberBrowser(w http.ResponseWriter, r *http.Request, accountID
 // mail cannot be sent the login fails (503) and nothing is stored.
 func (c *core) startLoginCode(w http.ResponseWriter, r *http.Request, a *models.Account, remember bool, now int64) {
 	// A new login replaces the codes of earlier attempts.
-	_ = models.DeleteAccountAuthCodes(c.db, a.ID, models.CodePurposeLogin)
+	_ = models.DeleteAccountAuthCodes(c.pool, a.ID, models.CodePurposeLogin)
 	challenge, err := modules.GenerateSecret(modules.ChallengePrefix)
 	if err != nil {
 		c.internalError(w, r, err)
@@ -146,7 +146,7 @@ func (c *core) startLoginCode(w http.ResponseWriter, r *http.Request, a *models.
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}
-	if err := models.InsertAuthCode(c.db, row); err != nil {
+	if err := models.InsertAuthCode(c.pool, row); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -171,7 +171,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, loginCodeExpired)
 		return
 	}
-	row, err := models.GetLoginCodeByChallenge(c.db, modules.HashSecret(challenge))
+	row, err := models.GetLoginCodeByChallenge(c.pool, modules.HashSecret(challenge))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusGone, loginCodeExpired)
 		return
@@ -180,9 +180,9 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	a, err := models.GetAccount(c.db, row.AccountID)
+	a, err := models.GetAccount(c.pool, row.AccountID)
 	if row.ExpiresAt <= now || err != nil || a.Disabled {
-		_ = models.DeleteAuthCode(c.db, row.ID)
+		_ = models.DeleteAuthCode(c.pool, row.ID)
 		writeError(w, http.StatusGone, loginCodeExpired)
 		return
 	}
@@ -191,12 +191,12 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.codeMatches(row, in.Code) {
-		if n, err := models.RecordAuthCodeAttempt(c.db, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
-			_ = models.DeleteAuthCode(c.db, row.ID)
+		if n, err := models.RecordAuthCodeAttempt(c.pool, row.ID); err != nil || n >= modules.AuthCodeMaxAttempts {
+			_ = models.DeleteAuthCode(c.pool, row.ID)
 		}
 		lock := now + int64(modules.LoginLockDuration/time.Second)
-		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
-			_ = models.DeleteAuthCode(c.db, row.ID)
+		if locked, _ := models.RecordLoginFailure(c.pool, a.ID, modules.LoginMaxFailures, lock); locked {
+			_ = models.DeleteAuthCode(c.pool, row.ID)
 			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, modules.M("history.detail.login_locked", "host", remoteHost(r.RemoteAddr)))
 			writeError(w, http.StatusLocked, modules.M("auth.locked"))
 			return
@@ -207,7 +207,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 	// The code is used up atomically: a concurrent request with the same
 	// code, or one that read the row before concurrent wrong entries
 	// discarded it, gets 410.
-	consumed, err := models.ConsumeAuthCode(c.db, row.ID, modules.AuthCodeMaxAttempts, now)
+	consumed, err := models.ConsumeAuthCode(c.pool, row.ID, modules.AuthCodeMaxAttempts, now)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -218,7 +218,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// Concurrent wrong entries may have locked the account (or an
 	// administrator disabled it) after it was read above.
-	if a, err = models.GetAccount(c.db, row.AccountID); err != nil || a.Disabled {
+	if a, err = models.GetAccount(c.pool, row.AccountID); err != nil || a.Disabled {
 		writeError(w, http.StatusGone, loginCodeExpired)
 		return
 	}

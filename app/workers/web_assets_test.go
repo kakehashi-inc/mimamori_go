@@ -121,13 +121,13 @@ func TestStaticAdminFiles(t *testing.T) {
 	}
 
 	// Serving a file does not extend the session.
-	if _, err := e.c.db.Exec(`UPDATE sessions SET last_seen_at = 1000`); err != nil {
+	if _, err := e.c.pool.Exec(`UPDATE sessions SET last_seen_at = 1000`); err != nil {
 		t.Fatal(err)
 	}
 	get("GET", "/assets/admin.js", adminCk)
 	get("GET", "/assets/admin.js", viewCk)
 	var touched int
-	_ = e.c.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE last_seen_at <> 1000`).Scan(&touched)
+	_ = e.c.pool.QueryRow(`SELECT COUNT(*) FROM sessions WHERE last_seen_at <> 1000`).Scan(&touched)
 	if touched != 0 {
 		t.Fatalf("%d sessions extended by static files", touched)
 	}
@@ -146,12 +146,12 @@ func TestStaticAdminFilesInvalidSessionsAndPaths(t *testing.T) {
 	}
 
 	expiredCk := login(t, e, testAdminEmail, "Admin-pass-123")
-	if _, err := e.c.db.Exec(`UPDATE sessions SET expires_at = 1`); err != nil {
+	if _, err := e.c.pool.Exec(`UPDATE sessions SET expires_at = 1`); err != nil {
 		t.Fatal(err)
 	}
 	e.admin("POST", "/accounts", map[string]string{"email": "admin2@example.com", "display_name": "Admin 2", "role": "admin", "password": "Admin2-pass-12"})
 	disabledCk := login(t, e, "admin2@example.com", "Admin2-pass-12")
-	if _, err := e.c.db.Exec(`UPDATE accounts SET disabled = 1 WHERE email = 'admin2@example.com'`); err != nil {
+	if _, err := e.c.pool.Exec(`UPDATE accounts SET disabled = 1 WHERE email = 'admin2@example.com'`); err != nil {
 		t.Fatal(err)
 	}
 	for name, ck := range map[string]string{"expired": expiredCk, "disabled": disabledCk} {

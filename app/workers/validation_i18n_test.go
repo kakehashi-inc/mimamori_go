@@ -179,7 +179,7 @@ func TestConfigSaveFailureIsInternal(t *testing.T) {
 		`CREATE TRIGGER fail_settings_insert BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`,
 		`CREATE TRIGGER fail_settings_update BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`,
 	} {
-		if _, err := e.c.db.Exec(stmt); err != nil {
+		if _, err := e.c.pool.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
 	}
