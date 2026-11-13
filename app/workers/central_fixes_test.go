@@ -36,11 +36,11 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 	e.c.cfg.Store(&cfg)
 	e.admin("PUT", "/accounts/1/notify", map[string]any{"notify": true})
 
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
 	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"}}})
 	e.c.notify(time.Now())
-	if list, _ := models.ListUnsentNotifications(e.c.pool); len(list) != 1 {
+	if list, _ := models.ListUnsentNotifications(e.c.db.Read()); len(list) != 1 {
 		t.Fatalf("first mail: %d unsent", len(list))
 	}
 	if e.c.settingInt(settingLastNotifyAt) != 0 {
@@ -48,7 +48,7 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 	}
 	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "normal", OSUser: "nginx", Exe: "/bin/sh", Target: "sh -c id"}}})
 	e.c.notify(time.Now().Add(2 * time.Hour))
-	if list, _ := models.ListUnsentNotifications(e.c.pool); len(list) != 1 {
+	if list, _ := models.ListUnsentNotifications(e.c.db.Read()); len(list) != 1 {
 		t.Fatalf("a second mail was composed while one is undelivered: %d unsent", len(list))
 	}
 	tdb, _ := e.c.targetDB(b)
@@ -104,23 +104,23 @@ func TestTokenUseKeepsConcurrentRevoke(t *testing.T) {
 	e := newTestEnv(t)
 	issued := e.admin("POST", "/tokens", map[string]any{"name": "host-r", "valid_days": 10})
 	id := int64(issued["token"].(map[string]any)["id"].(float64))
-	read, _ := models.GetToken(e.c.pool, id)
+	read, _ := models.GetToken(e.c.db.Read(), id)
 	prev := *read
 	e.admin("POST", "/tokens/"+itoa64(id)+"/revoke", nil)
 	read.InstanceID, read.BoundAt, read.UsedAt, read.LastSeenAt = "m", 1, 1, 1
-	if err := models.RecordTokenUse(e.c.pool, read, &prev); !errors.Is(err, sql.ErrNoRows) {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.RecordTokenUse(tx, read, &prev) }); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("token use after a revoke: %v", err)
 	}
-	if got, _ := models.GetToken(e.c.pool, id); got.RevokedAt == 0 || got.InstanceID != "" {
+	if got, _ := models.GetToken(e.c.db.Read(), id); got.RevokedAt == 0 || got.InstanceID != "" {
 		t.Fatalf("revoke undone: %+v", got)
 	}
 
 	issued = e.admin("POST", "/tokens", map[string]any{"name": "host-s", "valid_days": 10})
 	id = int64(issued["token"].(map[string]any)["id"].(float64))
-	read, _ = models.GetToken(e.c.pool, id)
+	read, _ = models.GetToken(e.c.db.Read(), id)
 	re := e.admin("POST", "/tokens/"+itoa64(id)+"/reissue", map[string]any{})
 	read.RenewCounter, read.PendingHash, read.PendingExpiresAt = 1, "x", 1
-	if err := models.SetTokenRenewal(e.c.pool, read, "", 0); !errors.Is(err, sql.ErrNoRows) {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.SetTokenRenewal(tx, read, "", 0) }); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("renewal after a reissue: %v", err)
 	}
 	if rec := e.agentCall("sync", re["value"].(string), "m", modules.SyncRequest{}); rec.Code != 200 {
@@ -131,17 +131,24 @@ func TestTokenUseKeepsConcurrentRevoke(t *testing.T) {
 func TestLoginFailureCountedAtomically(t *testing.T) {
 	e := newTestEnv(t)
 	lock := time.Now().Unix() + 900
+	failure := func(until int64) (locked bool, err error) {
+		err = e.c.db.Write(func(tx models.Writer) error {
+			locked, err = models.RecordLoginFailure(tx, 1, modules.LoginMaxFailures, until)
+			return err
+		})
+		return locked, err
+	}
 	for i := 1; i <= modules.LoginMaxFailures; i++ {
-		locked, err := models.RecordLoginFailure(e.c.pool, 1, modules.LoginMaxFailures, lock)
+		locked, err := failure(lock)
 		if err != nil || locked != (i == modules.LoginMaxFailures) {
 			t.Fatalf("failure %d: locked %v %v", i, locked, err)
 		}
 	}
 	// A failure of a request that started before the lock must keep it.
-	if locked, _ := models.RecordLoginFailure(e.c.pool, 1, modules.LoginMaxFailures, 0); locked {
+	if locked, _ := failure(0); locked {
 		t.Fatal("a single failure must not lock")
 	}
-	a, _ := models.GetAccount(e.c.pool, 1)
+	a, _ := models.GetAccount(e.c.db.Read(), 1)
 	if a.LockedUntil != lock || a.FailedLogins != 1 {
 		t.Fatalf("lock cleared or count lost: %+v", a)
 	}
@@ -160,7 +167,7 @@ func TestLastAdminProtectedInTransaction(t *testing.T) {
 			t.Fatalf("%s %s: %d", rq.method, rq.path, rec.Code)
 		}
 	}
-	if n, _ := models.CountActiveAdmins(e.c.pool); n != 1 {
+	if n, _ := models.CountActiveAdmins(e.c.db.Read()); n != 1 {
 		t.Fatalf("enabled administrators: %d", n)
 	}
 	e.admin("DELETE", "/accounts/1", nil)
@@ -184,7 +191,7 @@ func TestTokenIssueUndoneWhenAgentFails(t *testing.T) {
 
 func TestSuppressionKeepsConcurrentOccurrences(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
 	rep := &modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "normal", OSUser: "nginx", Exe: "/bin/sh", Target: "sh", Count: 1, FirstAt: 100, LastAt: 100}}}
 	_ = tr.Report(rep)
@@ -212,7 +219,7 @@ func TestRejectedTokenReasons(t *testing.T) {
 		if rec := e.do(e.agent, "POST", "/agent/v1/sync", modules.SyncRequest{}, hdr, "192.0.2.20:1"); rec.Code != 401 {
 			t.Fatalf("%q: %d", tc.auth, rec.Code)
 		}
-		items, _, _ := models.ListHistory(e.c.pool, models.HistRejected, "", nil, 1, 0)
+		items, _, _ := models.ListHistory(e.c.db.Read(), models.HistRejected, "", nil, 1, 0)
 		if len(items) == 0 || items[0].Action != tc.reason {
 			t.Fatalf("%q recorded as %+v", tc.auth, items)
 		}
@@ -284,7 +291,7 @@ func TestConcurrentFirstUseOfToken(t *testing.T) {
 // because auditd is not usable is reported as stopped with the reason.
 func TestOverviewBuiltinDisabled(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	// No audit tools: CheckAuditd fails whatever the host has.
 	t.Setenv("PATH", t.TempDir())
 	type overview struct {

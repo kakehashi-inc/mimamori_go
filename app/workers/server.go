@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"mimamori/app/models"
 	"mimamori/app/modules"
 )
 
@@ -35,34 +36,28 @@ func startCentral() error {
 		return modules.NewExitError(modules.ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	dbPath := filepath.Join(dataDir, modules.CentralDBFileName)
-	handle, err := modules.OpenSQLite(dbPath, modules.SchemaCentral)
-	if err != nil {
-		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
-	}
-	defer handle.Close()
-	db, err := modules.OpenSQLitePool(dbPath, modules.SchemaCentral)
+	db, err := modules.OpenSQLite(filepath.Join(dataDir, modules.CentralDBFileName), modules.SchemaCentral)
 	if err != nil {
 		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
 	}
 	defer db.Close()
-	cfg, err := modules.LoadCentralConfig(db)
+	cfg, err := modules.LoadCentralConfig(db.Read())
 	if err != nil {
 		return modules.NewExitError(modules.ExitConfig, err.Error()+" (correct it with central config)")
 	}
 	// central status shows these values while a saved change waits for a
 	// restart. They are recorded at once (under the lock), so that a record
 	// left by a central that was killed is never shown for this one.
-	if err := modules.SaveRunningConfig(db, cfg); err != nil {
+	if err := db.Write(func(tx models.Writer) error { return modules.SaveRunningConfig(tx, cfg) }); err != nil {
 		logger.Printf("recording the start values: %v", err)
 	}
 	defer func() {
-		if err := modules.ClearRunningConfig(db); err != nil {
+		if err := db.Write(func(tx models.Writer) error { return modules.ClearRunningConfig(tx) }); err != nil {
 			logger.Printf("clearing the start values: %v", err)
 		}
 	}()
 
-	c := newCore(handle, db, cfg, dataDir, logger)
+	c := newCore(db, cfg, dataDir, logger)
 	defer c.closeTargets()
 	if err := c.ensureServerKey(); err != nil {
 		return err

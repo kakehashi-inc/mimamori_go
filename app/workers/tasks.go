@@ -25,28 +25,39 @@ func (c *core) periodicTasks() {
 }
 
 func (c *core) settingInt(key string) int64 {
-	v, _ := strconv.ParseInt(models.GetSetting(c.pool, key), 10, 64)
+	v, _ := strconv.ParseInt(models.GetSetting(c.db.Read(), key), 10, 64)
 	return v
 }
 
 // processTokenExpiry records tokens that expired since the last check and
 // drops renewal values that were never used before their expiry.
+//
+// The time of the last check, the tokens, the history rows, the dropped
+// values and the new time of the check are read and written in one
+// transaction, so a check never records an expiry twice. A statement that
+// fails does not undo the others (a failed history row is logged), as when
+// each statement stood on its own.
 func (c *core) processTokenExpiry(now time.Time) {
-	last := c.settingInt(settingLastTokenCheck)
-	tokens, err := models.ListTokens(c.pool)
-	if err != nil {
-		return
-	}
 	n := now.Unix()
-	for _, t := range tokens {
-		if t.RevokedAt == 0 && t.ExpiresAt > last && t.ExpiresAt <= n && (t.PendingHash == "" || t.PendingExpiresAt <= n) {
-			c.history(nil, models.HistToken, "expired", t.Name, modules.M("history.detail.token_expired"))
+	_ = c.db.Write(func(tx models.Writer) error {
+		last, _ := strconv.ParseInt(models.GetSetting(tx, settingLastTokenCheck), 10, 64)
+		tokens, err := models.ListTokens(tx)
+		if err != nil {
+			return err
 		}
-		if t.PendingHash != "" && t.PendingExpiresAt <= n {
-			_ = models.DropExpiredTokenRenewal(c.pool, t.ID, n)
+		for _, t := range tokens {
+			if t.RevokedAt == 0 && t.ExpiresAt > last && t.ExpiresAt <= n && (t.PendingHash == "" || t.PendingExpiresAt <= n) {
+				if err := c.recordHistory(tx, models.HistToken, "expired", t.Name, modules.M("history.detail.token_expired")); err != nil {
+					c.logger.Printf("history: %v", err)
+				}
+			}
+			if t.PendingHash != "" && t.PendingExpiresAt <= n {
+				_ = models.DropExpiredTokenRenewal(tx, t.ID, n)
+			}
 		}
-	}
-	_ = models.SetSetting(c.pool, settingLastTokenCheck, strconv.FormatInt(n, 10))
+		_ = models.SetSetting(tx, settingLastTokenCheck, strconv.FormatInt(n, 10))
+		return nil
+	})
 }
 
 // retention deletes detections, command runs and ended run requests older
@@ -57,7 +68,7 @@ func (c *core) retention(now time.Time) {
 		return
 	}
 	cut := now.Add(-time.Duration(c.conf().RetentionDays) * 24 * time.Hour).Unix()
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		return
 	}
@@ -90,12 +101,17 @@ func (c *core) retention(now time.Time) {
 			c.logger.Printf("retention: removed %d command run(s) of %s", runs, c.agentDisplayName(a))
 		}
 	}
-	_ = models.DeleteRejectedHistoryBefore(c.pool, cut)
-	_ = models.DeleteExpiredSessions(c.pool, now.Unix())
-	_ = models.DeleteExpiredAuthCodes(c.pool, now.Unix())
-	_ = models.DeleteExpiredBrowserVerifications(c.pool, now.Unix())
-	_ = models.DeleteSentNotificationsBefore(c.pool, now.Add(-30*24*time.Hour).Unix())
-	_ = models.SetSetting(c.pool, settingLastRetentionAt, strconv.FormatInt(now.Unix(), 10))
+	// One transaction for the central database; as for the targets, a
+	// statement that fails does not undo the others.
+	_ = c.db.Write(func(tx models.Writer) error {
+		_ = models.DeleteRejectedHistoryBefore(tx, cut)
+		_ = models.DeleteExpiredSessions(tx, now.Unix())
+		_ = models.DeleteExpiredAuthCodes(tx, now.Unix())
+		_ = models.DeleteExpiredBrowserVerifications(tx, now.Unix())
+		_ = models.DeleteSentNotificationsBefore(tx, now.Add(-30*24*time.Hour).Unix())
+		_ = models.SetSetting(tx, settingLastRetentionAt, strconv.FormatInt(now.Unix(), 10))
+		return nil
+	})
 }
 
 type pendingGroup struct {
@@ -120,7 +136,7 @@ func (c *core) notify(now time.Time) {
 	if len(c.notificationRecipients()) == 0 {
 		return
 	}
-	unsent, err := models.ListUnsentNotifications(c.pool)
+	unsent, err := models.ListUnsentNotifications(c.db.Read())
 	if err != nil {
 		return
 	}
@@ -130,7 +146,7 @@ func (c *core) notify(now time.Time) {
 			return
 		}
 		c.composeNotification(now)
-		if unsent, err = models.ListUnsentNotifications(c.pool); err != nil {
+		if unsent, err = models.ListUnsentNotifications(c.db.Read()); err != nil {
 			return
 		}
 	}
@@ -141,13 +157,19 @@ func (c *core) notify(now time.Time) {
 		}
 		err := c.sendMail(c.conf().SMTP, to, n.Subject, n.Body)
 		if err != nil {
-			_ = models.MarkNotificationAttempt(c.pool, n.ID, 0, err.Error())
+			_ = c.db.Write(func(tx models.Writer) error { return models.MarkNotificationAttempt(tx, n.ID, 0, err.Error()) })
 			c.logger.Printf("notification %d: send failed (will retry): %v", n.ID, err)
 			return
 		}
 		sent := time.Now().Unix()
-		_ = models.MarkNotificationAttempt(c.pool, n.ID, sent, "")
-		_ = models.SetSetting(c.pool, settingLastNotifyAt, strconv.FormatInt(sent, 10))
+		// The mail is sent before the transaction; the attempt and the time
+		// of the last delivered mail are written together after it, as
+		// before each failing statement does not stop the other.
+		_ = c.db.Write(func(tx models.Writer) error {
+			_ = models.MarkNotificationAttempt(tx, n.ID, sent, "")
+			_ = models.SetSetting(tx, settingLastNotifyAt, strconv.FormatInt(sent, 10))
+			return nil
+		})
 	}
 }
 
@@ -155,7 +177,7 @@ func (c *core) notify(now time.Time) {
 // mails: the addresses of the enabled accounts chosen as recipients. On a
 // database error it returns none, so nothing is sent until the next try.
 func (c *core) notificationRecipients() []string {
-	accounts, err := models.ListNotifyEmails(c.pool)
+	accounts, err := models.ListNotifyEmails(c.db.Read())
 	if err != nil {
 		c.logger.Printf("notification recipients: %v", err)
 		return nil
@@ -164,7 +186,7 @@ func (c *core) notificationRecipients() []string {
 }
 
 func (c *core) composeNotification(now time.Time) {
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		return
 	}
@@ -219,7 +241,12 @@ func (c *core) composeNotification(now time.Time) {
 	if omitted > 0 {
 		fmt.Fprintf(&b, "\n... %d more detection(s) not listed. See the detections screen.\n", omitted)
 	}
-	if err := models.InsertNotification(c.pool, &models.Notification{Subject: subject, Body: b.String()}); err != nil {
+	// The mail is stored in central.db; the detections are marked in their
+	// agents' databases after it (another file each).
+	err = c.db.Write(func(tx models.Writer) error {
+		return models.InsertNotification(tx, &models.Notification{Subject: subject, Body: b.String()})
+	})
+	if err != nil {
 		c.logger.Printf("notification: %v", err)
 		return
 	}

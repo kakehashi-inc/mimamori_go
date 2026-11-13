@@ -25,7 +25,7 @@ func TestTargetOpenDoesNotBlockOthers(t *testing.T) {
 	// An agent whose database is not open yet (as after a restart before
 	// openAllTargets reached it).
 	held := &models.Agent{Kind: models.AgentToken}
-	if err := models.InsertAgent(e.c.pool, held); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.InsertAgent(tx, held) }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,11 +144,11 @@ func TestTargetOpenDoesNotBlockOthers(t *testing.T) {
 	// file belongs makes it fail, and once it is gone the next call opens
 	// the file.
 	failing := &models.Agent{Kind: models.AgentToken}
-	if err := models.InsertAgent(e.c.pool, failing); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.InsertAgent(tx, failing) }); err != nil {
 		t.Fatal(err)
 	}
 	failing.DBFile = "agent-failing.db"
-	if err := models.SetAgentDBFile(e.c.pool, failing.ID, failing.DBFile); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.SetAgentDBFile(tx, failing.ID, failing.DBFile) }); err != nil {
 		t.Fatal(err)
 	}
 	path := modules.TargetDBPath(e.c.dataDir, failing.DBFile)

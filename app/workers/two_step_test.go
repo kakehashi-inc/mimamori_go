@@ -137,7 +137,7 @@ func twoStepLogin(t *testing.T, e *testEnv, mb *mailbox, email, pass string, tru
 func countAll(t *testing.T, e *testEnv, table string) int {
 	t.Helper()
 	var n int
-	if err := e.c.pool.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+	if err := e.c.db.Read().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -179,7 +179,7 @@ func TestTwoStepLogin(t *testing.T) {
 	}
 	// The challenge and the code are stored only hashed.
 	var chHash, codeHash string
-	if err := e.c.pool.QueryRow(`SELECT challenge_hash, code_hash FROM auth_codes`).Scan(&chHash, &codeHash); err != nil {
+	if err := e.c.db.Read().QueryRow(`SELECT challenge_hash, code_hash FROM auth_codes`).Scan(&chHash, &codeHash); err != nil {
 		t.Fatal(err)
 	}
 	if chHash != modules.HashSecret(ch) || strings.Contains(codeHash, code) || codeHash == modules.HashSecret(code) {
@@ -191,7 +191,7 @@ func TestTwoStepLogin(t *testing.T) {
 	if rec.Code != 401 || !strings.Contains(rec.Body.String(), "invalid code") {
 		t.Fatalf("wrong code: %d %s", rec.Code, rec.Body.String())
 	}
-	if a, _ := models.GetAccount(e.c.pool, 1); a.FailedLogins != 1 {
+	if a, _ := models.GetAccount(e.c.db.Read(), 1); a.FailedLogins != 1 {
 		t.Fatalf("failed logins after a wrong code: %d", a.FailedLogins)
 	}
 
@@ -211,7 +211,7 @@ func TestTwoStepLogin(t *testing.T) {
 	if code := e.do(e.web, "GET", "/api/v1/auth/me", nil, browserHeaders(ck.Value), "x:1").Code; code != 200 {
 		t.Fatalf("session after verify: %d", code)
 	}
-	if a, _ := models.GetAccount(e.c.pool, 1); a.FailedLogins != 0 {
+	if a, _ := models.GetAccount(e.c.db.Read(), 1); a.FailedLogins != 0 {
 		t.Fatalf("failed logins after login: %d", a.FailedLogins)
 	}
 	if countAll(t, e, "auth_codes") != 0 {
@@ -253,7 +253,7 @@ func TestTwoStepLoginRememberAndReplace(t *testing.T) {
 	if rec := loginVerify(e, "garbage", "123456", false, ""); rec.Code != http.StatusGone {
 		t.Fatalf("malformed challenge: %d", rec.Code)
 	}
-	if _, err := e.c.pool.Exec(`UPDATE auth_codes SET expires_at = ?`, time.Now().Unix()-1); err != nil {
+	if err := e.exec(`UPDATE auth_codes SET expires_at = ?`, time.Now().Unix()-1); err != nil {
 		t.Fatal(err)
 	}
 	rec = loginVerify(e, second, mb.lastCode(t), false, "")
@@ -286,7 +286,7 @@ func TestTwoStepLoginLock(t *testing.T) {
 	}
 
 	// Wrong passwords and wrong codes share one counter.
-	if err := models.ResetLoginFailures(e.c.pool, 1); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error { return models.ResetLoginFailures(tx, 1) }); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i < modules.LoginMaxFailures; i++ {
@@ -372,7 +372,7 @@ func TestVerifiedBrowser(t *testing.T) {
 		noFixedPeriods(t, "Set-Cookie", strings.ReplaceAll(attrs, strconv.Itoa(modules.DefaultTrustDays*86400), ""))
 	}
 	var stored string
-	if err := e.c.pool.QueryRow(`SELECT id FROM browser_verifications`).Scan(&stored); err != nil || stored != modules.HashSecret(vc.Value) {
+	if err := e.c.db.Read().QueryRow(`SELECT id FROM browser_verifications`).Scan(&stored); err != nil || stored != modules.HashSecret(vc.Value) {
 		t.Fatalf("stored verification: %q %v", stored, err)
 	}
 	// Within the period the same browser logs in without a code.
@@ -392,7 +392,7 @@ func TestVerifiedBrowser(t *testing.T) {
 		t.Fatalf("wrong password with a verified browser: %d", rec.Code)
 	}
 	// After the server-side period a code is needed again.
-	if _, err := e.c.pool.Exec(`UPDATE browser_verifications SET created_at = created_at - ?`, int64(modules.VerifiedBrowserTTL/time.Second)+1); err != nil {
+	if err := e.exec(`UPDATE browser_verifications SET created_at = created_at - ?`, int64(modules.VerifiedBrowserTTL/time.Second)+1); err != nil {
 		t.Fatal(err)
 	}
 	challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", vc.Value, false))
@@ -411,7 +411,7 @@ func TestVerifiedBrowser(t *testing.T) {
 	if h := items[0].(map[string]any); h["detail"] != "from 192.0.2.1; code verified, browser trusted" {
 		t.Fatalf("history: %v", h)
 	}
-	if _, err := e.c.pool.Exec(`UPDATE browser_verifications SET created_at = created_at - ?`, 2*86400); err != nil {
+	if err := e.exec(`UPDATE browser_verifications SET created_at = created_at - ?`, 2*86400); err != nil {
 		t.Fatal(err)
 	}
 	if rec := loginStart(e, testAdminEmail, "Admin-pass-123", tc.Value, false); rec.Code != 200 {
@@ -533,7 +533,7 @@ func TestOwnEmailChange(t *testing.T) {
 	if e.do(e.web, "GET", "/api/v1/auth/me", nil, h, "x:1").Code != 200 {
 		t.Fatal("a wrong code must keep the session")
 	}
-	if a, _ := models.GetAccount(e.c.pool, 1); a.FailedLogins != 0 {
+	if a, _ := models.GetAccount(e.c.db.Read(), 1); a.FailedLogins != 0 {
 		t.Fatal("a wrong address change code must not count toward the login lock")
 	}
 	// Another session of the same account cannot confirm it.
@@ -583,7 +583,7 @@ func TestOwnEmailChange(t *testing.T) {
 	// An expired request is 410.
 	post("/auth/email", map[string]any{"email": "third@example.com"}, h)
 	code = mb.lastCode(t)
-	if _, err := e.c.pool.Exec(`UPDATE auth_codes SET expires_at = ?`, time.Now().Unix()-1); err != nil {
+	if err := e.exec(`UPDATE auth_codes SET expires_at = ?`, time.Now().Unix()-1); err != nil {
 		t.Fatal(err)
 	}
 	if rec := post("/auth/email/verify", map[string]any{"code": code}, h); rec.Code != http.StatusGone {
@@ -594,7 +594,7 @@ func TestOwnEmailChange(t *testing.T) {
 	firstCode := mb.lastCode(t)
 	post("/auth/email", map[string]any{"email": "fifth@example.com"}, h)
 	var pending int
-	if err := e.c.pool.QueryRow(`SELECT COUNT(*) FROM auth_codes WHERE purpose = 'email_change'`).Scan(&pending); err != nil || pending != 1 {
+	if err := e.c.db.Read().QueryRow(`SELECT COUNT(*) FROM auth_codes WHERE purpose = 'email_change'`).Scan(&pending); err != nil || pending != 1 {
 		t.Fatalf("a new request must replace the earlier one: %d %v", pending, err)
 	}
 	if firstCode != mb.lastCode(t) {
@@ -607,7 +607,7 @@ func TestOwnEmailChange(t *testing.T) {
 	if rec := post("/auth/email", map[string]any{"email": "sixth@example.com"}, h); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("mail failure: %d", rec.Code)
 	}
-	if err := e.c.pool.QueryRow(`SELECT COUNT(*) FROM auth_codes WHERE purpose = 'email_change'`).Scan(&pending); err != nil || pending != 0 {
+	if err := e.c.db.Read().QueryRow(`SELECT COUNT(*) FROM auth_codes WHERE purpose = 'email_change'`).Scan(&pending); err != nil || pending != 0 {
 		t.Fatal("a failed code mail must store nothing")
 	}
 	items = e.admin("GET", "/history?category=account&limit=1", nil)["items"].([]any)
@@ -677,7 +677,7 @@ func TestCodeUsedOnce(t *testing.T) {
 	// concurrent requests) no longer admits the right code.
 	ch = challengeOf(t, loginStart(e, testAdminEmail, "Admin-pass-123", "", false))
 	code = mb.lastCode(t)
-	if _, err := e.c.pool.Exec(`UPDATE auth_codes SET attempts = ?`, modules.AuthCodeMaxAttempts); err != nil {
+	if err := e.exec(`UPDATE auth_codes SET attempts = ?`, modules.AuthCodeMaxAttempts); err != nil {
 		t.Fatal(err)
 	}
 	if rec := loginVerify(e, ch, code, false, ""); rec.Code != http.StatusGone {
@@ -698,7 +698,7 @@ func TestCodeUsedOnce(t *testing.T) {
 		t.Fatalf("concurrent e-mail change confirmations: %v, want one 200 and %d 410", got, n-1)
 	}
 	var history int
-	if err := e.c.pool.QueryRow(`SELECT COUNT(*) FROM history WHERE action = 'email_changed'`).Scan(&history); err != nil || history != 1 {
+	if err := e.c.db.Read().QueryRow(`SELECT COUNT(*) FROM history WHERE action = 'email_changed'`).Scan(&history); err != nil || history != 1 {
 		t.Fatalf("email_changed entries: %d %v, want 1", history, err)
 	}
 }

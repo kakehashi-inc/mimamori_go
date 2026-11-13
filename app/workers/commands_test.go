@@ -29,7 +29,7 @@ func commandAgent(t *testing.T, e *testEnv, name string) (string, *models.Agent,
 	t.Helper()
 	issued := e.admin("POST", "/tokens", map[string]any{"name": name})
 	tok := issued["value"].(string)
-	a, err := models.GetAgentByToken(e.c.pool, int64(issued["token"].(map[string]any)["id"].(float64)))
+	a, err := models.GetAgentByToken(e.c.db.Read(), int64(issued["token"].(map[string]any)["id"].(float64)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestCommandSetSyncAndHostInfo(t *testing.T) {
 	}
 
 	// The built-in agent receives its definitions too.
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	e.admin("POST", "/agents/"+itoa64(b.ID)+"/command-sets", map[string]any{"name": "local", "purpose": "run_only", "os_user": "root",
 		"commands": []any{map[string]any{"command_line": "true"}}})
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
@@ -200,7 +200,7 @@ func TestCommandSetSyncAndHostInfo(t *testing.T) {
 	}
 
 	// The history has the changes, in the command category.
-	items, _, _ := models.ListHistory(e.c.pool, models.HistCommand, "", nil, 100, 0)
+	items, _, _ := models.ListHistory(e.c.db.Read(), models.HistCommand, "", nil, 100, 0)
 	actions := map[string]int{}
 	for _, h := range items {
 		actions[h.Action]++
@@ -303,7 +303,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		t.Fatalf("run of a deleted set: %d", rec.Code)
 	}
 
-	items, _, _ := models.ListHistory(e.c.pool, models.HistCommand, "", nil, 100, 0)
+	items, _, _ := models.ListHistory(e.c.db.Read(), models.HistCommand, "", nil, 100, 0)
 	actions := map[string]int{}
 	for _, h := range items {
 		actions[h.Action]++
@@ -366,7 +366,7 @@ func TestCommandReportIdempotent(t *testing.T) {
 	// Nothing about command results is mailed.
 	setConfig(e, func(c *modules.CentralConfig) { c.SMTP.Host = "smtp.example" })
 	e.c.composeNotification(time.Now())
-	if list, _ := models.ListUnsentNotifications(e.c.pool); len(list) != 0 {
+	if list, _ := models.ListUnsentNotifications(e.c.db.Read()); len(list) != 0 {
 		t.Fatalf("notification about command results: %+v", list)
 	}
 }
@@ -492,7 +492,7 @@ func TestCommandImport(t *testing.T) {
 	if out["sets"].([]any)[0].(map[string]any)["name"] != "a copy" {
 		t.Fatalf("same-target import: %v", out)
 	}
-	items, _, _ := models.ListHistory(e.c.pool, models.HistCommand, "", nil, 100, 0)
+	items, _, _ := models.ListHistory(e.c.db.Read(), models.HistCommand, "", nil, 100, 0)
 	n := 0
 	for _, h := range items {
 		if h.Action == "imported" {
@@ -744,7 +744,7 @@ func TestCommandSetEndToEnd(t *testing.T) {
 		t.Skip("bash is not available")
 	}
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	me, err := user.Current()
 	if err != nil {
 		t.Skip(err)

@@ -1,10 +1,15 @@
 package workers
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
@@ -201,5 +206,157 @@ func TestReportCentralPartIsOneStep(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("application result recorded %d times", n)
+	}
+}
+
+// syncWriter is a log destination several flows may write to.
+type syncWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// Handlers and periodic steps of every kind run at the same time for a few
+// seconds: reports of four agents, acknowledgements, suppressions created
+// and deleted, lists, the periodic steps and new tokens. No request fails,
+// nothing waits on SQLite's lock (writers of the central take their turns
+// at the handle), and every stored report is there afterwards.
+func TestHandlersOfDifferentKindsAtOnce(t *testing.T) {
+	e := newTestEnv(t)
+	logs := &syncWriter{}
+	e.c.logger = log.New(logs, "", 0)
+	const agents = 4
+	toks := make([]string, agents)
+	ids := make([]int64, agents)
+	for i := range agents {
+		issued := e.admin("POST", "/tokens", map[string]any{"name": fmt.Sprintf("host-%d", i)})
+		toks[i] = issued["value"].(string)
+		a, _ := models.GetAgentByToken(e.c.db.Read(), int64(issued["token"].(map[string]any)["id"].(float64)))
+		ids[i] = a.ID
+		if rec := e.agentCall("sync", toks[i], fmt.Sprintf("m-%d", i), modules.SyncRequest{}); rec.Code != http.StatusOK {
+			t.Fatalf("sync %d: %d", i, rec.Code)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var mu sync.Mutex
+	var failures []string
+	stored := make([]int, agents)
+	fail := func(what string, code int, body string) {
+		mu.Lock()
+		failures = append(failures, fmt.Sprintf("%s: %d %s", what, code, body))
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	run := func(n int, f func(flow, round int)) {
+		for flow := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for round := 0; time.Now().Before(deadline); round++ {
+					f(flow, round)
+				}
+			}()
+		}
+	}
+	run(8, func(flow, round int) {
+		i := flow % agents
+		now := time.Now().Unix()
+		rep := modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "normal", OSUser: "u", Exe: "/bin/x",
+			Target: fmt.Sprintf("/f/%d/%d", flow, round), Count: 1, FirstAt: now, LastAt: now}}}
+		rec := e.agentCall("report", toks[i], fmt.Sprintf("m-%d", i), rep)
+		if rec.Code != http.StatusOK {
+			fail("report", rec.Code, rec.Body.String())
+			return
+		}
+		mu.Lock()
+		stored[i]++
+		mu.Unlock()
+	})
+	run(4, func(flow, round int) {
+		code, body := e.adminRaw("GET", fmt.Sprintf("/detections?agent_id=%d&limit=5", ids[flow%agents]), nil)
+		if code != http.StatusOK {
+			fail("list for ack", code, body)
+			return
+		}
+		var out struct {
+			Items []struct {
+				ID      int64 `json:"id"`
+				AgentID int64 `json:"agent_id"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(body), &out)
+		if code, body := e.adminRaw("POST", "/detections/ack", map[string]any{"items": out.Items}); code != http.StatusOK {
+			fail("ack", code, body)
+		}
+	})
+	run(2, func(flow, round int) {
+		code, body := e.adminRaw("POST", "/suppressions", map[string]any{"type": "exec", "target": fmt.Sprintf("/none/%d/%d", flow, round)})
+		if code != http.StatusOK {
+			fail("create suppression", code, body)
+			return
+		}
+		var s struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.Unmarshal([]byte(body), &s)
+		if code, body := e.adminRaw("DELETE", "/suppressions/"+itoa64(s.ID), nil); code != http.StatusOK {
+			fail("delete suppression", code, body)
+		}
+	})
+	run(2, func(flow, round int) {
+		if code, body := e.adminRaw("GET", "/detections?limit=20", nil); code != http.StatusOK {
+			fail("list", code, body)
+		}
+	})
+	run(1, func(flow, round int) {
+		now := time.Now()
+		e.c.processTokenExpiry(now)
+		e.c.expireCommandRequests(now)
+		e.c.retention(now)
+		if err := e.exec(`UPDATE settings SET value = '0' WHERE key = ?`, settingLastRetentionAt); err != nil {
+			fail("retention gate: "+err.Error(), 0, "")
+		}
+	})
+	run(1, func(flow, round int) {
+		if code, body := e.adminRaw("POST", "/tokens", map[string]any{"name": fmt.Sprintf("new-%d", round)}); code != http.StatusOK {
+			fail("issue", code, body)
+		}
+	})
+	wg.Wait()
+	if len(failures) > 0 {
+		t.Fatalf("%d failures, first: %s", len(failures), failures[0])
+	}
+	if l := logs.String(); strings.Contains(l, "locked") || strings.Contains(l, "history:") {
+		t.Fatalf("log: %s", l)
+	}
+	total := 0
+	for i := range agents {
+		a, _ := models.GetAgent(e.c.db.Read(), ids[i])
+		tdb, err := e.c.targetDB(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := tdb.Read().QueryRow(`SELECT COUNT(*) FROM detections`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != stored[i] {
+			t.Fatalf("agent %d: %d detections stored, %d reports accepted", i, n, stored[i])
+		}
+		total += n
+	}
+	if total == 0 {
+		t.Fatal("no report was processed")
 	}
 }

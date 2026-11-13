@@ -1543,7 +1543,7 @@ func TestConnServerLargeBodyNeedsAuthentication(t *testing.T) {
 			}
 		}
 		// The checks changed nothing: the token is still unused and unbound.
-		if tk, err := models.GetToken(e.c.pool, a.TokenID.Int64); err != nil || tk.UsedAt != 0 || tk.InstanceID != "" {
+		if tk, err := models.GetToken(e.c.db.Read(), a.TokenID.Int64); err != nil || tk.UsedAt != 0 || tk.InstanceID != "" {
 			t.Fatalf("token after refused requests: %+v %v", tk, err)
 		}
 
@@ -1580,11 +1580,13 @@ func TestAdmitBodyHasNoSideEffects(t *testing.T) {
 	e := newTestEnv(t)
 	tok, a, _ := commandAgent(t, e, "quiet-host")
 	ck := login(t, e, testAdminEmail, "Admin-pass-123")
-	sess, err := models.GetSession(e.c.pool, modules.HashSecret(ck))
+	sess, err := models.GetSession(e.c.db.Read(), modules.HashSecret(ck))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := models.TouchSession(e.c.pool, sess.ID, sess.LastSeenAt-3600, sess.ExpiresAt); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.TouchSession(tx, sess.ID, sess.LastSeenAt-3600, sess.ExpiresAt)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", "/agent/v1/report", nil)
@@ -1593,7 +1595,7 @@ func TestAdmitBodyHasNoSideEffects(t *testing.T) {
 	if !e.c.admitAgentBody(req) {
 		t.Fatal("valid token refused")
 	}
-	if tk, _ := models.GetToken(e.c.pool, a.TokenID.Int64); tk.UsedAt != 0 || tk.InstanceID != "" || tk.LastSeenAt != 0 {
+	if tk, _ := models.GetToken(e.c.db.Read(), a.TokenID.Int64); tk.UsedAt != 0 || tk.InstanceID != "" || tk.LastSeenAt != 0 {
 		t.Fatalf("the check recorded a token use: %+v", tk)
 	}
 	web := httptest.NewRequest("POST", "/api/v1/rules", nil)
@@ -1603,7 +1605,7 @@ func TestAdmitBodyHasNoSideEffects(t *testing.T) {
 	if !e.c.admitWebBody(web) {
 		t.Fatal("valid session refused")
 	}
-	if after, _ := models.GetSession(e.c.pool, sess.ID); after.LastSeenAt != sess.LastSeenAt-3600 || after.ExpiresAt != sess.ExpiresAt {
+	if after, _ := models.GetSession(e.c.db.Read(), sess.ID); after.LastSeenAt != sess.LastSeenAt-3600 || after.ExpiresAt != sess.ExpiresAt {
 		t.Fatalf("the check extended the session: %+v", after)
 	}
 	cli := httptest.NewRequest("POST", "/admin/v1/rules", nil)

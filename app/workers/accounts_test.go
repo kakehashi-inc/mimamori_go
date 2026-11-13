@@ -27,10 +27,14 @@ func (e *testEnv) adminStatus(method, path string, body any) int {
 func addAuthState(t *testing.T, e *testEnv, id int64, tag string) {
 	t.Helper()
 	now := time.Now().Unix()
-	if err := models.InsertBrowserVerification(e.c.pool, &models.BrowserVerification{ID: tag, AccountID: id, CreatedAt: now, ExpiresAt: now + 3600}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertBrowserVerification(tx, &models.BrowserVerification{ID: tag, AccountID: id, CreatedAt: now, ExpiresAt: now + 3600})
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := models.InsertAuthCode(e.c.pool, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: id, ChallengeHash: tag, CodeHash: "x", CreatedAt: now, ExpiresAt: now + 600}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertAuthCode(tx, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: id, ChallengeHash: tag, CodeHash: "x", CreatedAt: now, ExpiresAt: now + 600})
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -38,7 +42,7 @@ func addAuthState(t *testing.T, e *testEnv, id int64, tag string) {
 func countRows(t *testing.T, e *testEnv, table string, id int64) int {
 	t.Helper()
 	var n int
-	if err := e.c.pool.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE account_id = ?`, id).Scan(&n); err != nil {
+	if err := e.c.db.Read().QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE account_id = ?`, id).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -233,7 +237,7 @@ func TestViewerSeesDisplayNames(t *testing.T) {
 		t.Fatalf("create suppression: %d %s", rec.Code, rec.Body.String())
 	}
 	e.admin("POST", "/tokens", map[string]any{"name": "host-a"})
-	b, _ := models.GetBuiltinAgent(e.c.pool)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
 	if err := tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "read", Category: "normal", Target: "/etc/x"}}}); err != nil {
 		t.Fatal(err)
@@ -245,7 +249,7 @@ func TestViewerSeesDisplayNames(t *testing.T) {
 	e.admin("DELETE", "/accounts/"+strconv.FormatInt(int64(gone["id"].(float64)), 10), nil)
 
 	var stored string
-	_ = e.c.pool.QueryRow(`SELECT created_by FROM rules WHERE name = 'web'`).Scan(&stored)
+	_ = e.c.db.Read().QueryRow(`SELECT created_by FROM rules WHERE name = 'web'`).Scan(&stored)
 	if stored != testAdminEmail {
 		t.Fatalf("rules.created_by %q, want the e-mail address", stored)
 	}
@@ -301,12 +305,12 @@ func TestSessionIdleExpiry(t *testing.T) {
 	id := modules.HashSecret(ck)
 	idle := int64(modules.SessionIdleTimeout / time.Second)
 	shift := func(lastSeen, expires int64) {
-		if _, err := e.c.pool.Exec(`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?`, lastSeen, expires, id); err != nil {
+		if err := e.exec(`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?`, lastSeen, expires, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	session := func() *models.Session {
-		s, err := models.GetSession(e.c.pool, id)
+		s, err := models.GetSession(e.c.db.Read(), id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -385,13 +389,19 @@ func TestHealthAndConfigWithoutFixedPeriods(t *testing.T) {
 func TestRetentionRemovesExpiredCodes(t *testing.T) {
 	e := newTestEnv(t)
 	now := time.Now().Unix()
-	if err := models.InsertBrowserVerification(e.c.pool, &models.BrowserVerification{ID: "old", AccountID: 1, CreatedAt: now - 7200, ExpiresAt: now - 1}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertBrowserVerification(tx, &models.BrowserVerification{ID: "old", AccountID: 1, CreatedAt: now - 7200, ExpiresAt: now - 1})
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := models.InsertBrowserVerification(e.c.pool, &models.BrowserVerification{ID: "new", AccountID: 1, CreatedAt: now, ExpiresAt: now + 3600}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertBrowserVerification(tx, &models.BrowserVerification{ID: "new", AccountID: 1, CreatedAt: now, ExpiresAt: now + 3600})
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := models.InsertAuthCode(e.c.pool, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: 1, ChallengeHash: "old", CodeHash: "x", CreatedAt: now - 700, ExpiresAt: now - 100}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertAuthCode(tx, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: 1, ChallengeHash: "old", CodeHash: "x", CreatedAt: now - 700, ExpiresAt: now - 100})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	e.c.retention(time.Now())

@@ -99,12 +99,14 @@ func TestApplyResultCodedTexts(t *testing.T) {
 
 	// The message the central stores when it removes the rules of the
 	// disabled built-in agent.
-	b, err := models.GetBuiltinAgent(e.c.pool)
+	b, err := models.GetBuiltinAgent(e.c.db.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
 	none := modules.M("apply.builtin_disabled")
-	if err := models.SetAgentApplyNone(e.c.pool, b.ID, none.Text(), applyI18nText(&none, nil), 5); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.SetAgentApplyNone(tx, b.ID, none.Text(), applyI18nText(&none, nil), 5)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	apply = e.admin("GET", "/agents/"+itoa64(b.ID), nil)["apply"].(map[string]any)

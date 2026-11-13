@@ -154,7 +154,7 @@ func TestStepUpRequiredForChanges(t *testing.T) {
 	sid := modules.HashSecret(ck)
 	move := func(by time.Duration) {
 		t.Helper()
-		if _, err := e.c.pool.Exec(`UPDATE sessions SET step_up_at = step_up_at - ? WHERE id = ?`, int64(by/time.Second), sid); err != nil {
+		if err := e.exec(`UPDATE sessions SET step_up_at = step_up_at - ? WHERE id = ?`, int64(by/time.Second), sid); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -212,7 +212,7 @@ func TestStepUpCode(t *testing.T) {
 	}
 	// Stored only as a keyed hash.
 	var stored string
-	if err := e.c.pool.QueryRow(`SELECT code_hash FROM auth_codes WHERE purpose = ?`, models.CodePurposeStepUp).Scan(&stored); err != nil || stored == code || strings.Contains(stored, code) {
+	if err := e.c.db.Read().QueryRow(`SELECT code_hash FROM auth_codes WHERE purpose = ?`, models.CodePurposeStepUp).Scan(&stored); err != nil || stored == code || strings.Contains(stored, code) {
 		t.Fatalf("stored code: %q %v", stored, err)
 	}
 	// Used once.
@@ -238,14 +238,14 @@ func TestStepUpCode(t *testing.T) {
 		t.Fatalf("right code after too many wrong ones: %d", got)
 	}
 	// Wrong codes do not lock the login.
-	if a, err := models.GetAccountByEmail(e.c.pool, testAdminEmail); err != nil || a.LockedUntil > 0 {
+	if a, err := models.GetAccountByEmail(e.c.db.Read(), testAdminEmail); err != nil || a.LockedUntil > 0 {
 		t.Fatalf("account after wrong codes: %+v %v", a, err)
 	}
 
 	// An expired code.
 	request(ck)
 	code = f.mb.lastCode(t)
-	if _, err := e.c.pool.Exec(`UPDATE auth_codes SET expires_at = ? WHERE purpose = ?`, time.Now().Unix()-1, models.CodePurposeStepUp); err != nil {
+	if err := e.exec(`UPDATE auth_codes SET expires_at = ? WHERE purpose = ?`, time.Now().Unix()-1, models.CodePurposeStepUp); err != nil {
 		t.Fatal(err)
 	}
 	if got := verify(ck, code); got != 410 {

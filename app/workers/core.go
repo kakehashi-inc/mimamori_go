@@ -26,10 +26,7 @@ import (
 // worker flows and the built-in agent on its own flow, so everything shared
 // is either in the databases or guarded here.
 type core struct {
-	// db is the handle of central.db. pool is the connection pool the
-	// central used before the handle; the code moves from it to db.
-	db   *modules.DB
-	pool *sql.DB
+	db *modules.DB // central.db
 	// cfg is the configuration in effect; it is replaced when the stored
 	// configuration changes (see reloadConfig). started is the configuration
 	// read at start, which keeps the items that apply only at start.
@@ -77,9 +74,9 @@ type targetEntry struct {
 	err   error
 }
 
-func newCore(db *modules.DB, pool *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
+func newCore(db *modules.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
 	h, _ := os.Hostname()
-	c := &core{db: db, pool: pool, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*targetEntry{}, refusedTargets: map[int64]bool{}, sendMail: modules.SendMailTo}
+	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*targetEntry{}, refusedTargets: map[int64]bool{}, sendMail: modules.SendMailTo}
 	c.cfg.Store(cfg)
 	return c
 }
@@ -91,7 +88,7 @@ func (c *core) conf() *modules.CentralConfig { return c.cfg.Load() }
 // settings screen or with "central config" take effect without a restart
 // (except the items that apply only at start).
 func (c *core) reloadConfig() {
-	cfg, err := modules.LoadCentralConfig(c.pool)
+	cfg, err := modules.LoadCentralConfig(c.db.Read())
 	if err != nil {
 		c.logger.Printf("configuration not reloaded: %v", err)
 		return
@@ -167,7 +164,7 @@ func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 	file := a.DBFile
 	if file == "" {
 		file = fmt.Sprintf("agent-%d.db", a.ID)
-		if err := models.SetAgentDBFile(c.pool, a.ID, file); err != nil {
+		if err := c.db.Write(func(tx models.Writer) error { return models.SetAgentDBFile(tx, a.ID, file) }); err != nil {
 			return nil, err
 		}
 		a.DBFile = file
@@ -185,7 +182,7 @@ func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 
 // openAllTargets opens (and migrates) the database of every monitored target.
 func (c *core) openAllTargets() error {
-	agents, err := models.ListAgents(c.pool)
+	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		return err
 	}
@@ -219,18 +216,8 @@ func (c *core) closeTargets() {
 	}
 }
 
-// createAgent inserts an agent row and opens (creates) its per-target
-// database file.
-func (c *core) createAgent(a *models.Agent) error {
-	if err := c.db.Write(func(tx models.Writer) error { return insertAgent(tx, a) }); err != nil {
-		return err
-	}
-	_, err := c.targetDB(a)
-	return err
-}
-
 // insertAgent inserts an agent row with the name of its database file. The
-// file itself is created after the transaction (targetDB).
+// file itself is created after the transaction (targetDB opens it).
 func insertAgent(tx models.Writer, a *models.Agent) error {
 	if err := models.InsertAgent(tx, a); err != nil {
 		return err
@@ -239,17 +226,23 @@ func insertAgent(tx models.Writer, a *models.Agent) error {
 	return models.SetAgentDBFile(tx, a.ID, a.DBFile)
 }
 
-// ensureBuiltinAgent creates the built-in agent row on first start.
+// ensureBuiltinAgent creates the built-in agent row on first start (it is
+// looked for in the transaction that inserts it) and opens its database.
 func (c *core) ensureBuiltinAgent() (*models.Agent, error) {
-	a, err := models.GetBuiltinAgent(c.pool)
-	if err == nil {
-		return a, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	var a *models.Agent
+	err := c.db.Write(func(tx models.Writer) error {
+		var err error
+		a, err = models.GetBuiltinAgent(tx)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		a = &models.Agent{Kind: models.AgentBuiltin}
+		return insertAgent(tx, a)
+	})
+	if err != nil {
 		return nil, err
 	}
-	a = &models.Agent{Kind: models.AgentBuiltin}
-	if err := c.createAgent(a); err != nil {
+	if _, err := c.targetDB(a); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -270,20 +263,25 @@ func (c *core) writeCLISecret() error {
 }
 
 // ensureServerKey loads or creates the secret used to derive renewed tokens.
+// A new secret is made first; the stored one is looked for in the
+// transaction that stores the new one when there is none.
 func (c *core) ensureServerKey() error {
-	v, found, err := models.GetSettingStrict(c.pool, settingServerKey)
+	fresh, err := modules.RandomHex(32)
 	if err != nil {
 		return err
 	}
-	if !found {
-		v, err = modules.RandomHex(32)
-		if err != nil {
+	var v string
+	err = c.db.Write(func(tx models.Writer) error {
+		var found bool
+		var err error
+		if v, found, err = models.GetSettingStrict(tx, settingServerKey); err != nil || found {
 			return err
 		}
-		if err := models.InsertSettingIfAbsent(c.pool, settingServerKey, v); err != nil {
-			return err
-		}
-		v = models.GetSetting(c.pool, settingServerKey)
+		v = fresh
+		return models.InsertSettingIfAbsent(tx, settingServerKey, v)
+	})
+	if err != nil {
+		return err
 	}
 	c.serverKey = []byte(v)
 	return nil
@@ -327,7 +325,9 @@ func historyParts(parts []modules.Msg) modules.Msg {
 
 // historyMsg records an operation whose target is a coded message too.
 func (c *core) historyMsg(p *principal, category, action string, target, detail modules.Msg) {
-	if err := models.InsertHistory(c.pool, c.historyRow(p, category, action, target, detail)); err != nil {
+	if err := c.db.Write(func(tx models.Writer) error {
+		return models.InsertHistory(tx, c.historyRow(p, category, action, target, detail))
+	}); err != nil {
 		c.logger.Printf("history: %v", err)
 	}
 }
@@ -411,7 +411,7 @@ func (c *core) operatorShown(r *http.Request) func(string) string {
 		}
 		if names == nil {
 			names = map[string]string{}
-			if list, err := models.ListAccounts(c.pool); err == nil {
+			if list, err := models.ListAccounts(c.db.Read()); err == nil {
 				for _, a := range list {
 					names[foldASCII(a.Email)] = a.DisplayName
 				}

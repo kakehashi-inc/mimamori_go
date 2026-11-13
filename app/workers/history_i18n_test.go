@@ -192,11 +192,15 @@ func TestHistoryCodedTexts(t *testing.T) {
 	reportAgent(t, e, tok, modules.ReportRequest{Apply: &modules.ApplyResult{Status: "ok", Message: msg.Text(), MessageI18n: &msg, RuleID: 1, Version: 1, At: 50}})
 	// A row of an older build and a row whose stored code no longer
 	// matches its English.
-	if err := models.InsertHistory(e.c.pool, &models.HistoryItem{AccountName: "system", Category: models.HistRule, Action: "old", Target: "r9", Detail: "old text"}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertHistory(tx, &models.HistoryItem{AccountName: "system", Category: models.HistRule, Action: "old", Target: "r9", Detail: "old text"})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	bad := modules.HistoryTextsJSON(modules.Msg{}, modules.M("history.detail.token_expired"))
-	if err := models.InsertHistory(e.c.pool, &models.HistoryItem{AccountName: "system", Category: models.HistRule, Action: "edited", Target: "r9", Detail: "edited text", I18n: bad}); err != nil {
+	if err := e.c.db.Write(func(tx models.Writer) error {
+		return models.InsertHistory(tx, &models.HistoryItem{AccountName: "system", Category: models.HistRule, Action: "edited", Target: "r9", Detail: "edited text", I18n: bad})
+	}); err != nil {
 		t.Fatal(err)
 	}
 
