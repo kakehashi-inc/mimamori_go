@@ -390,8 +390,8 @@ interface Token {
 | POST | `/rules/merge-preview` | A | `{"templates":["base","nginx"],"choices"?:{field:template}}` | `MergePreview`（`choices` で解決した衝突は `conflicts` に含めない） |
 | POST | `/rules` | A | `RuleCreate` | `RuleDetail`（衝突のあるテンプレートで `choices` が足りないと 400） |
 | PUT | `/rules/{id}` | A | `{"description"?,"content","comment"?}` | `RuleDetail`（版が 1 上がる。`description` を省略すると現在の説明を保つ） |
-| POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400） |
-| POST | `/rules/unassign` | A | `{"agent_ids":[1,2]}` | `{"unassigned":1}`（監視ルールの割り当てを外す。エージェントは次の同期で auditd のルールとルールファイルを削除し、`none` を報告する。割り当ての無いエージェントはそのまま（件数に数えない）。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID があると 400） |
+| POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400。指定したすべてのエージェントに適用するか、1 件も適用しない（途中で失敗したら何も変えない）） |
+| POST | `/rules/unassign` | A | `{"agent_ids":[1,2]}` | `{"unassigned":1}`（監視ルールの割り当てを外す。エージェントは次の同期で auditd のルールとルールファイルを削除し、`none` を報告する。割り当ての無いエージェントはそのまま（件数に数えない）。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID があると 400。指定したすべてのエージェントから外すか、1 件も外さない（途中で失敗したら何も変えない。外したことの履歴も同じ）） |
 | POST | `/rules/{id}/to-template` | A | `{"version"?,"name","description"?}` | `TemplateDetail`（`version` を省略または 0 にすると最新の版。名前の形式の誤りは 400、組み込みと同名または既存と重複は 409） |
 | DELETE | `/rules/{id}` | A | - | `{}`（適用中なら 409） |
 | POST | `/rules/validate` | A | `{"content":RuleContent}` | `{"errors":string[],"errors_i18n":Problem[]}` |
