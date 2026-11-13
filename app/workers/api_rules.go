@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -362,7 +361,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistRule, "created", rule.Name, comment.Text())
+	c.history(p, models.HistRule, "created", rule.Name, comment)
 	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
@@ -423,7 +422,7 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistRule, "saved", rule.Name, "version "+itoa(next)+": "+in.Comment)
+	c.history(p, models.HistRule, "saved", rule.Name, modules.M("history.detail.rule_saved", "version", next, "comment", in.Comment))
 	rule, _ = models.GetRule(c.db, rule.ID)
 	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
@@ -483,7 +482,7 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c.history(p, models.HistRule, "applied", rule.Name, fmt.Sprintf("version %d to %s", in.Version, strings.Join(names, ", ")))
+	c.history(p, models.HistRule, "applied", rule.Name, modules.M("history.detail.rule_applied", "version", in.Version, "agents", names))
 	writeJSON(w, http.StatusOK, map[string]int{"applied": len(in.AgentIDs)})
 }
 
@@ -526,11 +525,12 @@ func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
 			c.internalError(w, r, err)
 			return
 		}
-		ruleName := "rule " + itoa64(a.AssignedRuleID.Int64)
+		ruleName := modules.M("history.detail.rule_fallback", "id", a.AssignedRuleID.Int64)
 		if rule, err := models.GetRule(c.db, a.AssignedRuleID.Int64); err == nil {
-			ruleName = rule.Name
+			ruleName = modules.Raw(rule.Name)
 		}
-		c.history(p, models.HistRule, "unassigned", ruleName, fmt.Sprintf("version %d from %s", a.AssignedRuleVersion, c.agentDisplayName(a)))
+		c.historyMsg(p, models.HistRule, "unassigned", ruleName,
+			modules.M("history.detail.rule_unassigned", "version", a.AssignedRuleVersion, "agent", c.agentDisplayName(a)))
 		n++
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"unassigned": n})
@@ -563,7 +563,8 @@ func (c *core) handleRuleToTemplate(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.createTemplate(w, r, in.Name, in.Description, content, fmt.Sprintf("from rule %s version %d", rule.Name, in.Version))
+	c.createTemplate(w, r, in.Name, in.Description, content,
+		modules.M("history.detail.template_from_rule_name", "rule", rule.Name, "version", in.Version))
 }
 
 func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +589,7 @@ func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistRule, "deleted", rule.Name, "")
+	c.history(principalFrom(r), models.HistRule, "deleted", rule.Name, modules.Msg{})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -647,7 +648,7 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, templateJSON{Name: t.Name, Description: t.Description, UpdatedAt: ts(t.UpdatedAt), Content: content})
 }
 
-func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc string, content *modules.RuleContent, origin string) {
+func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc string, content *modules.RuleContent, origin modules.Msg) {
 	name = strings.TrimSpace(name)
 	if !tokenNameRe.MatchString(name) {
 		writeError(w, http.StatusBadRequest, modules.M("template.name_invalid"))
@@ -691,7 +692,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var content *modules.RuleContent
-	origin := "created"
+	origin := modules.M("history.detail.template_created")
 	switch {
 	case in.FromBuiltin != "":
 		t, ok := modules.FindBuiltinTemplate(in.FromBuiltin)
@@ -700,7 +701,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content = &t.Content
-		origin = "from built-in template " + t.Name
+		origin = modules.M("history.detail.template_from_builtin", "name", t.Name)
 	case in.FromRule != nil:
 		if in.FromRule.Version == 0 {
 			// Without a version the latest one is used, as elsewhere.
@@ -719,7 +720,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content = parsed
-		origin = fmt.Sprintf("from rule %d version %d", in.FromRule.RuleID, in.FromRule.Version)
+		origin = modules.M("history.detail.template_from_rule_id", "id", in.FromRule.RuleID, "version", in.FromRule.Version)
 	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
@@ -780,7 +781,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistTemplate, "updated", name, "")
+	c.history(principalFrom(r), models.HistTemplate, "updated", name, modules.Msg{})
 	writeJSON(w, http.StatusOK, templateJSON{Name: name, Description: desc, UpdatedAt: ts(time.Now().Unix()), Content: content})
 }
 
@@ -798,6 +799,6 @@ func (c *core) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistTemplate, "deleted", name, "")
+	c.history(principalFrom(r), models.HistTemplate, "deleted", name, modules.Msg{})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }

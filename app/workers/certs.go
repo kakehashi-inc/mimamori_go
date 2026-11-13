@@ -3,7 +3,6 @@ package workers
 import (
 	"crypto/tls"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,7 +44,7 @@ func (c *core) manageCertificates() error {
 	for _, ca := range cas {
 		if ca.Status != models.CertActive && ca.NotAfter < now.Unix() {
 			_ = models.DeleteCertificate(c.db, ca.ID)
-			c.history(nil, models.HistCertificate, "ca_discarded", modules.FormatFingerprint(ca.Fingerprint), "expired CA removed")
+			c.history(nil, models.HistCertificate, "ca_discarded", modules.FormatFingerprint(ca.Fingerprint), modules.M("history.detail.ca_discarded"))
 		}
 	}
 	cas, _ = models.ListCertificates(c.db, "ca")
@@ -61,7 +60,7 @@ func (c *core) manageCertificates() error {
 		if active, err = c.storePair("ca", models.CertActive, "", pair); err != nil {
 			return err
 		}
-		c.history(nil, models.HistCertificate, "ca_created", modules.FormatFingerprint(active.Fingerprint), "private CA created")
+		c.history(nil, models.HistCertificate, "ca_created", modules.FormatFingerprint(active.Fingerprint), modules.M("history.detail.ca_created"))
 		cas, _ = models.ListCertificates(c.db, "ca")
 	}
 	next := pickStatus(cas, models.CertNext)
@@ -75,7 +74,7 @@ func (c *core) manageCertificates() error {
 			return err
 		}
 		c.history(nil, models.HistCertificate, "ca_next_created", modules.FormatFingerprint(next.Fingerprint),
-			fmt.Sprintf("new CA created; distributing to agents; server certificate switches after %s", now.Add(modules.CASwitchAfter).UTC().Format(time.RFC3339)))
+			modules.M("history.detail.ca_next_created", "at", now.Add(modules.CASwitchAfter).UTC().Format(time.RFC3339)))
 	}
 	// Roll-over step 2: after the distribution period, switch to the new CA.
 	forceServer := false
@@ -86,7 +85,7 @@ func (c *core) manageCertificates() error {
 		if err := models.SetCertificateStatus(c.db, next.ID, models.CertActive); err != nil {
 			return err
 		}
-		c.history(nil, models.HistCertificate, "ca_switched", modules.FormatFingerprint(next.Fingerprint), "server certificate now signed by the new CA")
+		c.history(nil, models.HistCertificate, "ca_switched", modules.FormatFingerprint(next.Fingerprint), modules.M("history.detail.ca_switched"))
 		active, forceServer = next, true
 	}
 	activePair, err := modules.LoadPair(active.CertPEM, active.KeyPEM)
@@ -125,7 +124,7 @@ func (c *core) manageCertificates() error {
 			_ = models.DeleteCertificate(c.db, s.ID)
 		}
 		c.history(nil, models.HistCertificate, "server_cert_issued", modules.FormatFingerprint(row.Fingerprint),
-			"names: "+strings.Join(modules.CertNames(pair.Cert), ", "))
+			modules.M("history.detail.server_cert_names", "names", modules.CertNames(pair.Cert)))
 		cur = row
 	}
 	pair, err := modules.LoadPair(cur.CertPEM, cur.KeyPEM)

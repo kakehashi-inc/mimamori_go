@@ -196,6 +196,7 @@ CREATE TABLE history (
     action       TEXT    NOT NULL,
     target       TEXT    NOT NULL DEFAULT '',
     detail       TEXT    NOT NULL DEFAULT '',
+    i18n         TEXT    NOT NULL DEFAULT '',
     remote_addr  TEXT    NOT NULL DEFAULT '',
     count        INTEGER NOT NULL DEFAULT 1
 );

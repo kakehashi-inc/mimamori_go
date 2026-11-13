@@ -731,6 +731,7 @@
                 "step_up_code_failed": "{{host}} からの要求の再認証の確認コードを送れませんでした: {{cause}}"
             },
             "target": {
+                "command_set": "{{agent}} / {{set}}",
                 "command_set_fallback": "セット {{set}}"
             }
         },

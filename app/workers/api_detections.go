@@ -206,7 +206,7 @@ func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for name, n := range perAgent {
-		c.history(p, models.HistDetection, "acknowledged", name, strconv.Itoa(n)+" detection(s)")
+		c.history(p, models.HistDetection, "acknowledged", name, modules.M("history.detail.acknowledged", "count", n))
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"acknowledged": count})
 }
@@ -298,7 +298,7 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 	}
 	n := c.applySuppression(s)
 	c.history(principalFrom(r), models.HistSuppression, "created", agentName,
-		describeSuppression(s)+"; "+strconv.Itoa(n)+" open detection(s) now suppressed")
+		modules.M("history.detail.suppression_created", "cond", describeSuppression(s), "count", n))
 	writeJSON(w, http.StatusOK, c.suppressionOut(s, c.operatorShown(r)))
 }
 
@@ -474,7 +474,7 @@ func (c *core) handleDeleteSuppression(w http.ResponseWriter, r *http.Request) {
 	}
 	n := c.releaseSuppression(s)
 	c.history(principalFrom(r), models.HistSuppression, "deleted", strconv.FormatInt(id, 10),
-		describeSuppression(s)+"; "+strconv.Itoa(n)+" detection(s) no longer suppressed")
+		modules.M("history.detail.suppression_deleted", "cond", describeSuppression(s), "count", n))
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -558,15 +558,21 @@ type historyJSON struct {
 	Action      string  `json:"action"`
 	Target      string  `json:"target"`
 	Detail      string  `json:"detail"`
-	RemoteAddr  string  `json:"remote_addr"`
-	Count       int     `json:"count"`
+	// TargetI18n and DetailI18n are the coded target and detail, present
+	// only when the row keeps a code whose English is the recorded text
+	// (a target that is a plain value and rows of older builds have none).
+	TargetI18n *modules.Msg `json:"target_i18n,omitempty"`
+	DetailI18n *modules.Msg `json:"detail_i18n,omitempty"`
+	RemoteAddr string       `json:"remote_addr"`
+	Count      int          `json:"count"`
 }
 
 // historyOut converts a history entry for the API; show converts the
 // recorded operator (see operatorShown).
 func historyOut(h *models.HistoryItem, show func(string) string) historyJSON {
+	coded := modules.ParseHistoryTexts(h.I18n, h.Target, h.Detail)
 	return historyJSON{ID: h.ID, At: ts(h.LastAt), AccountName: show(h.AccountName), Category: h.Category, Action: h.Action,
-		Target: h.Target, Detail: h.Detail, RemoteAddr: h.RemoteAddr, Count: h.Count}
+		Target: h.Target, Detail: h.Detail, TargetI18n: coded.Target, DetailI18n: coded.Detail, RemoteAddr: h.RemoteAddr, Count: h.Count}
 }
 
 // viewerHiddenHistory are the history categories a viewer does not receive.

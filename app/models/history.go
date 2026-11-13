@@ -25,15 +25,19 @@ type HistoryItem struct {
 	Action      string
 	Target      string
 	Detail      string
-	RemoteAddr  string
-	Count       int
+	// I18n is the JSON of the coded target and detail ({"target": Msg,
+	// "detail": Msg}, both optional; empty when the row has none): the
+	// English Target and Detail are their English renderings.
+	I18n       string
+	RemoteAddr string
+	Count      int
 }
 
-const historyCols = `id, at, last_at, account_name, category, action, target, detail, remote_addr, count`
+const historyCols = `id, at, last_at, account_name, category, action, target, detail, i18n, remote_addr, count`
 
 func scanHistory(s rowScanner) (*HistoryItem, error) {
 	h := &HistoryItem{}
-	if err := s.Scan(&h.ID, &h.At, &h.LastAt, &h.AccountName, &h.Category, &h.Action, &h.Target, &h.Detail, &h.RemoteAddr, &h.Count); err != nil {
+	if err := s.Scan(&h.ID, &h.At, &h.LastAt, &h.AccountName, &h.Category, &h.Action, &h.Target, &h.Detail, &h.I18n, &h.RemoteAddr, &h.Count); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -42,8 +46,8 @@ func scanHistory(s rowScanner) (*HistoryItem, error) {
 // InsertHistory records an event.
 func InsertHistory(db Execer, h *HistoryItem) error {
 	now := Now()
-	_, err := db.Exec(`INSERT INTO history (at, last_at, account_name, category, action, target, detail, remote_addr, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		now, now, h.AccountName, h.Category, h.Action, h.Target, h.Detail, h.RemoteAddr)
+	_, err := db.Exec(`INSERT INTO history (at, last_at, account_name, category, action, target, detail, i18n, remote_addr, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		now, now, h.AccountName, h.Category, h.Action, h.Target, h.Detail, h.I18n, h.RemoteAddr)
 	return err
 }
 

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"mimamori/app/models"
@@ -161,7 +160,7 @@ func (c *core) storeCommandRuns(tx *sql.Tx, agent *models.Agent, runs []modules.
 // endedRequest is a run request the agent answered without running it.
 type endedRequest struct {
 	setID int64
-	why   string
+	why   modules.Msg
 }
 
 // storeCommandAcks records the agent's answers to delivered run requests.
@@ -176,12 +175,12 @@ func storeCommandAcks(tx *sql.Tx, acks []modules.CommandRequestAck, now int64) (
 		case modules.RequestAckExpired, modules.RequestAckUnknownSet:
 			err = models.MarkCommandRequestExpired(tx, a.RequestID, now)
 			if err == nil {
-				why := "it reached the agent after its expiry"
+				why := modules.M("history.detail.request_ended_why.expired")
 				if a.Status == modules.RequestAckUnknownSet {
-					why = "the agent does not hold this command set"
+					why = modules.M("history.detail.request_ended_why.unknown_set")
 				}
 				if r, gerr := models.GetCommandRequest(tx, a.RequestID); gerr == nil {
-					ended = append(ended, endedRequest{setID: r.SetID, why: fmt.Sprintf("request %d ended without a run: %s", a.RequestID, why)})
+					ended = append(ended, endedRequest{setID: r.SetID, why: modules.M("history.detail.request_ended", "request", a.RequestID, "why", why)})
 				}
 			}
 		default:
@@ -301,8 +300,8 @@ func (c *core) expireCommandRequests(now time.Time) {
 			continue
 		}
 		for _, r := range list {
-			c.history(nil, models.HistCommand, "request_expired", c.commandTarget(a, tdb, r.SetID),
-				fmt.Sprintf("request %d was not delivered to the agent within %s", r.ID, modules.CommandRequestExpiry))
+			c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(a, tdb, r.SetID),
+				modules.M("history.detail.request_not_delivered", "request", r.ID, "expiry", modules.CommandRequestExpiry.String()))
 		}
 	}
 }
@@ -334,11 +333,12 @@ func (c *core) commandRetention(a *models.Agent, tdb *sql.DB, cut int64) {
 	_, _ = models.DeleteEndedCommandRequestsBefore(tdb, cut)
 }
 
-// commandTarget names a set for the history: "<agent> / <set name>".
-func (c *core) commandTarget(a *models.Agent, tdb *sql.DB, setID int64) string {
-	name := fmt.Sprintf("set %d", setID)
+// commandTarget names a set for the history: "<agent> / <set name>", or
+// "<agent> / set <id>" when the set no longer exists.
+func (c *core) commandTarget(a *models.Agent, tdb *sql.DB, setID int64) modules.Msg {
 	if s, err := models.GetCommandSet(tdb, setID); err == nil {
-		name = s.Name
+		return modules.Raw(c.agentDisplayName(a) + " / " + s.Name)
 	}
-	return c.agentDisplayName(a) + " / " + name
+	return modules.M("history.target.command_set", "agent", c.agentDisplayName(a),
+		"set", modules.M("history.target.command_set_fallback", "set", setID))
 }

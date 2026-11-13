@@ -68,7 +68,7 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 	if err := models.SetAgentApplyNone(c.db, agent.ID, msg, applyI18nText(&m, nil), time.Now().Unix()); err != nil {
 		c.logger.Printf("built-in agent: %v", err)
 	}
-	c.history(nil, models.HistRule, "apply_result_"+modules.ApplyStatusNone, c.agentDisplayName(agent), msg)
+	c.history(nil, models.HistRule, "apply_result_"+modules.ApplyStatusNone, c.agentDisplayName(agent), m)
 }
 
 // startBuiltinAgent checks the prerequisites and, when they hold, starts the

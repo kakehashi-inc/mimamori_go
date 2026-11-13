@@ -69,7 +69,7 @@ func (c *core) handleStepUpRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := c.sendCodeMail(r, p.Email, code, "re-authentication for changes to command sets"); err != nil {
 		c.history(p, models.HistAccount, "step_up_code_failed", p.Email,
-			"the re-authentication code for a request from "+remoteHost(r.RemoteAddr)+" could not be sent: "+err.Error())
+			modules.M("history.detail.step_up_code_failed", "host", remoteHost(r.RemoteAddr), "cause", modules.AsMsg(err)))
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}

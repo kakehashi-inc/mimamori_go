@@ -142,7 +142,7 @@ func (c *core) startLoginCode(w http.ResponseWriter, r *http.Request, a *models.
 	}
 	if err := c.sendCodeMail(r, a.Email, code, "login"); err != nil {
 		c.history(&principal{Email: a.Email}, models.HistAccount, "login_code_failed", a.Email,
-			"the login code for a login from "+remoteHost(r.RemoteAddr)+" could not be sent: "+err.Error())
+			modules.M("history.detail.login_code_failed", "host", remoteHost(r.RemoteAddr), "cause", modules.AsMsg(err)))
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}
@@ -197,7 +197,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		lock := now + int64(modules.LoginLockDuration/time.Second)
 		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
 			_ = models.DeleteAuthCode(c.db, row.ID)
-			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, "too many failed logins from "+remoteHost(r.RemoteAddr))
+			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, modules.M("history.detail.login_locked", "host", remoteHost(r.RemoteAddr)))
 			writeError(w, http.StatusLocked, modules.M("auth.locked"))
 			return
 		}
@@ -230,9 +230,9 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	detail := "from " + remoteHost(r.RemoteAddr) + "; code verified"
+	detail := loginDetail(remoteHost(r.RemoteAddr), "history.detail.login_how.code")
 	if in.Trust {
-		detail += ", browser trusted"
+		detail = loginDetail(remoteHost(r.RemoteAddr), "history.detail.login_how.code_trust")
 	}
 	c.completeLogin(w, r, a, row.Remember, detail)
 }

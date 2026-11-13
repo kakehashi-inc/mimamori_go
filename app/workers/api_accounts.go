@@ -79,7 +79,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.Disabled || !modules.VerifyPassword(a.PasswordHash, in.Password) {
 		lock := now + int64(modules.LoginLockDuration/time.Second)
 		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
-			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, "too many failed logins from "+remoteHost(r.RemoteAddr))
+			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, modules.M("history.detail.login_locked", "host", remoteHost(r.RemoteAddr)))
 		}
 		writeError(w, http.StatusUnauthorized, modules.M("auth.login_failed"))
 		return
@@ -89,9 +89,9 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case cfg.SMTP.DevelopmentMode():
 		// No SMTP server: no code could be delivered, so none is asked for.
-		c.completeLogin(w, r, a, in.Remember, "from "+host+"; two-step verification skipped (SMTP not configured)")
+		c.completeLogin(w, r, a, in.Remember, loginDetail(host, "history.detail.login_how.smtp_off"))
 	case c.browserVerified(r, a.ID, cfg, now):
-		c.completeLogin(w, r, a, in.Remember, "from "+host+"; verified browser")
+		c.completeLogin(w, r, a, in.Remember, loginDetail(host, "history.detail.login_how.trusted"))
 	default:
 		c.startLoginCode(w, r, a, in.Remember, now)
 	}
@@ -99,7 +99,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // completeLogin ends a successful login: it clears the failure counter,
 // starts a session, records the login and answers Me.
-func (c *core) completeLogin(w http.ResponseWriter, r *http.Request, a *models.Account, remember bool, detail string) {
+func (c *core) completeLogin(w http.ResponseWriter, r *http.Request, a *models.Account, remember bool, detail modules.Msg) {
 	_ = models.ResetLoginFailures(c.db, a.ID)
 	if err := c.startSession(w, a.ID, remember); err != nil {
 		c.internalError(w, r, err)
@@ -107,6 +107,12 @@ func (c *core) completeLogin(w http.ResponseWriter, r *http.Request, a *models.A
 	}
 	c.history(&principal{Email: a.Email}, models.HistAccount, "login", a.Email, detail)
 	writeJSON(w, http.StatusOK, meJSON(a.ID, a.Email, a.DisplayName, a.Role, a.Language))
+}
+
+// loginDetail is the history detail of a login from host, verified as the
+// code how (one of history.detail.login_how.*) says.
+func loginDetail(host, how string) modules.Msg {
+	return modules.M("history.detail.login", "host", host, "how", modules.M(how))
 }
 
 // startSession creates a login session and sets its cookie.
@@ -202,7 +208,7 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.revokeAccountAuth(a.ID, p.SessionID)
-	c.history(p, models.HistAccount, "password_changed", a.Email, "own password changed")
+	c.history(p, models.HistAccount, "password_changed", a.Email, modules.M("history.detail.own_password_changed"))
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -270,7 +276,7 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistAccount, "created", a.Email, "role "+a.Role+", language "+a.Language)
+	c.history(principalFrom(r), models.HistAccount, "created", a.Email, modules.M("history.detail.account_created", "role", a.Role, "language", a.Language))
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
 
@@ -349,7 +355,7 @@ func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.invalidateAccount(a.ID)
-	c.history(principalFrom(r), models.HistAccount, "role_changed", a.Email, a.Role+" -> "+in.Role)
+	c.history(principalFrom(r), models.HistAccount, "role_changed", a.Email, modules.M("history.detail.change", "from", a.Role, "to", in.Role))
 	a.Role = in.Role
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
@@ -380,7 +386,7 @@ func (c *core) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.revokeAccountAuth(a.ID, "")
-	c.history(principalFrom(r), models.HistAccount, "password_reset", a.Email, "password reset by an administrator")
+	c.history(principalFrom(r), models.HistAccount, "password_reset", a.Email, modules.M("history.detail.password_reset_admin"))
 	a.LockedUntil = 0
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
@@ -418,7 +424,7 @@ func (c *core) handleAccountEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.revokeAccountAuth(a.ID, "")
-	c.history(principalFrom(r), models.HistAccount, "email_changed", email, a.Email+" -> "+email+" (changed by an administrator)")
+	c.history(principalFrom(r), models.HistAccount, "email_changed", email, modules.M("history.detail.email_changed_admin", "from", a.Email, "to", email))
 	a.Email = email
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
@@ -450,7 +456,7 @@ func (c *core) handleAccountDisplayName(w http.ResponseWriter, r *http.Request) 
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistAccount, "display_name_changed", a.Email, a.DisplayName+" -> "+display)
+	c.history(principalFrom(r), models.HistAccount, "display_name_changed", a.Email, modules.M("history.detail.change", "from", a.DisplayName, "to", display))
 	a.DisplayName = display
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
@@ -486,9 +492,9 @@ func (c *core) handleAccountNotify(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	detail := "notification mails off"
+	detail := modules.M("history.detail.notify_off")
 	if *in.Notify {
-		detail = "notification mails on"
+		detail = modules.M("history.detail.notify_on")
 	}
 	c.history(principalFrom(r), models.HistAccount, "notify_changed", a.Email, detail)
 	a.Notify = *in.Notify
@@ -514,7 +520,7 @@ func (c *core) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool
 		action = "disabled"
 		c.revokeAccountAuth(a.ID, "")
 	}
-	c.history(principalFrom(r), models.HistAccount, action, a.Email, "")
+	c.history(principalFrom(r), models.HistAccount, action, a.Email, modules.Msg{})
 	a.Disabled = disabled
 	writeJSON(w, http.StatusOK, c.accountOut(a))
 }
@@ -540,6 +546,6 @@ func (c *core) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, modules.M("account.last_admin_delete"))
 		return
 	}
-	c.history(principalFrom(r), models.HistAccount, "deleted", a.Email, "")
+	c.history(principalFrom(r), models.HistAccount, "deleted", a.Email, modules.Msg{})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }

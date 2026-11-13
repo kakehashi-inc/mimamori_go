@@ -6,10 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -134,8 +132,8 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 			case err != nil:
 				return nil, err
 			default:
-				c.history(nil, models.HistToken, "renewal_issued", tok.Name,
-					"new token value handed to the agent; expires "+time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339))
+				c.history(nil, models.HistToken, "renewal_issued", tok.Name, modules.M("history.detail.token_renewal_issued",
+					"expires", time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339)))
 			}
 		}
 		// The same value is handed out again until the agent uses it.
@@ -306,7 +304,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		return err
 	}
 	for _, e := range ended {
-		c.history(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
+		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
 	}
 	if req.CommandApply != nil {
 		if err := c.recordCommandApply(agent, req.CommandApply); err != nil {
@@ -330,7 +328,8 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		// The coded texts are checked against the English the agent sent;
 		// the stored message is the English cut at 2000 bytes, and the
 		// screen shows the coded one only while both agree.
-		i18n := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		checked := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		i18n := checked
 		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
 			i18n.MessageI18n = nil
 		}
@@ -345,21 +344,41 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			f.ReportedRuleID, f.ReportedRuleVersion = agent.ReportedRuleID, agent.ReportedRuleVersion
 		}
 		if ap.At != agent.ApplyAt || ap.Status != agent.ApplyStatus {
-			detail := strings.Join(append([]string{ap.Message}, ap.Warnings...), "; ")
+			detail := applyResultText(ap, checked)
 			if ap.RuleID > 0 {
-				ruleName := fmt.Sprintf("rule %d", ap.RuleID)
+				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
 				if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
-					ruleName = r.Name
+					ruleName = modules.Raw(r.Name)
 				}
-				detail = fmt.Sprintf("%s version %d: %s", ruleName, ap.Version, detail)
+				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
 			}
 			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent), detail)
 		}
 	}
 	if req.Dropped > 0 {
-		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), fmt.Sprintf("the agent dropped %d detection(s) at its storage limit", req.Dropped))
+		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), modules.M("history.detail.dropped", "count", req.Dropped))
 	}
 	return models.RecordAgentReport(c.db, agent.ID, f)
+}
+
+// applyResultText returns the history text of an application result: the
+// message and the warnings joined with "; ", each one coded where the agent
+// sent a code that matches its English (checked) and as data otherwise.
+func applyResultText(ap *modules.ApplyResult, checked applyI18nJSON) modules.Msg {
+	parts := make([]modules.Msg, 0, 1+len(ap.Warnings))
+	if checked.MessageI18n != nil {
+		parts = append(parts, *checked.MessageI18n)
+	} else {
+		parts = append(parts, modules.Raw(ap.Message))
+	}
+	for i, w := range ap.Warnings {
+		if i < len(checked.WarningsI18n) {
+			parts = append(parts, checked.WarningsI18n[i])
+		} else {
+			parts = append(parts, modules.Raw(w))
+		}
+	}
+	return historyParts(parts)
 }
 
 func truncate(s string, n int) string {

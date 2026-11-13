@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -392,7 +391,8 @@ func (c *core) handleCreateCommandSet(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistCommand, "created", c.agentDisplayName(a)+" / "+row.Name, fmt.Sprintf("set %d revision %d", row.ID, row.Revision))
+	c.history(p, models.HistCommand, "created", c.agentDisplayName(a)+" / "+row.Name,
+		modules.M("history.detail.command_set_rev", "set", row.ID, "revision", row.Revision))
 	c.respondCommandSet(w, r, a, tdb, row.ID)
 }
 
@@ -445,11 +445,11 @@ func (c *core) handleUpdateCommandSet(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	detail := fmt.Sprintf("set %d revision %d", row.ID, row.Revision)
+	detail := []modules.Msg{modules.M("history.detail.command_set_rev", "set", row.ID, "revision", row.Revision)}
 	if stored.Name != row.Name {
-		detail += "; renamed from " + stored.Name
+		detail = append(detail, modules.M("history.detail.command_renamed", "name", stored.Name))
 	}
-	c.history(p, models.HistCommand, "updated", c.agentDisplayName(a)+" / "+row.Name, detail)
+	c.history(p, models.HistCommand, "updated", c.agentDisplayName(a)+" / "+row.Name, historyParts(detail))
 	c.respondCommandSet(w, r, a, tdb, row.ID)
 }
 
@@ -473,13 +473,13 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 	}
 	// A request not yet delivered goes with the set; a delivered one is
 	// answered by the agent (it no longer holds the set).
-	detail := fmt.Sprintf("set %d", stored.ID)
+	detail := []modules.Msg{modules.M("history.detail.command_set", "set", stored.ID)}
 	if q, err := models.ActiveCommandRequest(tdb, stored.ID); err == nil && q != nil && q.State == models.RequestPending {
 		if models.DiscardCommandRequest(tdb, q.ID, p.operator(), now) == nil {
-			detail += fmt.Sprintf("; request %d discarded", q.ID)
+			detail = append(detail, modules.M("history.detail.command_request_discarded_with", "request", q.ID))
 		}
 	}
-	c.history(p, models.HistCommand, "deleted", c.agentDisplayName(a)+" / "+stored.Name, detail)
+	c.history(p, models.HistCommand, "deleted", c.agentDisplayName(a)+" / "+stored.Name, historyParts(detail))
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -648,7 +648,7 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]commandSetJSON, 0, len(ids))
 	for i, id := range ids {
-		c.history(p, models.HistCommand, "imported", c.agentDisplayName(a)+" / "+list[i].spec.Name, "copied from "+list[i].from)
+		c.history(p, models.HistCommand, "imported", c.agentDisplayName(a)+" / "+list[i].spec.Name, modules.M("history.detail.command_copied", "source", list[i].from))
 		row, err := models.GetCommandSet(tdb, id)
 		if err != nil {
 			c.internalError(w, r, err)
@@ -684,7 +684,7 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistCommand, "run_requested", c.agentDisplayName(a)+" / "+stored.Name, fmt.Sprintf("request %d", q.ID))
+	c.history(p, models.HistCommand, "run_requested", c.agentDisplayName(a)+" / "+stored.Name, modules.M("history.detail.command_request", "request", q.ID))
 	writeJSON(w, http.StatusOK, commandRequestOut(q))
 }
 
@@ -718,7 +718,7 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistCommand, "request_discarded", c.commandTarget(a, tdb, q.SetID), fmt.Sprintf("request %d", q.ID))
+	c.historyMsg(p, models.HistCommand, "request_discarded", c.commandTarget(a, tdb, q.SetID), modules.M("history.detail.command_request", "request", q.ID))
 	writeJSON(w, http.StatusOK, commandRequestOut(q))
 }
 

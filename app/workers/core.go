@@ -219,13 +219,32 @@ func (c *core) agentDisplayName(a *models.Agent) string {
 	return fmt.Sprintf("agent-%d", a.ID)
 }
 
-// history records an operation.
-func (c *core) history(p *principal, category, action, target, detail string) {
+// history records an operation on the target (a value: a name, an
+// address). The detail is a coded message (modules.Msg{} for none): its
+// English rendering is the recorded detail, and the code is kept next to it
+// for the screens.
+func (c *core) history(p *principal, category, action, target string, detail modules.Msg) {
+	c.historyMsg(p, category, action, modules.Raw(target), detail)
+}
+
+// historyParts is the history detail of several parts recorded as one text
+// joined with "; " (one part is recorded as it is).
+func historyParts(parts []modules.Msg) modules.Msg {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return modules.M("common.problems", "problems", parts)
+}
+
+// historyMsg records an operation whose target is a coded message too.
+func (c *core) historyMsg(p *principal, category, action string, target, detail modules.Msg) {
 	name := "system"
 	if p != nil {
 		name = p.operator()
 	}
-	if err := models.InsertHistory(c.db, &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target, Detail: detail}); err != nil {
+	h := &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target.Text(), Detail: detail.Text(),
+		I18n: modules.HistoryTextsJSON(target, detail)}
+	if err := models.InsertHistory(c.db, h); err != nil {
 		c.logger.Printf("history: %v", err)
 	}
 }

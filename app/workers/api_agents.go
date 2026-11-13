@@ -491,9 +491,10 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	detail := "expires " + time.Unix(tok.ExpiresAt, 0).UTC().Format(time.RFC3339)
+	expires := time.Unix(tok.ExpiresAt, 0).UTC().Format(time.RFC3339)
+	detail := modules.M("history.detail.token_issued", "expires", expires)
 	if agent.AssignedRuleID.Valid {
-		detail += "; rule id " + itoa64(agent.AssignedRuleID.Int64) + " version " + itoa(agent.AssignedRuleVersion)
+		detail = modules.M("history.detail.token_issued_rule", "expires", expires, "rule", agent.AssignedRuleID.Int64, "version", agent.AssignedRuleVersion)
 	}
 	c.history(p, models.HistToken, "issued", tok.Name, detail)
 	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok), "value": value})
@@ -533,7 +534,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, "previous values invalidated; expires "+time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339))
+	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, modules.M("history.detail.token_reissued", "expires", time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339)))
 	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t), "value": value})
 }
 
@@ -548,7 +549,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, "binding to the agent instance removed (was "+prev+")")
+	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, modules.M("history.detail.token_unbound", "instance", prev))
 	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
 }
 
@@ -564,7 +565,7 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 			c.internalError(w, r, err)
 			return
 		}
-		c.history(principalFrom(r), models.HistToken, "revoked", t.Name, "")
+		c.history(principalFrom(r), models.HistToken, "revoked", t.Name, modules.Msg{})
 	}
 	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
 }

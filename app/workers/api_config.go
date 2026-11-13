@@ -94,21 +94,21 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		for _, n := range in.Unset {
 			unset[n] = true
 		}
-		var parts []string
+		var parts []modules.Msg
 		for _, n := range changed {
 			f, _ := modules.FindConfigField(n)
 			switch {
 			case unset[n]:
-				parts = append(parts, n+" = (default)")
+				parts = append(parts, modules.M("history.detail.config_default", "name", n))
 			case f.Secret():
-				parts = append(parts, n+" changed")
+				parts = append(parts, modules.M("history.detail.config_secret", "name", n))
 			case savedErr != nil:
-				parts = append(parts, n+" = "+in.Set[n])
+				parts = append(parts, modules.M("history.detail.config_value", "name", n, "value", in.Set[n]))
 			default:
-				parts = append(parts, n+" = "+f.Value(saved))
+				parts = append(parts, modules.M("history.detail.config_value", "name", n, "value", f.Value(saved)))
 			}
 		}
-		c.history(principalFrom(r), models.HistConfig, "updated", strings.Join(changed, ", "), strings.Join(parts, "; "))
+		c.history(principalFrom(r), models.HistConfig, "updated", strings.Join(changed, ", "), historyParts(parts))
 		c.reloadConfig()
 	}
 	out, err := c.configOut()

@@ -40,7 +40,7 @@ func (c *core) processTokenExpiry(now time.Time) {
 	n := now.Unix()
 	for _, t := range tokens {
 		if t.RevokedAt == 0 && t.ExpiresAt > last && t.ExpiresAt <= n && (t.PendingHash == "" || t.PendingExpiresAt <= n) {
-			c.history(nil, models.HistToken, "expired", t.Name, "the token expired; connections with it are refused")
+			c.history(nil, models.HistToken, "expired", t.Name, modules.M("history.detail.token_expired"))
 		}
 		if t.PendingHash != "" && t.PendingExpiresAt <= n {
 			_ = models.DropExpiredTokenRenewal(c.db, t.ID, n)

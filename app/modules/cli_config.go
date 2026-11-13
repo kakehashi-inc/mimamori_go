@@ -128,15 +128,17 @@ func (c *CentralConfigSetCmd) Run() error {
 		fmt.Printf("%s is unchanged.\n", f.Name)
 		return nil
 	}
-	detail := f.Name + " changed"
+	detail := M("history.detail.config_secret", "name", f.Name)
 	if !f.Secret() {
 		// The history shows the value as saved (lists normalized).
-		detail = f.Name + " = " + value
+		shown := value
 		if saved, _, err := CentralConfigState(db); err == nil {
-			detail = f.Name + " = " + f.Value(saved)
+			shown = f.Value(saved)
 		}
+		detail = M("history.detail.config_value", "name", f.Name, "value", shown)
 	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name, Detail: detail})
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name,
+		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("%s set. %s\n", f.Name, effectNote(f))
 	return nil
 }
@@ -164,7 +166,9 @@ func (c *CentralConfigUnsetCmd) Run() error {
 		fmt.Printf("%s already uses its default.\n", f.Name)
 		return nil
 	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "unset", Target: c.Name, Detail: "default restored"})
+	restored := M("history.detail.config_restored")
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "unset", Target: c.Name,
+		Detail: restored.Text(), I18n: HistoryTextsJSON(Msg{}, restored)})
 	fmt.Printf("%s uses its default. %s\n", c.Name, effectNote(f))
 	return nil
 }

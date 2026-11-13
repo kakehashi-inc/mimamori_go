@@ -261,10 +261,10 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 		}
 	}
 	if usedPending {
-		c.history(nil, models.HistToken, "renewed", t.Name, "agent switched to the renewed token; the previous value is no longer accepted")
+		c.history(nil, models.HistToken, "renewed", t.Name, modules.M("history.detail.token_renewed"))
 	}
 	if bound {
-		c.history(nil, models.HistToken, "bound", t.Name, "bound to agent instance "+instance)
+		c.history(nil, models.HistToken, "bound", t.Name, modules.M("history.detail.token_bound", "instance", instance))
 	}
 	a, err := models.GetAgentByToken(c.db, t.ID)
 	if err != nil {

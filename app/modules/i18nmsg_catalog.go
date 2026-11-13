@@ -217,6 +217,7 @@ var msgCatalog = map[string]msgDef{
 	"history.detail.token_renewal_issued":           {en: "new token value handed to the agent; expires {{expires}}"},
 	"history.detail.token_renewed":                  {en: "agent switched to the renewed token; the previous value is no longer accepted"},
 	"history.detail.token_unbound":                  {en: "binding to the agent instance removed (was {{instance}})"},
+	"history.target.command_set":                    {en: "{{agent}} / {{set}}", admin: true},
 	"history.target.command_set_fallback":           {en: "set {{set}}", admin: true},
 	"json.kind.array":                               {en: "an array"},
 	"json.kind.bool":                                {en: "true or false"},

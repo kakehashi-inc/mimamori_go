@@ -731,6 +731,7 @@
                 "step_up_code_failed": "the re-authentication code for a request from {{host}} could not be sent: {{cause}}"
             },
             "target": {
+                "command_set": "{{agent}} / {{set}}",
                 "command_set_fallback": "set {{set}}"
             }
         },

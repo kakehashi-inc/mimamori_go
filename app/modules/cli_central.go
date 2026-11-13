@@ -114,7 +114,9 @@ func (c *CentralInitAdminCmd) Run() error {
 	if err := models.InsertAccount(db, a); err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email, Detail: "first administrator created on the central host"})
+	detail := M("history.detail.first_admin_cli")
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email,
+		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("Administrator %q created.\n", a.Email)
 	return nil
 }
@@ -154,7 +156,9 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	_ = models.SetAccountDisabled(db, a.ID, false)
 	_ = RevokeAccountAuth(db, a.ID, "")
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email, Detail: "administrator recovered on the central host"})
+	detail := M("history.detail.admin_recovered_cli")
+	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email,
+		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("Password of %q reset; the account is enabled and its sessions, trusted browsers and pending codes were invalidated.\n", a.Email)
 	return nil
 }

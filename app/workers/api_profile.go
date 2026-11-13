@@ -31,7 +31,7 @@ func (c *core) handleOwnDisplayName(w http.ResponseWriter, r *http.Request) {
 			c.internalError(w, r, err)
 			return
 		}
-		c.history(p, models.HistAccount, "display_name_changed", p.Email, p.DisplayName+" -> "+display+" (own change)")
+		c.history(p, models.HistAccount, "display_name_changed", p.Email, modules.M("history.detail.change_own", "from", p.DisplayName, "to", display))
 	}
 	writeJSON(w, http.StatusOK, meJSON(p.AccountID, p.Email, display, p.Role, p.Language))
 }
@@ -49,7 +49,7 @@ func (c *core) applyOwnEmail(w http.ResponseWriter, r *http.Request, p *principa
 		return false
 	}
 	c.revokeAccountAuth(p.AccountID, p.SessionID)
-	c.history(p, models.HistAccount, "email_changed", email, p.Email+" -> "+email+" (own change)")
+	c.history(p, models.HistAccount, "email_changed", email, modules.M("history.detail.change_own", "from", p.Email, "to", email))
 	return true
 }
 
@@ -101,7 +101,7 @@ func (c *core) handleOwnEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := c.sendCodeMail(r, email, code, "e-mail address change"); err != nil {
-		c.history(p, models.HistAccount, "email_code_failed", p.Email, "the code for the change to "+email+" could not be sent: "+err.Error())
+		c.history(p, models.HistAccount, "email_code_failed", p.Email, modules.M("history.detail.email_code_failed", "email", email, "cause", modules.AsMsg(err)))
 		writeError(w, http.StatusServiceUnavailable, codeMailFailed)
 		return
 	}

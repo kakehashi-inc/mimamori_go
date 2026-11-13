@@ -546,9 +546,12 @@ type HistoryCategory = 'account' | 'rule' | 'token' | 'certificate' | 'rejected'
 interface HistoryItem {
   id: number; at: string; account_name: string;   // 操作したアカウントのその時点のメールアドレス（閲覧者には 1.3 の変換をした値）。システムの処理は "system"、CLI（ctl）の操作は "cli"、セントラルのホスト上のコマンドは "local:<OS のユーザー名>"
   category: HistoryCategory; action: string; target: string; detail: string;
+  target_i18n?: Msg; detail_i18n?: Msg;          // target と detail をコードで表したもの（1.2）。英語にすると target / detail と同じ文になるものだけ返す
   remote_addr: string; count: number;            // 拒否した接続は同じ接続元、理由、トークン名（target）を 10 分以内ならまとめて数える
 }
 ```
+
+`detail_i18n` のコードは `history.detail.*` で、入れ子のメッセージ（送れなかったメールの `cause`、適用の結果の `apply.*` など）を持つことがあります。`; ` でつないだ複数の部分からなる詳細は `common.problems` です。`target_i18n` は、プログラムが作った語を含む対象（削除されたコマンドセットの `history.target.command_set`、削除された監視ルールの `history.detail.rule_fallback`）だけが持ち、名前やアドレスなど値だけの対象は持ちません。拒否した接続の行、詳細の無い行、`*_i18n` を記録する前の行は持たず、画面は英文を表示します。閲覧者に返さない分類の行（上記）のコードは、閲覧者に届きません。
 
 ## 12. アカウント
 
