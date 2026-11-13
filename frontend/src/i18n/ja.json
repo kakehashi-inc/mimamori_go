@@ -600,7 +600,7 @@
             "not_found": "エージェントが見つかりません。"
         },
         "apply": {
-            "and_more": "ほか {{count}} 件",
+            "and_more": "ほかに {{count}} 件あります。",
             "applied": "適用しました（監査ルール {{count}} 件）。",
             "applied_with_warnings": "適用しました（注意 {{count}} 件）。",
             "builtin_disabled": "内蔵エージェントが無効のため、監査ルールを削除しました。",
@@ -632,7 +632,7 @@
             "list_failed": "auditctl -l が失敗しました: {{cause}}",
             "not_running": "auditd が動いていません。",
             "status_failed": "auditctl -s が失敗しました: {{cause}}",
-            "tool_missing": "監査のコマンド {{tool}} を使えません: {{cause}}"
+            "tool_missing": "監査のコマンド {{tool}} を実行できません: {{cause}}"
         },
         "auth": {
             "code_mail_failed": "確認コードのメールを送れませんでした。管理者に連絡してください。",
@@ -647,7 +647,7 @@
         },
         "builtin": {
             "auditd_unusable": "auditd を使えません: {{cause}}",
-            "local_db": "ローカル DB: {{cause}}",
+            "local_db": "ローカル DB でエラーが発生しました: {{cause}}",
             "stopped": "停止しました。"
         },
         "command": {

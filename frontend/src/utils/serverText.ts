@@ -35,11 +35,16 @@ function isMessage(v: unknown): v is ServerProblem {
     return typeof v === 'object' && v !== null && typeof (v as { code?: unknown }).code === 'string';
 }
 
-/** The separator a list parameter is joined with; the same rule as the server's English. */
-function listSeparator(tt: DynamicT, name: string, items: unknown[]): string {
-    if (name === 'lines') return tt('srv.sep.lines');
-    if (items.some(isMessage)) return tt('srv.sep.problems');
-    return tt('srv.sep.list');
+// A message that ends a sentence of its own ("。" in Japanese); the next message of a list follows it
+// directly instead of after a separator, so no punctuation is doubled. English texts never end so.
+const SENTENCE_END = /[。！？]$/;
+
+/** Joins the items of a list parameter by the same rule as the server's English. */
+function joinList(tt: DynamicT, name: string, items: unknown[], parts: string[]): string {
+    if (name === 'lines') return parts.join(tt('srv.sep.lines'));
+    if (!items.some(isMessage)) return parts.join(tt('srv.sep.list'));
+    const sep = tt('srv.sep.problems');
+    return parts.reduce((all, part, i) => (i === 0 ? part : all + (SENTENCE_END.test(all) ? '' : sep) + part), '');
 }
 
 /** A parameter value as text; null when it holds a message that cannot be shown in this language. */
@@ -54,7 +59,7 @@ function renderValue(tt: DynamicT, name: string, v: unknown, opts: ServerTextOpt
             if (s === null) return null;
             parts.push(s);
         }
-        return parts.join(listSeparator(tt, name, v));
+        return joinList(tt, name, v, parts);
     }
     if (isMessage(v)) return renderProblem(tt, v, opts);
     return null;
@@ -65,7 +70,8 @@ function renderMsg(tt: DynamicT, m: ServerMsg, opts: ServerTextOptions | undefin
     const params = m.params ?? {};
     if (m.code === '') return typeof params.text === 'string' ? params.text : null;
     const key = `srv.${m.code}`;
-    if (!i18n.exists(key)) return null;
+    // A code that names a group of texts (a newer server, a recorded action with a dot) is not known here.
+    if (!i18n.exists(key) || typeof tt(key, { returnObjects: true }) !== 'string') return null;
     const values: Record<string, string> = {};
     for (const [name, v] of Object.entries(params)) {
         const s = renderValue(tt, name, v, opts);

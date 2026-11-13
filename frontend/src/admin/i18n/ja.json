@@ -635,7 +635,7 @@
                 "work_dir_absolute": "絶対パスにしてください。",
                 "work_dir_clean": "正規化されたパスにしてください（空の部分、. と ..、末尾の / は使えません）。",
                 "work_dir_nul": "NUL と改行は使えません。",
-                "wrong_type": "コマンドセットの定義が正しくありません: {{field}} は {{expected}}にしてください（{{found}} になっています）。"
+                "wrong_type": "コマンドセットの定義が正しくありません: {{field}} は{{expected}}にしてください（{{found}} になっています）。"
             }
         },
         "config": {
@@ -738,7 +738,7 @@
         "json": {
             "kind": {
                 "array": "配列",
-                "bool": "true か false",
+                "bool": "真偽値（true か false）",
                 "integer": "整数",
                 "number": "数値",
                 "object": "オブジェクト",
@@ -778,7 +778,7 @@
             "content": {
                 "decode": "監視ルールの内容が正しくありません: {{detail}}",
                 "not_object": "監視ルールの内容が正しくありません: 内容は JSON のオブジェクトにしてください。",
-                "wrong_type": "監視ルールの内容が正しくありません: {{field}} は {{expected}}にしてください（{{found}} になっています）。"
+                "wrong_type": "監視ルールの内容が正しくありません: {{field}} は{{expected}}にしてください（{{found}} になっています）。"
             },
             "in_use": "エージェントに適用中のため、監視ルールを削除できません。",
             "name_invalid": "監視ルールの名前は 1〜100 文字にしてください。",
