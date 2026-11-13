@@ -8,7 +8,7 @@ type ScanRoot struct {
 }
 
 // ReplaceScanRoots stores the roots found by a full scan.
-func ReplaceScanRoots(db Execer, paths []string) error {
+func ReplaceScanRoots(db Writer, paths []string) error {
 	if _, err := db.Exec(`DELETE FROM scan_roots`); err != nil {
 		return err
 	}
@@ -21,7 +21,7 @@ func ReplaceScanRoots(db Execer, paths []string) error {
 }
 
 // ListScanRoots returns the stored roots.
-func ListScanRoots(db Execer) ([]string, error) {
+func ListScanRoots(db Reader) ([]string, error) {
 	rows, err := db.Query(`SELECT path FROM scan_roots ORDER BY path`)
 	if err != nil {
 		return nil, err

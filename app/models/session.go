@@ -16,14 +16,14 @@ type Session struct {
 }
 
 // InsertSession stores a session.
-func InsertSession(db Execer, s *Session) error {
+func InsertSession(db Writer, s *Session) error {
 	_, err := db.Exec(`INSERT INTO sessions (id, account_id, created_at, expires_at, last_seen_at, remember) VALUES (?, ?, ?, ?, ?, ?)`,
 		s.ID, s.AccountID, s.CreatedAt, s.ExpiresAt, s.LastSeenAt, boolToInt(s.Remember))
 	return err
 }
 
 // GetSession returns the session by hashed id.
-func GetSession(db Execer, id string) (*Session, error) {
+func GetSession(db Reader, id string) (*Session, error) {
 	s := &Session{}
 	var remember int
 	err := db.QueryRow(`SELECT id, account_id, created_at, expires_at, last_seen_at, remember, step_up_at FROM sessions WHERE id = ?`, id).
@@ -36,39 +36,39 @@ func GetSession(db Execer, id string) (*Session, error) {
 }
 
 // TouchSession updates the last-seen time and expiry.
-func TouchSession(db Execer, id string, now, expires int64) error {
+func TouchSession(db Writer, id string, now, expires int64) error {
 	_, err := db.Exec(`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?`, now, expires, id)
 	return err
 }
 
 // SetSessionStepUp records that a re-authentication code was entered in the
 // session at the given time.
-func SetSessionStepUp(db Execer, id string, at int64) error {
+func SetSessionStepUp(db Writer, id string, at int64) error {
 	return execOne(db, `UPDATE sessions SET step_up_at = ? WHERE id = ?`, at, id)
 }
 
 // ClearAccountStepUps ends the re-authentication of every session of an
 // account (the sessions themselves stay).
-func ClearAccountStepUps(db Execer, accountID int64) error {
+func ClearAccountStepUps(db Writer, accountID int64) error {
 	_, err := db.Exec(`UPDATE sessions SET step_up_at = 0 WHERE account_id = ?`, accountID)
 	return err
 }
 
 // DeleteSession removes one session.
-func DeleteSession(db Execer, id string) error {
+func DeleteSession(db Writer, id string) error {
 	_, err := db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 	return err
 }
 
 // DeleteAccountSessions removes every session of an account, optionally
 // keeping one (the session that changed its own password).
-func DeleteAccountSessions(db Execer, accountID int64, keep string) error {
+func DeleteAccountSessions(db Writer, accountID int64, keep string) error {
 	_, err := db.Exec(`DELETE FROM sessions WHERE account_id = ? AND id <> ?`, accountID, keep)
 	return err
 }
 
 // DeleteExpiredSessions removes expired sessions.
-func DeleteExpiredSessions(db Execer, now int64) error {
+func DeleteExpiredSessions(db Writer, now int64) error {
 	_, err := db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, now)
 	return err
 }

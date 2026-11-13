@@ -44,7 +44,7 @@ func scanHistory(s rowScanner) (*HistoryItem, error) {
 }
 
 // InsertHistory records an event.
-func InsertHistory(db Execer, h *HistoryItem) error {
+func InsertHistory(db Writer, h *HistoryItem) error {
 	now := Now()
 	_, err := db.Exec(`INSERT INTO history (at, last_at, account_name, category, action, target, detail, i18n, remote_addr, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		now, now, h.AccountName, h.Category, h.Action, h.Target, h.Detail, h.I18n, h.RemoteAddr)
@@ -53,7 +53,7 @@ func InsertHistory(db Execer, h *HistoryItem) error {
 
 // RecordRejected records a rejected connection. Repeated rejections from the
 // same address for the same reason within window seconds are counted on one row.
-func RecordRejected(db Execer, remote, reason, target string, window int64) error {
+func RecordRejected(db Writer, remote, reason, target string, window int64) error {
 	now := Now()
 	res, err := db.Exec(`UPDATE history SET count = count + 1, last_at = ? WHERE id = (
 		SELECT id FROM history WHERE category = 'rejected' AND remote_addr = ? AND action = ? AND target = ? AND last_at >= ? ORDER BY id DESC LIMIT 1)`,
@@ -69,7 +69,7 @@ func RecordRejected(db Execer, remote, reason, target string, window int64) erro
 
 // ListHistory returns history rows newest first with optional filters. Rows
 // of the categories in exclude are left out.
-func ListHistory(db Execer, category, target string, exclude []string, limit, offset int) ([]*HistoryItem, int, error) {
+func ListHistory(db Reader, category, target string, exclude []string, limit, offset int) ([]*HistoryItem, int, error) {
 	where := `WHERE (? = '' OR category = ?) AND (? = '' OR target = ?)`
 	args := []any{category, category, target, target}
 	for _, c := range exclude {
@@ -86,7 +86,7 @@ func ListHistory(db Execer, category, target string, exclude []string, limit, of
 }
 
 // DeleteRejectedHistoryBefore removes rejected-connection rows older than t.
-func DeleteRejectedHistoryBefore(db Execer, t int64) error {
+func DeleteRejectedHistoryBefore(db Writer, t int64) error {
 	_, err := db.Exec(`DELETE FROM history WHERE category = 'rejected' AND last_at < ?`, t)
 	return err
 }

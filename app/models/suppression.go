@@ -28,7 +28,7 @@ func scanSuppression(s rowScanner) (*Suppression, error) {
 }
 
 // InsertSuppression creates a suppression.
-func InsertSuppression(db Execer, x *Suppression) error {
+func InsertSuppression(db Writer, x *Suppression) error {
 	x.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO suppressions (agent_id, type, os_user, exe, target, comment, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		x.AgentID, x.Type, x.OSUser, x.Exe, x.Target, x.Comment, x.CreatedAt, x.CreatedBy)
@@ -40,17 +40,17 @@ func InsertSuppression(db Execer, x *Suppression) error {
 }
 
 // GetSuppression returns a suppression by id.
-func GetSuppression(db Execer, id int64) (*Suppression, error) {
+func GetSuppression(db Reader, id int64) (*Suppression, error) {
 	return scanSuppression(db.QueryRow(`SELECT `+suppressionCols+` FROM suppressions WHERE id = ?`, id))
 }
 
 // ListSuppressions returns all suppressions, newest first.
-func ListSuppressions(db Execer) ([]*Suppression, error) {
+func ListSuppressions(db Reader) ([]*Suppression, error) {
 	rows, err := db.Query(`SELECT ` + suppressionCols + ` FROM suppressions ORDER BY id DESC`)
 	return collect(rows, err, scanSuppression)
 }
 
 // DeleteSuppression removes a suppression.
-func DeleteSuppression(db Execer, id int64) error {
+func DeleteSuppression(db Writer, id int64) error {
 	return execOne(db, `DELETE FROM suppressions WHERE id = ?`, id)
 }

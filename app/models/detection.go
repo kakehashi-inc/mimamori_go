@@ -55,19 +55,19 @@ func scanDetection(s rowScanner) (*Detection, error) {
 }
 
 // FindOpenDetection returns the unacknowledged row with the fingerprint.
-func FindOpenDetection(db Execer, fingerprint string) (*Detection, error) {
+func FindOpenDetection(db Reader, fingerprint string) (*Detection, error) {
 	return scanDetection(db.QueryRow(`SELECT `+detectionCols+` FROM detections WHERE fingerprint = ? AND acknowledged_at = 0 ORDER BY id DESC LIMIT 1`, fingerprint))
 }
 
 // LastNotifiedAt returns the latest notification time of a fingerprint.
-func LastNotifiedAt(db Execer, fingerprint string) int64 {
+func LastNotifiedAt(db Reader, fingerprint string) int64 {
 	var t int64
 	_ = db.QueryRow(`SELECT COALESCE(MAX(notified_at), 0) FROM detections WHERE fingerprint = ?`, fingerprint).Scan(&t)
 	return t
 }
 
 // InsertDetection stores a new detection row.
-func InsertDetection(db Execer, d *Detection) error {
+func InsertDetection(db Writer, d *Detection) error {
 	d.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO detections (fingerprint, type, category, os_user, exe, target, count, first_at, last_at, file_ctime,
 		file_owner, file_mode, suppressed, suppression_id, notify_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -81,7 +81,7 @@ func InsertDetection(db Execer, d *Detection) error {
 }
 
 // UpdateDetectionOccurrence merges new occurrences into an open row.
-func UpdateDetectionOccurrence(db Execer, d *Detection) error {
+func UpdateDetectionOccurrence(db Writer, d *Detection) error {
 	return execOne(db, `UPDATE detections SET category = ?, count = ?, first_at = ?, last_at = ?, file_ctime = ?, file_owner = ?, file_mode = ?,
 		suppressed = ?, suppression_id = ?, notify_state = ? WHERE id = ?`,
 		d.Category, d.Count, d.FirstAt, d.LastAt, d.FileCtime, d.FileOwner, d.FileMode, boolToInt(d.Suppressed), d.SuppressionID, d.NotifyState, d.ID)
@@ -91,7 +91,7 @@ func UpdateDetectionOccurrence(db Execer, d *Detection) error {
 // suppressionID; a detection still waiting for notification is not notified.
 // Only these columns are written, so occurrences merged at the same time are
 // kept. It returns sql.ErrNoRows when the row is gone or already suppressed.
-func MarkDetectionSuppressed(db Execer, id, suppressionID int64) error {
+func MarkDetectionSuppressed(db Writer, id, suppressionID int64) error {
 	return execOne(db, `UPDATE detections SET suppressed = 1, suppression_id = ?,
 		notify_state = CASE WHEN notify_state = ? THEN ? ELSE notify_state END WHERE id = ? AND suppressed = 0`,
 		suppressionID, NotifyPending, NotifySkipped, id)
@@ -100,7 +100,7 @@ func MarkDetectionSuppressed(db Execer, id, suppressionID int64) error {
 // MoveDetectionSuppression records that an unacknowledged detection
 // suppressed by fromID is now suppressed by toID (another suppression that
 // matches it). It returns sql.ErrNoRows when the row changed meanwhile.
-func MoveDetectionSuppression(db Execer, id, fromID, toID int64) error {
+func MoveDetectionSuppression(db Writer, id, fromID, toID int64) error {
 	return execOne(db, `UPDATE detections SET suppression_id = ? WHERE id = ? AND suppressed = 1 AND suppression_id = ? AND acknowledged_at = 0`,
 		toID, id, fromID)
 }
@@ -108,14 +108,14 @@ func MoveDetectionSuppression(db Execer, id, fromID, toID int64) error {
 // ReleaseDetectionSuppression makes an unacknowledged detection suppressed by
 // suppressionID not suppressed again, with the given notification state.
 // It returns sql.ErrNoRows when the row changed meanwhile.
-func ReleaseDetectionSuppression(db Execer, id, suppressionID int64, notifyState string) error {
+func ReleaseDetectionSuppression(db Writer, id, suppressionID int64, notifyState string) error {
 	return execOne(db, `UPDATE detections SET suppressed = 0, suppression_id = 0, notify_state = ?
 		WHERE id = ? AND suppressed = 1 AND suppression_id = ? AND acknowledged_at = 0`,
 		notifyState, id, suppressionID)
 }
 
 // GetDetection returns one detection.
-func GetDetection(db Execer, id int64) (*Detection, error) {
+func GetDetection(db Reader, id int64) (*Detection, error) {
 	return scanDetection(db.QueryRow(`SELECT `+detectionCols+` FROM detections WHERE id = ?`, id))
 }
 
@@ -165,7 +165,7 @@ func (f DetectionFilter) where() (string, []any) {
 
 // ListDetections returns matching detections, latest first, at most limit
 // rows, together with the total number of matches.
-func ListDetections(db Execer, f DetectionFilter, limit int) ([]*Detection, int, error) {
+func ListDetections(db Reader, f DetectionFilter, limit int) ([]*Detection, int, error) {
 	where, args := f.where()
 	var total int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM detections`+where, args...).Scan(&total); err != nil {
@@ -177,14 +177,14 @@ func ListDetections(db Execer, f DetectionFilter, limit int) ([]*Detection, int,
 }
 
 // CountUnackedAlerts counts unacknowledged, unsuppressed alert detections.
-func CountUnackedAlerts(db Execer) (int, error) {
+func CountUnackedAlerts(db Reader) (int, error) {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM detections WHERE category = 'alert' AND acknowledged_at = 0 AND suppressed = 0`).Scan(&n)
 	return n, err
 }
 
 // AcknowledgeDetection marks a detection as acknowledged.
-func AcknowledgeDetection(db Execer, id int64, by string, now int64) (bool, error) {
+func AcknowledgeDetection(db Writer, id int64, by string, now int64) (bool, error) {
 	res, err := db.Exec(`UPDATE detections SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ? AND acknowledged_at = 0`, now, by, id)
 	if err != nil {
 		return false, err
@@ -194,13 +194,13 @@ func AcknowledgeDetection(db Execer, id int64, by string, now int64) (bool, erro
 }
 
 // ListPendingNotify returns detections waiting for notification.
-func ListPendingNotify(db Execer) ([]*Detection, error) {
+func ListPendingNotify(db Reader) ([]*Detection, error) {
 	rows, err := db.Query(`SELECT ` + detectionCols + ` FROM detections WHERE notify_state = 'pending' ORDER BY CASE category WHEN 'alert' THEN 0 ELSE 1 END, last_at DESC, id DESC`)
 	return collect(rows, err, scanDetection)
 }
 
 // MarkNotified marks detections as notified.
-func MarkNotified(db Execer, ids []int64, now int64) error {
+func MarkNotified(db Writer, ids []int64, now int64) error {
 	for _, id := range ids {
 		if _, err := db.Exec(`UPDATE detections SET notify_state = 'sent', notified_at = ? WHERE id = ?`, now, id); err != nil {
 			return err
@@ -211,7 +211,7 @@ func MarkNotified(db Execer, ids []int64, now int64) error {
 
 // DeleteDetectionsBefore removes detections whose last occurrence is older
 // than t (retention period).
-func DeleteDetectionsBefore(db Execer, t int64) (int64, error) {
+func DeleteDetectionsBefore(db Writer, t int64) (int64, error) {
 	res, err := db.Exec(`DELETE FROM detections WHERE last_at < ?`, t)
 	if err != nil {
 		return 0, err

@@ -36,7 +36,7 @@ func scanCert(s rowScanner) (*Certificate, error) {
 }
 
 // InsertCertificate stores a certificate.
-func InsertCertificate(db Execer, c *Certificate) error {
+func InsertCertificate(db Writer, c *Certificate) error {
 	c.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO certificates (kind, fingerprint, subject, issuer_fp, names, cert_pem, key_pem, not_before, not_after, status, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.Kind, c.Fingerprint, c.Subject, c.IssuerFP, c.Names, c.CertPEM, c.KeyPEM,
@@ -49,17 +49,17 @@ func InsertCertificate(db Execer, c *Certificate) error {
 }
 
 // ListCertificates returns certificates of a kind, newest first.
-func ListCertificates(db Execer, kind string) ([]*Certificate, error) {
+func ListCertificates(db Reader, kind string) ([]*Certificate, error) {
 	rows, err := db.Query(`SELECT `+certCols+` FROM certificates WHERE kind = ? ORDER BY not_before DESC, id DESC`, kind)
 	return collect(rows, err, scanCert)
 }
 
 // SetCertificateStatus changes the status of a certificate.
-func SetCertificateStatus(db Execer, id int64, status string) error {
+func SetCertificateStatus(db Writer, id int64, status string) error {
 	return execOne(db, `UPDATE certificates SET status = ? WHERE id = ?`, status, id)
 }
 
 // DeleteCertificate removes a certificate (expired CAs are discarded).
-func DeleteCertificate(db Execer, id int64) error {
+func DeleteCertificate(db Writer, id int64) error {
 	return execOne(db, `DELETE FROM certificates WHERE id = ?`, id)
 }

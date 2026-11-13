@@ -17,7 +17,7 @@ type CommandSchedule struct {
 }
 
 // GetCommandSchedule returns the schedule state of a set (nil when absent).
-func GetCommandSchedule(db Execer, setID int64) (*CommandSchedule, error) {
+func GetCommandSchedule(db Reader, setID int64) (*CommandSchedule, error) {
 	s := &CommandSchedule{}
 	err := db.QueryRow(`SELECT set_id, schedule_sig, armed_at, last_due FROM command_schedules WHERE set_id = ?`, setID).
 		Scan(&s.SetID, &s.ScheduleSig, &s.ArmedAt, &s.LastDue)
@@ -34,7 +34,7 @@ func GetCommandSchedule(db Execer, setID int64) (*CommandSchedule, error) {
 // is new or changed (sig differs): it is armed at now and has no occurrence
 // run yet. An unchanged definition keeps its state. It returns the stored
 // state.
-func ArmCommandSchedule(db Execer, setID int64, sig string, now int64) (*CommandSchedule, error) {
+func ArmCommandSchedule(db Writer, setID int64, sig string, now int64) (*CommandSchedule, error) {
 	if _, err := db.Exec(`INSERT INTO command_schedules (set_id, schedule_sig, armed_at, last_due) VALUES (?, ?, ?, 0)
 		ON CONFLICT(set_id) DO UPDATE SET schedule_sig = excluded.schedule_sig, armed_at = excluded.armed_at, last_due = 0
 		WHERE command_schedules.schedule_sig <> excluded.schedule_sig`, setID, sig, now); err != nil {
@@ -44,13 +44,13 @@ func ArmCommandSchedule(db Execer, setID int64, sig string, now int64) (*Command
 }
 
 // SetCommandScheduleLastDue records the latest occurrence run.
-func SetCommandScheduleLastDue(db Execer, setID, due int64) error {
+func SetCommandScheduleLastDue(db Writer, setID, due int64) error {
 	return execOne(db, `UPDATE command_schedules SET last_due = ? WHERE set_id = ?`, due, setID)
 }
 
 // DeleteCommandSchedulesExcept removes the state of every set not in keep
 // (sets that were deleted or are no longer scheduled).
-func DeleteCommandSchedulesExcept(db Execer, keep []int64) error {
+func DeleteCommandSchedulesExcept(db Writer, keep []int64) error {
 	rows, err := db.Query(`SELECT set_id FROM command_schedules`)
 	if err != nil {
 		return err

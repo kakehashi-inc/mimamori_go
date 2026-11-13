@@ -56,7 +56,7 @@ func scanCommandRun(s rowScanner) (*CommandRun, error) {
 // EnsureCommandRun stores a run reported for the first time and returns its
 // row; a run already stored (same RunUID) is returned unchanged with created
 // false. New rows start in the running state.
-func EnsureCommandRun(db Execer, r *CommandRun, now int64) (*CommandRun, bool, error) {
+func EnsureCommandRun(db Writer, r *CommandRun, now int64) (*CommandRun, bool, error) {
 	// Looked up first: every attempted insert takes an AUTOINCREMENT number,
 	// even when the conflict clause skips it (the clause stays as the safety
 	// net).
@@ -80,30 +80,30 @@ func EnsureCommandRun(db Execer, r *CommandRun, now int64) (*CommandRun, bool, e
 
 // FinishCommandRun records the end of a run that is still running. It
 // returns sql.ErrNoRows when the run is missing or already finished.
-func FinishCommandRun(db Execer, id int64, state, reason string, finishedAt int64, displayRows string, truncated bool, now int64) error {
+func FinishCommandRun(db Writer, id int64, state, reason string, finishedAt int64, displayRows string, truncated bool, now int64) error {
 	return execOne(db, `UPDATE command_runs SET state = ?, reason = ?, finished_at = ?, display_rows = ?, display_truncated = ?,
 		updated_at = ? WHERE id = ? AND finished_at = 0`, state, reason, finishedAt, displayRows, boolToInt(truncated), now, id)
 }
 
 // TouchCommandRun records that a report about the run arrived.
-func TouchCommandRun(db Execer, id int64, now int64) error {
+func TouchCommandRun(db Writer, id int64, now int64) error {
 	_, err := db.Exec(`UPDATE command_runs SET updated_at = ? WHERE id = ?`, now, id)
 	return err
 }
 
 // GetCommandRun returns a run.
-func GetCommandRun(db Execer, id int64) (*CommandRun, error) {
+func GetCommandRun(db Reader, id int64) (*CommandRun, error) {
 	return scanCommandRun(db.QueryRow(`SELECT `+commandRunCols+` FROM command_runs WHERE id = ?`, id))
 }
 
 // GetCommandRunByUID returns the run with the unique ID the agent gave it.
-func GetCommandRunByUID(db Execer, uid string) (*CommandRun, error) {
+func GetCommandRunByUID(db Reader, uid string) (*CommandRun, error) {
 	return scanCommandRun(db.QueryRow(`SELECT `+commandRunCols+` FROM command_runs WHERE run_uid = ?`, uid))
 }
 
 // ListCommandRuns returns the runs of a set, newest first, at most limit
 // rows, only those with an ID below beforeID when it is above 0.
-func ListCommandRuns(db Execer, setID int64, limit int, beforeID int64) ([]*CommandRun, error) {
+func ListCommandRuns(db Reader, setID int64, limit int, beforeID int64) ([]*CommandRun, error) {
 	q := `SELECT ` + commandRunCols + ` FROM command_runs WHERE set_id = ?`
 	args := []any{setID}
 	if beforeID > 0 {
@@ -116,14 +116,14 @@ func ListCommandRuns(db Execer, setID int64, limit int, beforeID int64) ([]*Comm
 
 // LatestFinishedCommandRun returns the last finished run of a set
 // (sql.ErrNoRows when there is none).
-func LatestFinishedCommandRun(db Execer, setID int64) (*CommandRun, error) {
+func LatestFinishedCommandRun(db Reader, setID int64) (*CommandRun, error) {
 	return scanCommandRun(db.QueryRow(`SELECT `+commandRunCols+` FROM command_runs WHERE set_id = ? AND finished_at > 0
 		ORDER BY finished_at DESC, id DESC LIMIT 1`, setID))
 }
 
 // ListLatestFinishedCommandRuns returns the last finished run of every set
 // that has one, by set ID.
-func ListLatestFinishedCommandRuns(db Execer) (map[int64]*CommandRun, error) {
+func ListLatestFinishedCommandRuns(db Reader) (map[int64]*CommandRun, error) {
 	rows, err := db.Query(`SELECT ` + commandRunCols + ` FROM command_runs r WHERE finished_at > 0 AND id = (
 		SELECT id FROM command_runs WHERE set_id = r.set_id AND finished_at > 0 ORDER BY finished_at DESC, id DESC LIMIT 1)`)
 	list, err := collect(rows, err, scanCommandRun)
@@ -138,7 +138,7 @@ func ListLatestFinishedCommandRuns(db Execer) (map[int64]*CommandRun, error) {
 }
 
 // RunningCommandRunSets returns the IDs of the sets that have a run going on.
-func RunningCommandRunSets(db Execer) (map[int64]bool, error) {
+func RunningCommandRunSets(db Reader) (map[int64]bool, error) {
 	rows, err := db.Query(`SELECT DISTINCT set_id FROM command_runs WHERE finished_at = 0`)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func RunningCommandRunSets(db Execer) (map[int64]bool, error) {
 
 // DeleteCommandRunsBefore removes runs received before t (retention), with
 // their command results.
-func DeleteCommandRunsBefore(db Execer, t int64) (int64, error) {
+func DeleteCommandRunsBefore(db Writer, t int64) (int64, error) {
 	res, err := db.Exec(`DELETE FROM command_runs WHERE received_at < ?`, t)
 	if err != nil {
 		return 0, err
@@ -167,7 +167,7 @@ func DeleteCommandRunsBefore(db Execer, t int64) (int64, error) {
 
 // DeleteCommandRunsBeyondKeep removes the finished runs of a set beyond the
 // newest keep finished ones. Runs going on are not counted or removed.
-func DeleteCommandRunsBeyondKeep(db Execer, setID int64, keep int) (int64, error) {
+func DeleteCommandRunsBeyondKeep(db Writer, setID int64, keep int) (int64, error) {
 	res, err := db.Exec(`DELETE FROM command_runs WHERE set_id = ? AND finished_at > 0 AND id NOT IN (
 		SELECT id FROM command_runs WHERE set_id = ? AND finished_at > 0 ORDER BY finished_at DESC, id DESC LIMIT ?)`, setID, setID, keep)
 	if err != nil {
@@ -177,7 +177,7 @@ func DeleteCommandRunsBeyondKeep(db Execer, setID int64, keep int) (int64, error
 }
 
 // CommandRunExists reports whether a run with the unique ID is stored.
-func CommandRunExists(db Execer, uid string) (bool, error) {
+func CommandRunExists(db Reader, uid string) (bool, error) {
 	_, err := GetCommandRunByUID(db, uid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

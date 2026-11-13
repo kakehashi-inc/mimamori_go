@@ -13,14 +13,14 @@ type Setting struct {
 // GetSetting retrieves a setting value by key. Returns empty string if absent.
 // Read errors are swallowed too, so callers that must distinguish "absent"
 // from "could not read" (e.g. generated secrets) use GetSettingStrict instead.
-func GetSetting(db Execer, key string) string {
+func GetSetting(db Reader, key string) string {
 	value, _, _ := GetSettingStrict(db, key)
 	return value
 }
 
 // GetSettingStrict retrieves a setting value, distinguishing a missing row
 // (found=false, no error) from a read failure (err != nil).
-func GetSettingStrict(db Execer, key string) (value string, found bool, err error) {
+func GetSettingStrict(db Reader, key string) (value string, found bool, err error) {
 	err = db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", false, nil
@@ -32,7 +32,7 @@ func GetSettingStrict(db Execer, key string) (value string, found bool, err erro
 }
 
 // ListSettings returns every stored setting ordered by key.
-func ListSettings(db Execer) ([]Setting, error) {
+func ListSettings(db Reader) ([]Setting, error) {
 	rows, err := db.Query(`SELECT key, value FROM settings ORDER BY key`)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func ListSettings(db Execer) ([]Setting, error) {
 // InsertSettingIfAbsent stores the pair only when the key does not exist yet.
 // Unlike SetSetting it can never overwrite an existing value, which makes it
 // safe for generated secrets.
-func InsertSettingIfAbsent(db Execer, key, value string) error {
+func InsertSettingIfAbsent(db Writer, key, value string) error {
 	_, err := db.Exec(
 		`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`,
 		key, value,
@@ -61,7 +61,7 @@ func InsertSettingIfAbsent(db Execer, key, value string) error {
 }
 
 // SetSetting upserts a setting key/value pair.
-func SetSetting(db Execer, key, value string) error {
+func SetSetting(db Writer, key, value string) error {
 	_, err := db.Exec(
 		`INSERT INTO settings (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -73,7 +73,7 @@ func SetSetting(db Execer, key, value string) error {
 // DeleteSetting removes a setting row if present (no error when absent). Used to
 // keep the table free of values equal to the code default, so a later change to a
 // default is not overridden by a baked-in row.
-func DeleteSetting(db Execer, key string) error {
+func DeleteSetting(db Writer, key string) error {
 	_, err := db.Exec(`DELETE FROM settings WHERE key = ?`, key)
 	return err
 }

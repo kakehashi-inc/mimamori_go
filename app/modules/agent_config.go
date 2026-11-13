@@ -47,7 +47,7 @@ const (
 var ErrAgentNotInitialized = errors.New("the agent is not initialized; run agent init")
 
 // LoadAgentConfig reads the configuration from the agent's local database.
-func LoadAgentConfig(db models.Execer) (*AgentConfig, error) {
+func LoadAgentConfig(db models.Reader) (*AgentConfig, error) {
 	c := &AgentConfig{
 		AgentID:     models.GetLocalState(db, agentCfgID),
 		CentralHost: models.GetLocalState(db, agentCfgCentralHost),

@@ -9,20 +9,20 @@ type Finding struct {
 }
 
 // FindingExists reports whether the fingerprint was reported before.
-func FindingExists(db Execer, fp string) bool {
+func FindingExists(db Reader, fp string) bool {
 	var n int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM findings WHERE fingerprint = ?`, fp).Scan(&n)
 	return n > 0
 }
 
 // TouchFinding records the fingerprint as seen at now.
-func TouchFinding(db Execer, fp string, now int64) error {
+func TouchFinding(db Writer, fp string, now int64) error {
 	_, err := db.Exec(`INSERT INTO findings (fingerprint, seen_at) VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET seen_at = excluded.seen_at`, fp, now)
 	return err
 }
 
 // PruneFindings removes fingerprints with the prefix not seen since t.
-func PruneFindings(db Execer, prefix string, t int64) error {
+func PruneFindings(db Writer, prefix string, t int64) error {
 	_, err := db.Exec(`DELETE FROM findings WHERE fingerprint LIKE ? AND seen_at < ?`, prefix+"%", t)
 	return err
 }

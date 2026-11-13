@@ -10,7 +10,7 @@ type HostReport struct {
 }
 
 // InsertHostReport stores host information and keeps only the latest keep rows.
-func InsertHostReport(db Execer, info string, keep int) error {
+func InsertHostReport(db Writer, info string, keep int) error {
 	if _, err := db.Exec(`INSERT INTO host_reports (received_at, host_info) VALUES (?, ?)`, Now(), info); err != nil {
 		return err
 	}
@@ -19,7 +19,7 @@ func InsertHostReport(db Execer, info string, keep int) error {
 }
 
 // LatestHostReport returns the newest host information.
-func LatestHostReport(db Execer) (*HostReport, error) {
+func LatestHostReport(db Reader) (*HostReport, error) {
 	h := &HostReport{}
 	err := db.QueryRow(`SELECT id, received_at, host_info FROM host_reports ORDER BY id DESC LIMIT 1`).Scan(&h.ID, &h.ReceivedAt, &h.HostInfo)
 	if err != nil {

@@ -182,4 +182,4 @@ func (c *AgentStatusCmd) Run() error {
 	return nil
 }
 
-func outboxRows(db models.Execer) int { return models.CountOutbox(db) }
+func outboxRows(db models.Reader) int { return models.CountOutbox(db) }

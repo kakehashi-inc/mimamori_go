@@ -16,14 +16,14 @@ type BrowserVerification struct {
 }
 
 // InsertBrowserVerification stores a verification.
-func InsertBrowserVerification(db Execer, v *BrowserVerification) error {
+func InsertBrowserVerification(db Writer, v *BrowserVerification) error {
 	_, err := db.Exec(`INSERT INTO browser_verifications (id, account_id, trusted, created_at, expires_at, remote_addr) VALUES (?, ?, ?, ?, ?, ?)`,
 		v.ID, v.AccountID, boolToInt(v.Trusted), v.CreatedAt, v.ExpiresAt, v.RemoteAddr)
 	return err
 }
 
 // GetBrowserVerification returns the verification by hashed id.
-func GetBrowserVerification(db Execer, id string) (*BrowserVerification, error) {
+func GetBrowserVerification(db Reader, id string) (*BrowserVerification, error) {
 	v := &BrowserVerification{}
 	var trusted int
 	err := db.QueryRow(`SELECT id, account_id, trusted, created_at, expires_at, remote_addr FROM browser_verifications WHERE id = ?`, id).
@@ -36,20 +36,20 @@ func GetBrowserVerification(db Execer, id string) (*BrowserVerification, error) 
 }
 
 // DeleteBrowserVerification removes one verification.
-func DeleteBrowserVerification(db Execer, id string) error {
+func DeleteBrowserVerification(db Writer, id string) error {
 	_, err := db.Exec(`DELETE FROM browser_verifications WHERE id = ?`, id)
 	return err
 }
 
 // DeleteAccountBrowserVerifications removes every verification of an account.
-func DeleteAccountBrowserVerifications(db Execer, accountID int64) error {
+func DeleteAccountBrowserVerifications(db Writer, accountID int64) error {
 	_, err := db.Exec(`DELETE FROM browser_verifications WHERE account_id = ?`, accountID)
 	return err
 }
 
 // DeleteExpiredBrowserVerifications removes the verifications that are of
 // no use any more.
-func DeleteExpiredBrowserVerifications(db Execer, now int64) error {
+func DeleteExpiredBrowserVerifications(db Writer, now int64) error {
 	_, err := db.Exec(`DELETE FROM browser_verifications WHERE expires_at <= ?`, now)
 	return err
 }

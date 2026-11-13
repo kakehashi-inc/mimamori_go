@@ -24,7 +24,7 @@ func scanNotification(s rowScanner) (*Notification, error) {
 }
 
 // InsertNotification stores a composed mail.
-func InsertNotification(db Execer, n *Notification) error {
+func InsertNotification(db Writer, n *Notification) error {
 	n.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO notifications (created_at, subject, body) VALUES (?, ?, ?)`, n.CreatedAt, n.Subject, n.Body)
 	if err != nil {
@@ -35,20 +35,20 @@ func InsertNotification(db Execer, n *Notification) error {
 }
 
 // ListUnsentNotifications returns mails not delivered yet, oldest first.
-func ListUnsentNotifications(db Execer) ([]*Notification, error) {
+func ListUnsentNotifications(db Reader) ([]*Notification, error) {
 	rows, err := db.Query(`SELECT ` + notificationCols + ` FROM notifications WHERE sent_at = 0 ORDER BY id`)
 	return collect(rows, err, scanNotification)
 }
 
 // MarkNotificationAttempt records a delivery attempt.
-func MarkNotificationAttempt(db Execer, id int64, sentAt int64, errMsg string) error {
+func MarkNotificationAttempt(db Writer, id int64, sentAt int64, errMsg string) error {
 	_, err := db.Exec(`UPDATE notifications SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?, sent_at = ? WHERE id = ?`,
 		Now(), errMsg, sentAt, id)
 	return err
 }
 
 // DeleteSentNotificationsBefore removes delivered mails older than t.
-func DeleteSentNotificationsBefore(db Execer, t int64) error {
+func DeleteSentNotificationsBefore(db Writer, t int64) error {
 	_, err := db.Exec(`DELETE FROM notifications WHERE sent_at > 0 AND sent_at < ?`, t)
 	return err
 }

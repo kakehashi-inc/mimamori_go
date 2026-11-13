@@ -14,7 +14,7 @@ type OutboxItem struct {
 }
 
 // InsertOutbox queues a report.
-func InsertOutbox(db Execer, o *OutboxItem) error {
+func InsertOutbox(db Writer, o *OutboxItem) error {
 	o.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO outbox (created_at, payload, alert_count, normal_count, command_bytes) VALUES (?, ?, ?, ?, ?)`,
 		o.CreatedAt, o.Payload, o.AlertCount, o.NormalCount, o.CommandBytes)
@@ -26,7 +26,7 @@ func InsertOutbox(db Execer, o *OutboxItem) error {
 }
 
 // ListOutbox returns queued reports, oldest first.
-func ListOutbox(db Execer) ([]*OutboxItem, error) {
+func ListOutbox(db Reader) ([]*OutboxItem, error) {
 	rows, err := db.Query(`SELECT id, created_at, payload, alert_count, normal_count, command_bytes FROM outbox ORDER BY id`)
 	return collect(rows, err, func(s rowScanner) (*OutboxItem, error) {
 		o := &OutboxItem{}
@@ -39,27 +39,27 @@ func ListOutbox(db Execer) ([]*OutboxItem, error) {
 
 // UpdateOutbox rewrites a queued report (after dropping detections or
 // command output).
-func UpdateOutbox(db Execer, o *OutboxItem) error {
+func UpdateOutbox(db Writer, o *OutboxItem) error {
 	_, err := db.Exec(`UPDATE outbox SET payload = ?, alert_count = ?, normal_count = ?, command_bytes = ? WHERE id = ?`,
 		o.Payload, o.AlertCount, o.NormalCount, o.CommandBytes, o.ID)
 	return err
 }
 
 // DeleteOutbox removes a delivered report.
-func DeleteOutbox(db Execer, id int64) error {
+func DeleteOutbox(db Writer, id int64) error {
 	_, err := db.Exec(`DELETE FROM outbox WHERE id = ?`, id)
 	return err
 }
 
 // OutboxDetectionCount returns the number of queued detections.
-func OutboxDetectionCount(db Execer) int {
+func OutboxDetectionCount(db Reader) int {
 	var n int
 	_ = db.QueryRow(`SELECT COALESCE(SUM(alert_count + normal_count), 0) FROM outbox`).Scan(&n)
 	return n
 }
 
 // CountOutbox returns the number of queued reports.
-func CountOutbox(db Execer) int {
+func CountOutbox(db Reader) int {
 	var n int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM outbox`).Scan(&n)
 	return n
@@ -67,7 +67,7 @@ func CountOutbox(db Execer) int {
 
 // OutboxCommandBytes returns the size of the queued reports that carry
 // command set runs.
-func OutboxCommandBytes(db Execer) int64 {
+func OutboxCommandBytes(db Reader) int64 {
 	var n int64
 	_ = db.QueryRow(`SELECT COALESCE(SUM(command_bytes), 0) FROM outbox`).Scan(&n)
 	return n

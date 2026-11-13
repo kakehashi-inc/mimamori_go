@@ -43,7 +43,7 @@ var ErrAlreadyExecuted = errors.New("the run request was already executed")
 
 // InsertCommandExecution records the start of a run. It returns
 // ErrAlreadyExecuted when the request ID was already used.
-func InsertCommandExecution(db Execer, e *CommandExecution) error {
+func InsertCommandExecution(db Writer, e *CommandExecution) error {
 	_, err := db.Exec(`INSERT INTO command_executions (`+commandExecutionCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, -1, 0)`,
 		e.RunUID, e.SetID, e.SetRevision, e.RequestID, e.Trigger, e.ScheduledFor, e.StartedAt, e.FinishedAt)
 	if isUniqueViolation(err) {
@@ -54,32 +54,32 @@ func InsertCommandExecution(db Execer, e *CommandExecution) error {
 
 // SetCommandExecutionRunning records the command that starts running
 // (position from 0) and its start time.
-func SetCommandExecutionRunning(db Execer, runUID string, position int, startedAt int64) error {
+func SetCommandExecutionRunning(db Writer, runUID string, position int, startedAt int64) error {
 	return execOne(db, `UPDATE command_executions SET running_position = ?, running_started_at = ? WHERE run_uid = ?`,
 		position, startedAt, runUID)
 }
 
 // ClearCommandExecutionRunning records that no command of the run is
 // running (its result was queued).
-func ClearCommandExecutionRunning(db Execer, runUID string) error {
+func ClearCommandExecutionRunning(db Writer, runUID string) error {
 	return execOne(db, `UPDATE command_executions SET running_position = -1, running_started_at = 0 WHERE run_uid = ?`, runUID)
 }
 
 // FinishCommandExecution records the end of a run.
-func FinishCommandExecution(db Execer, runUID string, now int64) error {
+func FinishCommandExecution(db Writer, runUID string, now int64) error {
 	return execOne(db, `UPDATE command_executions SET finished_at = ? WHERE run_uid = ? AND finished_at = 0`, now, runUID)
 }
 
 // ListUnfinishedCommandExecutions returns the runs that were started and not
 // finished, oldest first.
-func ListUnfinishedCommandExecutions(db Execer) ([]*CommandExecution, error) {
+func ListUnfinishedCommandExecutions(db Reader) ([]*CommandExecution, error) {
 	rows, err := db.Query(`SELECT ` + commandExecutionCols + ` FROM command_executions WHERE finished_at = 0 ORDER BY started_at, run_uid`)
 	return collect(rows, err, scanCommandExecution)
 }
 
 // CommandExecutionByRequest returns the run started for a manual request
 // (nil when there is none).
-func CommandExecutionByRequest(db Execer, requestID int64) (*CommandExecution, error) {
+func CommandExecutionByRequest(db Reader, requestID int64) (*CommandExecution, error) {
 	e, err := scanCommandExecution(db.QueryRow(`SELECT `+commandExecutionCols+` FROM command_executions WHERE request_id = ?`, requestID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -88,7 +88,7 @@ func CommandExecutionByRequest(db Execer, requestID int64) (*CommandExecution, e
 }
 
 // DeleteFinishedCommandExecutionsBefore removes runs that finished before t.
-func DeleteFinishedCommandExecutionsBefore(db Execer, t int64) (int64, error) {
+func DeleteFinishedCommandExecutionsBefore(db Writer, t int64) (int64, error) {
 	res, err := db.Exec(`DELETE FROM command_executions WHERE finished_at > 0 AND finished_at < ?`, t)
 	if err != nil {
 		return 0, err

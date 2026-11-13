@@ -10,7 +10,7 @@ type LocalState struct {
 }
 
 // GetLocalState returns the value of key ("" when absent).
-func GetLocalState(db Execer, key string) string {
+func GetLocalState(db Reader, key string) string {
 	var v string
 	if err := db.QueryRow(`SELECT value FROM state WHERE key = ?`, key).Scan(&v); err != nil && err != sql.ErrNoRows {
 		return ""
@@ -19,13 +19,13 @@ func GetLocalState(db Execer, key string) string {
 }
 
 // SetLocalState upserts a value.
-func SetLocalState(db Execer, key, value string) error {
+func SetLocalState(db Writer, key, value string) error {
 	_, err := db.Exec(`INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
 }
 
 // DeleteLocalState removes the keys.
-func DeleteLocalState(db Execer, keys ...string) error {
+func DeleteLocalState(db Writer, keys ...string) error {
 	for _, k := range keys {
 		if _, err := db.Exec(`DELETE FROM state WHERE key = ?`, k); err != nil {
 			return err

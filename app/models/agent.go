@@ -66,7 +66,7 @@ func scanAgent(s rowScanner) (*Agent, error) {
 }
 
 // InsertAgent creates an agent row. DBFile is derived from the id after insert.
-func InsertAgent(db Execer, a *Agent) error {
+func InsertAgent(db Writer, a *Agent) error {
 	a.CreatedAt = Now()
 	a.ApplyStatus = "none"
 	if a.AssignedRuleID.Valid {
@@ -82,33 +82,33 @@ func InsertAgent(db Execer, a *Agent) error {
 }
 
 // SetAgentDBFile records the per-target database file name.
-func SetAgentDBFile(db Execer, id int64, file string) error {
+func SetAgentDBFile(db Writer, id int64, file string) error {
 	return execOne(db, `UPDATE agents SET db_file = ? WHERE id = ?`, file, id)
 }
 
 // GetAgent returns an agent by id.
-func GetAgent(db Execer, id int64) (*Agent, error) {
+func GetAgent(db Reader, id int64) (*Agent, error) {
 	return scanAgent(db.QueryRow(`SELECT `+agentCols+` FROM agents WHERE id = ?`, id))
 }
 
 // GetAgentByToken returns the agent of a token.
-func GetAgentByToken(db Execer, tokenID int64) (*Agent, error) {
+func GetAgentByToken(db Reader, tokenID int64) (*Agent, error) {
 	return scanAgent(db.QueryRow(`SELECT `+agentCols+` FROM agents WHERE token_id = ?`, tokenID))
 }
 
 // GetBuiltinAgent returns the built-in agent row.
-func GetBuiltinAgent(db Execer) (*Agent, error) {
+func GetBuiltinAgent(db Reader) (*Agent, error) {
 	return scanAgent(db.QueryRow(`SELECT ` + agentCols + ` FROM agents WHERE kind = 'builtin' ORDER BY id LIMIT 1`))
 }
 
 // ListAgents returns all agents, the built-in agent first.
-func ListAgents(db Execer) ([]*Agent, error) {
+func ListAgents(db Reader) ([]*Agent, error) {
 	rows, err := db.Query(`SELECT ` + agentCols + ` FROM agents ORDER BY CASE kind WHEN 'builtin' THEN 0 ELSE 1 END, id`)
 	return collect(rows, err, scanAgent)
 }
 
 // AssignRule sets the rule version an agent should apply.
-func AssignRule(db Execer, id, ruleID int64, version int) error {
+func AssignRule(db Writer, id, ruleID int64, version int) error {
 	return execOne(db, `UPDATE agents SET assigned_rule_id = ?, assigned_rule_version = ?, assigned_at = ?,
 		apply_status = CASE WHEN reported_rule_id = ? AND reported_rule_version = ? THEN apply_status ELSE 'pending' END WHERE id = ?`,
 		ruleID, version, Now(), ruleID, version, id)
@@ -117,7 +117,7 @@ func AssignRule(db Execer, id, ruleID int64, version int) error {
 // UnassignRule takes the assigned rule away from an agent. The application
 // status becomes pending until the agent reports that nothing is applied,
 // or none when the agent reported no applied rule and no failure.
-func UnassignRule(db Execer, id int64) error {
+func UnassignRule(db Writer, id int64) error {
 	return execOne(db, `UPDATE agents SET assigned_rule_id = NULL, assigned_rule_version = 0, assigned_at = ?,
 		apply_status = CASE WHEN reported_rule_id = 0 AND apply_status IN ('none', 'pending') THEN 'none' ELSE 'pending' END WHERE id = ?`,
 		Now(), id)
@@ -126,20 +126,20 @@ func UnassignRule(db Execer, id int64) error {
 // SetAgentApplyNone records that nothing is applied on the agent (the
 // central removed the audit rules of the disabled built-in agent). i18n is
 // the JSON of the coded message (see Agent.ApplyI18n).
-func SetAgentApplyNone(db Execer, id int64, message, i18n string, at int64) error {
+func SetAgentApplyNone(db Writer, id int64, message, i18n string, at int64) error {
 	return execOne(db, `UPDATE agents SET apply_status = 'none', apply_message = ?, apply_warnings = '[]', apply_i18n = ?, apply_version = 0, apply_at = ?,
 		reported_rule_id = 0, reported_rule_version = 0 WHERE id = ?`, message, i18n, at, id)
 }
 
 // CountAgentsUsingRule counts agents a rule is assigned to.
-func CountAgentsUsingRule(db Execer, ruleID int64) (int, error) {
+func CountAgentsUsingRule(db Reader, ruleID int64) (int, error) {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM agents WHERE assigned_rule_id = ?`, ruleID).Scan(&n)
 	return n, err
 }
 
 // RecordAgentSync stores the state reported in a sync request.
-func RecordAgentSync(db Execer, id int64, agentVersion string, ruleID int64, ruleVersion int, caFPs string, now int64) error {
+func RecordAgentSync(db Writer, id int64, agentVersion string, ruleID int64, ruleVersion int, caFPs string, now int64) error {
 	_, err := db.Exec(`UPDATE agents SET agent_version = ?, reported_rule_id = ?, reported_rule_version = ?, ca_fingerprints = ?, last_sync_at = ? WHERE id = ?`,
 		agentVersion, ruleID, ruleVersion, caFPs, now, id)
 	return err
@@ -161,7 +161,7 @@ type AgentReportFields struct {
 }
 
 // RecordAgentReport stores the summary of a report on the agent row.
-func RecordAgentReport(db Execer, id int64, f AgentReportFields) error {
+func RecordAgentReport(db Writer, id int64, f AgentReportFields) error {
 	if f.HasHost {
 		if _, err := db.Exec(`UPDATE agents SET hostname = ?, os_name = ?, os_version = ?, agent_version = ?, auditd_json = ?,
 			host_os_user = ?, time_zone = ?, utc_offset_sec = ? WHERE id = ?`,
@@ -182,14 +182,14 @@ func RecordAgentReport(db Execer, id int64, f AgentReportFields) error {
 
 // RecordAgentCommandSig stores the signature of the command set definitions
 // an agent reported holding.
-func RecordAgentCommandSig(db Execer, id int64, sig string) error {
+func RecordAgentCommandSig(db Writer, id int64, sig string) error {
 	_, err := db.Exec(`UPDATE agents SET command_sig = ? WHERE id = ?`, sig, id)
 	return err
 }
 
 // RecordAgentCommandApply stores the outcome an agent reported for storing
 // delivered command set definitions (JSON of modules.CommandApplyResult).
-func RecordAgentCommandApply(db Execer, id int64, applyJSON string) error {
+func RecordAgentCommandApply(db Writer, id int64, applyJSON string) error {
 	_, err := db.Exec(`UPDATE agents SET command_problems = ? WHERE id = ?`, applyJSON, id)
 	return err
 }

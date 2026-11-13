@@ -304,7 +304,7 @@ func (c *core) loadAccount(w http.ResponseWriter, r *http.Request) *models.Accou
 // enabled administrator would remain. The change is written before the
 // count, so the transaction already holds the write lock while it counts and
 // concurrent changes of two administrators cannot both pass the check.
-func (c *core) changeKeepingAdmin(a *models.Account, change func(models.Execer) error) (lastAdmin bool, err error) {
+func (c *core) changeKeepingAdmin(a *models.Account, change func(models.Writer) error) (lastAdmin bool, err error) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		return false, err
@@ -345,7 +345,7 @@ func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.accountOut(a))
 		return
 	}
-	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.UpdateAccountRole(db, a.ID, in.Role) })
+	last, err := c.changeKeepingAdmin(a, func(db models.Writer) error { return models.UpdateAccountRole(db, a.ID, in.Role) })
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -506,7 +506,7 @@ func (c *core) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool
 	if a == nil {
 		return
 	}
-	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.SetAccountDisabled(db, a.ID, disabled) })
+	last, err := c.changeKeepingAdmin(a, func(db models.Writer) error { return models.SetAccountDisabled(db, a.ID, disabled) })
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -537,7 +537,7 @@ func (c *core) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	last, err := c.changeKeepingAdmin(a, func(db models.Execer) error { return models.DeleteAccount(db, a.ID) })
+	last, err := c.changeKeepingAdmin(a, func(db models.Writer) error { return models.DeleteAccount(db, a.ID) })
 	if err != nil {
 		c.internalError(w, r, err)
 		return

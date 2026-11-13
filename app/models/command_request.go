@@ -49,7 +49,7 @@ func scanCommandRequest(s rowScanner) (*CommandRequest, error) {
 
 // InsertCommandRequest creates a pending request. It returns
 // ErrRequestActive when the set already has a pending or delivered one.
-func InsertCommandRequest(db Execer, r *CommandRequest) error {
+func InsertCommandRequest(db Writer, r *CommandRequest) error {
 	r.State = RequestPending
 	res, err := db.Exec(`INSERT INTO command_requests (set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, ?, ?)`,
 		r.SetID, r.State, r.RequestedAt, r.RequestedBy, r.ExpiresAt)
@@ -64,13 +64,13 @@ func InsertCommandRequest(db Execer, r *CommandRequest) error {
 }
 
 // GetCommandRequest returns a request.
-func GetCommandRequest(db Execer, id int64) (*CommandRequest, error) {
+func GetCommandRequest(db Reader, id int64) (*CommandRequest, error) {
 	return scanCommandRequest(db.QueryRow(`SELECT `+commandRequestCols+` FROM command_requests WHERE id = ?`, id))
 }
 
 // ActiveCommandRequest returns the pending or delivered request of a set
 // (nil when there is none).
-func ActiveCommandRequest(db Execer, setID int64) (*CommandRequest, error) {
+func ActiveCommandRequest(db Reader, setID int64) (*CommandRequest, error) {
 	r, err := scanCommandRequest(db.QueryRow(`SELECT `+commandRequestCols+` FROM command_requests
 		WHERE set_id = ? AND state IN ('pending', 'delivered')`, setID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -81,20 +81,20 @@ func ActiveCommandRequest(db Execer, setID int64) (*CommandRequest, error) {
 
 // ListActiveCommandRequests returns the pending and delivered requests,
 // oldest first.
-func ListActiveCommandRequests(db Execer) ([]*CommandRequest, error) {
+func ListActiveCommandRequests(db Reader) ([]*CommandRequest, error) {
 	rows, err := db.Query(`SELECT ` + commandRequestCols + ` FROM command_requests WHERE state IN ('pending', 'delivered') ORDER BY id`)
 	return collect(rows, err, scanCommandRequest)
 }
 
 // MarkCommandRequestDelivered records the first delivery of a pending
 // request. It returns sql.ErrNoRows when the request is not pending.
-func MarkCommandRequestDelivered(db Execer, id, now int64) error {
+func MarkCommandRequestDelivered(db Writer, id, now int64) error {
 	return execOne(db, `UPDATE command_requests SET state = 'delivered', delivered_at = ? WHERE id = ? AND state = 'pending'`, now, id)
 }
 
 // MarkCommandRequestDone records that the agent started a run for a pending
 // or delivered request. It returns sql.ErrNoRows otherwise.
-func MarkCommandRequestDone(db Execer, id int64, runUID string, now int64) error {
+func MarkCommandRequestDone(db Writer, id int64, runUID string, now int64) error {
 	return execOne(db, `UPDATE command_requests SET state = 'done', done_at = ?, run_uid = ? WHERE id = ? AND state IN ('pending', 'delivered')`,
 		now, runUID, id)
 }
@@ -102,20 +102,20 @@ func MarkCommandRequestDone(db Execer, id int64, runUID string, now int64) error
 // MarkCommandRequestExpired ends a pending or delivered request as expired
 // (the agent answered that it arrived too late). It returns sql.ErrNoRows
 // otherwise.
-func MarkCommandRequestExpired(db Execer, id, now int64) error {
+func MarkCommandRequestExpired(db Writer, id, now int64) error {
 	return execOne(db, `UPDATE command_requests SET state = 'expired', done_at = ? WHERE id = ? AND state IN ('pending', 'delivered')`, now, id)
 }
 
 // DiscardCommandRequest discards a request that was not yet delivered. It
 // returns sql.ErrNoRows when the request is not pending.
-func DiscardCommandRequest(db Execer, id int64, by string, now int64) error {
+func DiscardCommandRequest(db Writer, id int64, by string, now int64) error {
 	return execOne(db, `UPDATE command_requests SET state = 'discarded', discarded_at = ?, discarded_by = ? WHERE id = ? AND state = 'pending'`,
 		now, by, id)
 }
 
 // ExpireCommandRequests ends the pending requests whose expiry passed and
 // returns them (with their new state).
-func ExpireCommandRequests(db Execer, now int64) ([]*CommandRequest, error) {
+func ExpireCommandRequests(db Writer, now int64) ([]*CommandRequest, error) {
 	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE state = 'pending' AND expires_at <= ? ORDER BY id`, now)
 	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
@@ -137,7 +137,7 @@ func ExpireCommandRequests(db Execer, now int64) ([]*CommandRequest, error) {
 
 // DeleteEndedCommandRequestsBefore removes done, expired and discarded
 // requests requested before t (retention).
-func DeleteEndedCommandRequestsBefore(db Execer, t int64) (int64, error) {
+func DeleteEndedCommandRequestsBefore(db Writer, t int64) (int64, error) {
 	res, err := db.Exec(`DELETE FROM command_requests WHERE state IN ('done', 'expired', 'discarded') AND requested_at < ?`, t)
 	if err != nil {
 		return 0, err

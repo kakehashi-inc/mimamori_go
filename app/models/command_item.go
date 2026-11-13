@@ -36,7 +36,7 @@ func scanCommandItem(s rowScanner) (*CommandItem, error) {
 // ReplaceCommandItems replaces all commands of a set with items, numbering
 // their positions from 0 in the given order. Run it in the transaction that
 // saves the set.
-func ReplaceCommandItems(db Execer, setID int64, items []*CommandItem) error {
+func ReplaceCommandItems(db Writer, setID int64, items []*CommandItem) error {
 	if _, err := db.Exec(`DELETE FROM command_items WHERE set_id = ?`, setID); err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func ReplaceCommandItems(db Execer, setID int64, items []*CommandItem) error {
 }
 
 // ListCommandItems returns the commands of a set in order.
-func ListCommandItems(db Execer, setID int64) ([]*CommandItem, error) {
+func ListCommandItems(db Reader, setID int64) ([]*CommandItem, error) {
 	rows, err := db.Query(`SELECT `+commandItemCols+` FROM command_items WHERE set_id = ? ORDER BY position`, setID)
 	return collect(rows, err, scanCommandItem)
 }

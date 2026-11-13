@@ -48,7 +48,7 @@ func scanCommandResult(s rowScanner) (*CommandResult, error) {
 
 // InsertCommandResult stores the result of a command once: a result already
 // stored for the run and position is kept and created is false.
-func InsertCommandResult(db Execer, r *CommandResult) (bool, error) {
+func InsertCommandResult(db Writer, r *CommandResult) (bool, error) {
 	out := r.Output
 	if out == nil {
 		out = []byte{}
@@ -69,14 +69,14 @@ func InsertCommandResult(db Execer, r *CommandResult) (bool, error) {
 }
 
 // ListCommandResults returns the results of a run by position.
-func ListCommandResults(db Execer, runID int64) ([]*CommandResult, error) {
+func ListCommandResults(db Reader, runID int64) ([]*CommandResult, error) {
 	rows, err := db.Query(`SELECT `+commandResultCols+` FROM command_results WHERE run_id = ? ORDER BY position`, runID)
 	return collect(rows, err, scanCommandResult)
 }
 
 // CommandResultKinds returns the result kinds of a run's commands by
 // position (the input of the run state).
-func CommandResultKinds(db Execer, runID int64) ([]string, error) {
+func CommandResultKinds(db Reader, runID int64) ([]string, error) {
 	rows, err := db.Query(`SELECT kind FROM command_results WHERE run_id = ? ORDER BY position`, runID)
 	if err != nil {
 		return nil, err

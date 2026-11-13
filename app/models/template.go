@@ -23,7 +23,7 @@ func scanTemplate(s rowScanner) (*Template, error) {
 }
 
 // InsertTemplate creates a template.
-func InsertTemplate(db Execer, t *Template) error {
+func InsertTemplate(db Writer, t *Template) error {
 	now := Now()
 	res, err := db.Exec(`INSERT INTO templates (name, description, content, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
 		t.Name, t.Description, t.Content, now, now, t.CreatedBy)
@@ -36,22 +36,22 @@ func InsertTemplate(db Execer, t *Template) error {
 }
 
 // GetTemplateByName returns a template by name.
-func GetTemplateByName(db Execer, name string) (*Template, error) {
+func GetTemplateByName(db Reader, name string) (*Template, error) {
 	return scanTemplate(db.QueryRow(`SELECT `+templateCols+` FROM templates WHERE name = ?`, name))
 }
 
 // ListTemplates returns all templates ordered by name.
-func ListTemplates(db Execer) ([]*Template, error) {
+func ListTemplates(db Reader) ([]*Template, error) {
 	rows, err := db.Query(`SELECT ` + templateCols + ` FROM templates ORDER BY name`)
 	return collect(rows, err, scanTemplate)
 }
 
 // UpdateTemplate changes description and content.
-func UpdateTemplate(db Execer, name, description, content string) error {
+func UpdateTemplate(db Writer, name, description, content string) error {
 	return execOne(db, `UPDATE templates SET description = ?, content = ?, updated_at = ? WHERE name = ?`, description, content, Now(), name)
 }
 
 // DeleteTemplate removes a template.
-func DeleteTemplate(db Execer, name string) error {
+func DeleteTemplate(db Writer, name string) error {
 	return execOne(db, `DELETE FROM templates WHERE name = ?`, name)
 }

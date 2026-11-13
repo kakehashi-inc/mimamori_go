@@ -13,11 +13,21 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// Execer is satisfied by *sql.DB and *sql.Tx.
-type Execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
+// Reader runs reading statements. A function that only reads takes one.
+type Reader interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+// Writer runs the statements of one write transaction. A function that
+// writes takes one, also when it reads first: what a transaction reads, it
+// reads through itself.
+//
+// *sql.DB and *sql.Tx satisfy both interfaces, and the callers still pass
+// them.
+type Writer interface {
+	Reader
+	Exec(query string, args ...any) (sql.Result, error)
 }
 
 // Now returns the current Unix time in seconds.

@@ -91,7 +91,7 @@ func CommandSetFromRows(row *models.CommandSet, items []*models.CommandItem) *Co
 }
 
 // LoadCommandSet reads a set (deleted or not) with its commands.
-func LoadCommandSet(db models.Execer, id int64) (*CommandSetDef, *models.CommandSet, error) {
+func LoadCommandSet(db models.Reader, id int64) (*CommandSetDef, *models.CommandSet, error) {
 	row, err := models.GetCommandSet(db, id)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +105,7 @@ func LoadCommandSet(db models.Execer, id int64) (*CommandSetDef, *models.Command
 
 // LoadCommandDefinitions reads every set of a target database that is not
 // deleted, with the signature of the definitions.
-func LoadCommandDefinitions(db models.Execer) (*CommandDefinitions, error) {
+func LoadCommandDefinitions(db models.Reader) (*CommandDefinitions, error) {
 	instance, err := models.GetDBInstance(db)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func LoadCommandDefinitions(db models.Execer) (*CommandDefinitions, error) {
 
 // TargetCommandSignature returns the signature of a target database's
 // definitions without reading the commands.
-func TargetCommandSignature(db models.Execer) (string, error) {
+func TargetCommandSignature(db models.Reader) (string, error) {
 	instance, err := models.GetDBInstance(db)
 	if err != nil {
 		return "", err

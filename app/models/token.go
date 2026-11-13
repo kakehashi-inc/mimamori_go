@@ -58,7 +58,7 @@ func (t *Token) Status(now int64) string {
 }
 
 // InsertToken creates a token.
-func InsertToken(db Execer, t *Token) error {
+func InsertToken(db Writer, t *Token) error {
 	t.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO tokens (name, hash, value, expires_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
 		t.Name, t.Hash, t.Value, t.ExpiresAt, t.CreatedAt, t.CreatedBy)
@@ -70,17 +70,17 @@ func InsertToken(db Execer, t *Token) error {
 }
 
 // GetToken returns the token by id.
-func GetToken(db Execer, id int64) (*Token, error) {
+func GetToken(db Reader, id int64) (*Token, error) {
 	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE id = ?`, id))
 }
 
 // FindTokenByHash returns the token whose current or pending value has hash.
-func FindTokenByHash(db Execer, hash string) (*Token, error) {
+func FindTokenByHash(db Reader, hash string) (*Token, error) {
 	return scanToken(db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ? OR (pending_hash <> '' AND pending_hash = ?)`, hash, hash))
 }
 
 // ListTokens returns all tokens ordered by name.
-func ListTokens(db Execer) ([]*Token, error) {
+func ListTokens(db Reader) ([]*Token, error) {
 	rows, err := db.Query(`SELECT ` + tokenCols + ` FROM tokens ORDER BY name`)
 	return collect(rows, err, scanToken)
 }
@@ -91,7 +91,7 @@ func ListTokens(db Execer) ([]*Token, error) {
 // ReissueToken stores a new value of the token (t.Hash, t.Value,
 // t.ExpiresAt, t.ReissuedAt): the pending renewal is dropped, and the token
 // is unused and not revoked again. The binding to the agent instance stays.
-func ReissueToken(db Execer, t *Token) error {
+func ReissueToken(db Writer, t *Token) error {
 	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = '', pending_expires_at = 0,
 		used_at = 0, revoked_at = 0, reissued_at = ? WHERE id = ?`,
 		t.Hash, t.Value, t.ExpiresAt, t.ReissuedAt, t.ID)
@@ -99,18 +99,18 @@ func ReissueToken(db Execer, t *Token) error {
 
 // RevokeToken marks the token as revoked at now and drops its pending
 // renewal.
-func RevokeToken(db Execer, id, now int64) error {
+func RevokeToken(db Writer, id, now int64) error {
 	return execOne(db, `UPDATE tokens SET revoked_at = ?, pending_hash = '', pending_expires_at = 0 WHERE id = ?`, now, id)
 }
 
 // UnbindToken removes the binding of the token to an agent instance.
-func UnbindToken(db Execer, id int64) error {
+func UnbindToken(db Writer, id int64) error {
 	return execOne(db, `UPDATE tokens SET instance_id = '', bound_at = 0 WHERE id = ?`, id)
 }
 
 // DropExpiredTokenRenewal drops the pending renewal of the token when it was
 // not used before its expiry (it is left alone when it changed meanwhile).
-func DropExpiredTokenRenewal(db Execer, id, now int64) error {
+func DropExpiredTokenRenewal(db Writer, id, now int64) error {
 	_, err := db.Exec(`UPDATE tokens SET pending_hash = '', pending_expires_at = 0
 		WHERE id = ? AND pending_hash <> '' AND pending_expires_at <= ?`, id, now)
 	return err
@@ -123,7 +123,7 @@ func DropExpiredTokenRenewal(db Execer, id, now int64) error {
 // checked against (prev) and is not revoked, so a revoke, reissue or unbind
 // done at the same time is never undone. It returns sql.ErrNoRows when the
 // token changed in the meantime.
-func RecordTokenUse(db Execer, t, prev *Token) error {
+func RecordTokenUse(db Writer, t, prev *Token) error {
 	return execOne(db, `UPDATE tokens SET hash = ?, value = ?, expires_at = ?, pending_hash = ?, pending_expires_at = ?, renewed_at = ?,
 		instance_id = ?, bound_at = ?, used_at = ?, last_seen_at = ?
 		WHERE id = ? AND revoked_at = 0 AND hash = ? AND pending_hash = ? AND instance_id = ?`,
@@ -135,7 +135,7 @@ func RecordTokenUse(db Execer, t, prev *Token) error {
 // of the token, only while the token is not revoked and still holds the
 // current value, pending value and counter it was read with. It returns
 // sql.ErrNoRows when the token changed in the meantime.
-func SetTokenRenewal(db Execer, t *Token, prevPendingHash string, prevCounter int) error {
+func SetTokenRenewal(db Writer, t *Token, prevPendingHash string, prevCounter int) error {
 	return execOne(db, `UPDATE tokens SET renew_counter = ?, pending_hash = ?, pending_expires_at = ?
 		WHERE id = ? AND revoked_at = 0 AND hash = ? AND pending_hash = ? AND renew_counter = ?`,
 		t.RenewCounter, t.PendingHash, t.PendingExpiresAt, t.ID, t.Hash, prevPendingHash, prevCounter)
@@ -143,6 +143,6 @@ func SetTokenRenewal(db Execer, t *Token, prevPendingHash string, prevCounter in
 
 // DeleteToken removes a token; its agent row, if any, is removed with it
 // (ON DELETE CASCADE).
-func DeleteToken(db Execer, id int64) error {
+func DeleteToken(db Writer, id int64) error {
 	return execOne(db, `DELETE FROM tokens WHERE id = ?`, id)
 }

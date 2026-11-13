@@ -8,7 +8,7 @@ import "mimamori/app/models"
 // verifications (the browsers that need no login code) and its pending
 // verification codes. It is used when the password or the e-mail address
 // changes and when the account is disabled.
-func RevokeAccountAuth(db models.Execer, accountID int64, keepSession string) error {
+func RevokeAccountAuth(db models.Writer, accountID int64, keepSession string) error {
 	if err := models.DeleteAccountSessions(db, accountID, keepSession); err != nil {
 		return err
 	}

@@ -24,7 +24,7 @@ func scanRuleVersion(s rowScanner) (*RuleVersion, error) {
 }
 
 // InsertRuleVersion stores a version.
-func InsertRuleVersion(db Execer, v *RuleVersion) error {
+func InsertRuleVersion(db Writer, v *RuleVersion) error {
 	v.CreatedAt = Now()
 	res, err := db.Exec(`INSERT INTO rule_versions (rule_id, version, content, comment, comment_i18n, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		v.RuleID, v.Version, v.Content, v.Comment, v.CommentI18n, v.CreatedAt, v.CreatedBy)
@@ -36,12 +36,12 @@ func InsertRuleVersion(db Execer, v *RuleVersion) error {
 }
 
 // GetRuleVersion returns one version.
-func GetRuleVersion(db Execer, ruleID int64, version int) (*RuleVersion, error) {
+func GetRuleVersion(db Reader, ruleID int64, version int) (*RuleVersion, error) {
 	return scanRuleVersion(db.QueryRow(`SELECT `+ruleVersionCols+` FROM rule_versions WHERE rule_id = ? AND version = ?`, ruleID, version))
 }
 
 // ListRuleVersions returns all versions of a rule, newest first.
-func ListRuleVersions(db Execer, ruleID int64) ([]*RuleVersion, error) {
+func ListRuleVersions(db Reader, ruleID int64) ([]*RuleVersion, error) {
 	rows, err := db.Query(`SELECT `+ruleVersionCols+` FROM rule_versions WHERE rule_id = ? ORDER BY version DESC`, ruleID)
 	return collect(rows, err, scanRuleVersion)
 }

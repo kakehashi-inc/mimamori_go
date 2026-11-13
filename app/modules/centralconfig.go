@@ -428,7 +428,7 @@ var removedConfigItems = map[string]bool{"smtp.to": true}
 
 // storedCentralConfig reads the stored items (without defaults) and returns
 // the configuration and the names of the stored items.
-func storedCentralConfig(db models.Execer) (*CentralConfig, map[string]bool, error) {
+func storedCentralConfig(db models.Reader) (*CentralConfig, map[string]bool, error) {
 	rows, err := models.ListSettings(db)
 	if err != nil {
 		return nil, nil, err
@@ -453,7 +453,7 @@ func storedCentralConfig(db models.Execer) (*CentralConfig, map[string]bool, err
 }
 
 // LoadCentralConfig reads the configuration from the central database.
-func LoadCentralConfig(db models.Execer) (*CentralConfig, error) {
+func LoadCentralConfig(db models.Reader) (*CentralConfig, error) {
 	c, _, err := storedCentralConfig(db)
 	if err != nil {
 		return nil, fmt.Errorf("configuration: %w", err)
@@ -467,7 +467,7 @@ func LoadCentralConfig(db models.Execer) (*CentralConfig, error) {
 
 // CentralConfigState returns the effective configuration and which items are
 // stored (the others use their defaults).
-func CentralConfigState(db models.Execer) (*CentralConfig, map[string]bool, error) {
+func CentralConfigState(db models.Reader) (*CentralConfig, map[string]bool, error) {
 	c, stored, err := storedCentralConfig(db)
 	if err != nil {
 		return nil, nil, err
@@ -602,7 +602,7 @@ func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
 const runningConfigKey = "running_config"
 
 // SaveRunningConfig records the start values of the running central.
-func SaveRunningConfig(db models.Execer, c *CentralConfig) error {
+func SaveRunningConfig(db models.Writer, c *CentralConfig) error {
 	values := map[string]string{}
 	for _, f := range ConfigFields {
 		if f.Restart {
@@ -617,13 +617,13 @@ func SaveRunningConfig(db models.Execer, c *CentralConfig) error {
 }
 
 // ClearRunningConfig removes the record of SaveRunningConfig.
-func ClearRunningConfig(db models.Execer) error {
+func ClearRunningConfig(db models.Writer) error {
 	return models.DeleteSetting(db, runningConfigKey)
 }
 
 // LoadRunningConfig returns the start values recorded by the running central
 // by item name, or nil when there is no (readable) record.
-func LoadRunningConfig(db models.Execer) map[string]string {
+func LoadRunningConfig(db models.Reader) map[string]string {
 	v, found, err := models.GetSettingStrict(db, runningConfigKey)
 	if err != nil || !found {
 		return nil

@@ -11,7 +11,7 @@ type DBInstance struct {
 }
 
 // GetDBInstance returns the random value of the database.
-func GetDBInstance(db Execer) (string, error) {
+func GetDBInstance(db Reader) (string, error) {
 	var v string
 	err := db.QueryRow(`SELECT value FROM db_instance WHERE id = 1`).Scan(&v)
 	return v, err

@@ -62,7 +62,7 @@ func isUniqueViolation(err error) bool {
 
 // InsertCommandSet creates a set with revision 1. It returns ErrNameTaken when
 // a set that is not deleted has the same name.
-func InsertCommandSet(db Execer, c *CommandSet, now int64) error {
+func InsertCommandSet(db Writer, c *CommandSet, now int64) error {
 	c.Revision, c.CreatedAt, c.UpdatedAt, c.UpdatedBy = 1, now, now, c.CreatedBy
 	res, err := db.Exec(`INSERT INTO command_sets (name, description, purpose, os_user, work_dir, run_mode, schedule_kind, schedule_at,
 		schedule_weekdays, schedule_time, schedule_every, schedule_minute, keep_runs, joiner, revision, imported_from, created_at,
@@ -84,7 +84,7 @@ func InsertCommandSet(db Execer, c *CommandSet, now int64) error {
 // and increases its revision (c.Revision is set to the new value). It
 // returns sql.ErrNoRows when the set is missing or deleted, ErrNameTaken when
 // another set has the name.
-func UpdateCommandSet(db Execer, c *CommandSet, now int64) error {
+func UpdateCommandSet(db Writer, c *CommandSet, now int64) error {
 	err := execOne(db, `UPDATE command_sets SET name = ?, description = ?, purpose = ?, os_user = ?, work_dir = ?, run_mode = ?,
 		schedule_kind = ?, schedule_at = ?, schedule_weekdays = ?, schedule_time = ?, schedule_every = ?, schedule_minute = ?,
 		keep_runs = ?, joiner = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND deleted_at = 0`,
@@ -103,29 +103,29 @@ func UpdateCommandSet(db Execer, c *CommandSet, now int64) error {
 // DeleteCommandSet deletes a set logically; its runs stay until retention
 // removes them. It returns sql.ErrNoRows when the set is missing or already
 // deleted.
-func DeleteCommandSet(db Execer, id int64, by string, now int64) error {
+func DeleteCommandSet(db Writer, id int64, by string, now int64) error {
 	return execOne(db, `UPDATE command_sets SET deleted_at = ?, deleted_by = ?, revision = revision + 1 WHERE id = ? AND deleted_at = 0`, now, by, id)
 }
 
 // GetCommandSet returns a set, deleted or not (see DeletedAt).
-func GetCommandSet(db Execer, id int64) (*CommandSet, error) {
+func GetCommandSet(db Reader, id int64) (*CommandSet, error) {
 	return scanCommandSet(db.QueryRow(`SELECT `+commandSetCols+` FROM command_sets WHERE id = ?`, id))
 }
 
 // GetCommandSetByName returns the set with the name that is not deleted.
-func GetCommandSetByName(db Execer, name string) (*CommandSet, error) {
+func GetCommandSetByName(db Reader, name string) (*CommandSet, error) {
 	return scanCommandSet(db.QueryRow(`SELECT `+commandSetCols+` FROM command_sets WHERE name = ? AND deleted_at = 0`, name))
 }
 
 // ListCommandSets returns the sets that are not deleted, by name.
-func ListCommandSets(db Execer) ([]*CommandSet, error) {
+func ListCommandSets(db Reader) ([]*CommandSet, error) {
 	rows, err := db.Query(`SELECT ` + commandSetCols + ` FROM command_sets WHERE deleted_at = 0 ORDER BY name, id`)
 	return collect(rows, err, scanCommandSet)
 }
 
 // CommandSetNameTaken reports whether a set that is not deleted, other than
 // exceptID, has the name.
-func CommandSetNameTaken(db Execer, name string, exceptID int64) (bool, error) {
+func CommandSetNameTaken(db Reader, name string, exceptID int64) (bool, error) {
 	var id int64
 	err := db.QueryRow(`SELECT id FROM command_sets WHERE name = ? AND deleted_at = 0 AND id <> ? LIMIT 1`, name, exceptID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -136,7 +136,7 @@ func CommandSetNameTaken(db Execer, name string, exceptID int64) (bool, error) {
 
 // CommandSetRevisions returns the revision of every set that is not deleted,
 // by ID (the input of the definitions' signature).
-func CommandSetRevisions(db Execer) (map[int64]int64, error) {
+func CommandSetRevisions(db Reader) (map[int64]int64, error) {
 	rows, err := db.Query(`SELECT id, revision FROM command_sets WHERE deleted_at = 0`)
 	if err != nil {
 		return nil, err
