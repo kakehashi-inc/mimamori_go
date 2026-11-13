@@ -59,6 +59,18 @@ func openSQLite(dbPath string, fsys fs.FS) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, err
 	}
+	// The check and the migration of the database happen while this process
+	// holds migrateMu and the lock of the database's directory, so that two
+	// opens of a new file (in this process or in two processes) never see
+	// each other's half-made state: the second one waits and then finds the
+	// database complete with its fingerprint.
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
+	unlock, err := lockDir(filepath.Dir(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	dsn := "file:" + sqliteURIPath.Replace(dbPath) + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -94,8 +106,7 @@ func otherBuildDB(dbPath string) error {
 }
 
 // migrateMu serializes the check and migration of the databases opened by
-// this process, so that two opens of a new file never see each other's
-// half-made state.
+// this process (see openSQLite).
 var migrateMu sync.Mutex
 
 // goose's table of applied migrations (its default name).
@@ -115,9 +126,9 @@ const gooseVersionTable = "goose_db_version"
 //   - a database without a fingerprint, with another one, or with an
 //     applied migration this build does not have is refused (otherBuildDB)
 //     before anything in it is written.
+//
+// The caller holds the locks that keep other opens out (see openSQLite).
 func migrate(db *sql.DB, dbPath string, fsys fs.FS) error {
-	migrateMu.Lock()
-	defer migrateMu.Unlock()
 	p, err := goose.NewProvider(goose.DialectSQLite3, db, fsys)
 	if err != nil {
 		return err
@@ -127,7 +138,7 @@ func migrate(db *sql.DB, dbPath string, fsys fs.FS) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&stored); err != nil {
 		return err
 	}
-	var objects int
+	var objects, appliedBefore int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&objects); err != nil {
 		return err
 	}
@@ -162,17 +173,40 @@ func migrate(db *sql.DB, dbPath string, fsys fs.FS) error {
 		if len(done) == len(sources) {
 			return nil
 		}
+		appliedBefore = len(done)
 	}
-	if _, err := p.Up(context.Background()); err != nil {
-		return err
+	// Each migration is applied in its own transaction. The fingerprint is
+	// written when this open applied at least one; when a later one failed,
+	// it covers the ones that were applied, so the next open tries the
+	// failed one again instead of refusing the database.
+	results, upErr := p.Up(context.Background())
+	done := sources
+	if upErr != nil {
+		applied, err := appliedVersions(db)
+		if err != nil {
+			return errors.Join(upErr, err)
+		}
+		done = nil
+		for _, s := range sources {
+			if applied[s.Version] {
+				done = append(done, s)
+			}
+		}
+		if len(done) == appliedBefore {
+			return upErr
+		}
+	} else if len(results) == 0 {
+		return nil
 	}
-	fp, err := migrationFingerprint(fsys, sources)
+	fp, err := migrationFingerprint(fsys, done)
 	if err != nil {
-		return err
+		return errors.Join(upErr, err)
 	}
 	// PRAGMA does not take parameters; fp is a number made here.
-	_, err = db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, fp))
-	return err
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, fp)); err != nil {
+		return errors.Join(upErr, err)
+	}
+	return upErr
 }
 
 // appliedVersions returns the versions goose records as applied (version 0,

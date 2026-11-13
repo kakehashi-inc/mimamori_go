@@ -6,10 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/pressly/goose/v3"
 )
@@ -52,7 +55,12 @@ func dbState(t *testing.T, path string) string {
 	if versions, err := appliedVersions(db); err != nil {
 		t.Fatal(err)
 	} else {
+		var list []int64
 		for v := range versions {
+			list = append(list, v)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i] < list[j] })
+		for _, v := range list {
 			b.WriteString("applied " + strconv.FormatInt(v, 10) + "\n")
 		}
 	}
@@ -200,6 +208,104 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 	wantOtherBuild(t, err, other)
 	if after := dbState(t, other); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
+	}
+}
+
+// A fingerprint changed by hand is refused like another build.
+func TestMigrationFingerprintEdited(t *testing.T) {
+	first, _ := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+	path := filepath.Join(t.TempDir(), "x.db")
+	db, err := openSQLite(path, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := userVersion(t, db)
+	if _, err := db.Exec(`PRAGMA user_version = ` + strconv.FormatInt(fp^1, 10)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	before := dbState(t, path)
+	_, err = openSQLite(path, first)
+	wantOtherBuild(t, err, path)
+	if after := dbState(t, path); after != before {
+		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
+	}
+}
+
+// When a later migration of a new database fails, the fingerprint covers
+// the applied ones, so the next open applies the corrected file instead of
+// refusing the database.
+func TestMigrationFingerprintPartial(t *testing.T) {
+	first, both := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+	broken := fstest.MapFS{"0001_init.sql": first["0001_init.sql"],
+		"0002_added.sql": &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE t (id INTEGER);\n")}}
+	path := filepath.Join(t.TempDir(), "x.db")
+	if _, err := openSQLite(path, broken); err == nil || IsOtherBuildDB(err) {
+		t.Fatalf("want the failure of the second migration, got %v", err)
+	}
+	want, err := migrationFingerprint(first, sourcesOf(t, first))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := dbState(t, path); !strings.HasPrefix(state, "user_version "+strconv.FormatInt(want, 10)+"\n") {
+		t.Fatalf("state after the failed migration:\n%s", state)
+	}
+	db, err := openSQLite(path, both)
+	if err != nil {
+		t.Fatalf("open with the corrected migration: %v", err)
+	}
+	db.Close()
+}
+
+// Opens of a new database wait while another process holds the lock of its
+// directory, and many opens at the same moment all find it complete.
+func TestOpenSQLiteConcurrent(t *testing.T) {
+	first, _ := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.db")
+	unlock, err := lockDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan error, 1)
+	go func() {
+		db, err := openSQLite(path, first)
+		if err == nil {
+			db.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		unlock()
+		t.Fatalf("the open did not wait for the lock: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	if err := <-opened; err != nil {
+		t.Fatalf("open after the lock was dropped: %v", err)
+	}
+
+	path = filepath.Join(dir, "y.db")
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db, err := openSQLite(path, first)
+			if err == nil {
+				db.Close()
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent open: %v", err)
+		}
 	}
 }
 

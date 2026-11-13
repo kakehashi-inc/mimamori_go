@@ -121,6 +121,12 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	for _, a := range agents {
 		tdb, err := c.targetDB(a)
 		if err != nil {
+			// The list of one target fails with its database; the list
+			// of every target shows the others.
+			if q.Get("agent_id") != "" {
+				c.internalError(w, r, err)
+				return
+			}
 			c.logger.Printf("target database of agent %d: %v", a.ID, err)
 			continue
 		}

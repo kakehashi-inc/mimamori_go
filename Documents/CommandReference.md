@@ -201,7 +201,7 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | 0 | Success |
 | 1 | Unspecified error |
 | 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value, and values the central refuses, such as a duplicate name or a change to a built-in template) |
-| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use), `agent init` or `agent set-central` while the agent is running, and a database in the data directory that was created by another build of the program (every command that opens it, `status` included, fails with a message that names the file; the data directory has to be created again); for `status`, not running |
+| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use), `agent init` or `agent set-central` while the agent is running, and a `central.db` or `agent.db` in the data directory that was created by another build of the program (every command that opens it, `status` included, fails with a message that names the file; the data directory has to be created again); for `status`, not running |
 | 4 | Authentication or authorization failure (for `ctl`, `cli.secret` that does not match the running central, or a central certificate that `ca.crt` cannot verify) |
 | 5 | Execution error (external command or the central) |
 | 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read, or a `ca.crt` without a certificate) |

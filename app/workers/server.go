@@ -74,9 +74,6 @@ func startCentral() error {
 	// Open every per-target database now so pending migrations are applied
 	// at start rather than on first use.
 	if err := c.openAllTargets(); err != nil {
-		if modules.IsOtherBuildDB(err) {
-			return modules.DBOpenFailed(err, modules.ExitConfig, "target databases")
-		}
 		return fmt.Errorf("target databases: %w", err)
 	}
 	spaFS, err := fs.Sub(modules.FrontendFS, "frontend/dist")

@@ -24,19 +24,27 @@ async function load(role: Role): Promise<void> {
         urls = (list ?? []).filter(isSameOriginPath);
     }
     // Each module registers itself (registry.ts) when it is evaluated.
-    for (const url of urls) {
-        await import(/* @vite-ignore */ url);
+    try {
+        for (const url of urls) {
+            await import(/* @vite-ignore */ url);
+        }
+    } catch (e) {
+        console.error('extension modules could not be loaded', e);
     }
 }
 
 /**
  * Loads the extension modules of the signed-in account once per page load.
- * A failure is logged and the application runs without them.
+ * A module that fails to load is logged and the application runs without it.
+ * When the list of modules cannot be fetched (a busy server, a network
+ * failure), the error is thrown and the next call asks again, so that the
+ * caller can retry instead of running without the modules.
  */
 export function loadExtensions(role: Role): Promise<void> {
     if (!loaded) {
         loaded = load(role).catch(e => {
-            console.error('extension modules could not be loaded', e);
+            loaded = null;
+            throw e;
         });
     }
     return loaded;

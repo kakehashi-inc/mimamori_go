@@ -140,6 +140,11 @@ func (c *core) openAllTargets() error {
 	}
 	for _, a := range agents {
 		if _, err := c.targetDB(a); err != nil {
+			// A database of another build is logged by targetDB; the
+			// central runs and the requests about that target fail.
+			if modules.IsOtherBuildDB(err) {
+				continue
+			}
 			return fmt.Errorf("agent %d: %w", a.ID, err)
 		}
 	}

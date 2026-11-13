@@ -58,3 +58,28 @@ func (l *ProcessLock) Release() {
 	l.f.Close()
 	l.f = nil
 }
+
+// lockDir takes an exclusive advisory lock on the directory dir and waits
+// for it while another process holds it. It returns the function that
+// drops the lock. The lock is on the directory itself, so no file is created
+// and the locks SQLite keeps on its database files are not touched.
+func lockDir(dir string) (func(), error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
