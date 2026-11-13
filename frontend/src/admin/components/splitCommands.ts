@@ -1,9 +1,10 @@
 // Splitting of pasted text into the commands of a command set, the way bash
 // reads text typed line by line: a line that bash would continue on the next
 // line (a backslash at its end, an open quote, parenthesis, brace group,
-// compound command or here-document, or a trailing |, || or &&) stays one
-// command with the following lines; every other line is one command. Blank
-// lines and comment lines between commands are skipped.
+// compound command or here-document, a function header without its body, or
+// a trailing |, || or &&) stays one command with the following lines; every
+// other line is one command. Blank lines and comment lines between commands
+// are skipped.
 //
 // The scanner makes one pass over the characters. Its state is a stack of
 // frames (shell code, or a kind of quote or expansion), the here-documents
@@ -13,8 +14,12 @@
 /** A compound command that is still open in a code frame. */
 type Block =
     | { kind: 'if' | 'loop' | 'group' }
-    /** case: 'word' before "in", 'pattern' before ")", 'body' after it. */
-    | { kind: 'case'; phase: 'word' | 'pattern' | 'body' };
+    /**
+     * case: 'word' before "in", 'pattern' before ")", 'body' after it.
+     * patternStart: the next word is the first of a pattern list, where
+     * "esac" ends the case ("a|esac)" and "(esac)" are patterns).
+     */
+    | { kind: 'case'; phase: 'word' | 'pattern' | 'body'; patternStart: boolean };
 
 /** Shell code: the text itself, ( ... ), $( ... ) or <( ... ), and ` ... `. */
 interface CodeFrame {
@@ -26,7 +31,10 @@ interface CodeFrame {
     lastWord: string;
     /** A command (or a reserved word) can begin at the next word. */
     canBegin: boolean;
-    /** The last token was |, |&, || or &&: the command goes on after a line end. */
+    /**
+     * The command goes on after a line end: the last token was |, |&, || or
+     * &&, or a function header ("f()", "function f") waits for its body.
+     */
     needCommand: boolean;
     /** The next word is the target of a redirection. */
     redirect: boolean;
@@ -34,6 +42,8 @@ interface CodeFrame {
     funcName: boolean;
     /** Nothing was read in the frame yet: "f()" is followed by a function body. */
     empty: boolean;
+    /** A subshell right after a word that is not an assignment: "f()" is a function header, "a=()" is not. */
+    afterName: boolean;
 }
 
 /** Quotes and expansions: '...', $'...', "...", ${...} and $((...)) or ((...)). */
@@ -49,6 +59,8 @@ interface HereDoc {
     delimiter: string;
     /** <<- : leading tabs of the end line are ignored. */
     stripTabs: boolean;
+    /** The word was quoted: a backslash at the end of a body line does not join the next line. */
+    quoted: boolean;
 }
 
 const OPERATOR_CHARS = ';&|<>()';
@@ -64,6 +76,7 @@ function codeFrame(kind: CodeFrame['kind']): CodeFrame {
         redirect: false,
         funcName: false,
         empty: true,
+        afterName: false,
     };
 }
 
@@ -80,12 +93,11 @@ function isAssignment(word: string): boolean {
     return /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(word);
 }
 
-function trimBlanks(s: string): string {
-    let a = 0;
-    let b = s.length;
-    while (a < b && (isBlank(s[a]) || s[a] === '\n')) a++;
-    while (b > a && (isBlank(s[b - 1]) || s[b - 1] === '\n')) b--;
-    return s.slice(a, b);
+/** The line ends with a backslash that is not itself escaped. */
+function endsWithEscape(line: string): boolean {
+    let n = 0;
+    while (n < line.length && line[line.length - 1 - n] === '\\') n++;
+    return n % 2 === 1;
 }
 
 class Scanner {
@@ -97,6 +109,8 @@ class Scanner {
     private start = 0;
     /** The current command has something other than blanks and comments. */
     private content = false;
+    /** Where the last backslash that continues a line in shell code is. */
+    private continuation = -1;
     readonly commands: string[] = [];
 
     constructor(text: string) {
@@ -124,9 +138,16 @@ class Scanner {
         return this.src[this.i + offset] ?? '';
     }
 
+    /** Ends the command at end: blanks and line ends around it are removed. */
     private emit(end: number) {
-        const text = trimBlanks(this.src.slice(this.start, end));
-        if (this.content && text !== '') this.commands.push(text);
+        const src = this.src;
+        let a = this.start;
+        let b = end;
+        while (a < b && (isBlank(src[a]) || src[a] === '\n')) a++;
+        while (b > a && (isBlank(src[b - 1]) || src[b - 1] === '\n')) b--;
+        // "a \" before a blank line: the line end stays, so that bash -c also reads it as a continuation.
+        if (b - 1 === this.continuation && b < end) b++;
+        if (this.content && a < b) this.commands.push(src.slice(a, b));
         this.start = end + 1;
         this.content = false;
         this.stack = [codeFrame('top')];
@@ -214,6 +235,7 @@ class Scanner {
         this.content = true;
         if (c === '\\') {
             if (this.at(1) === '\n') {
+                this.continuation = this.i;
                 this.i += 2; // line continuation
             } else {
                 f.word = (f.word ?? '') + '\0';
@@ -273,6 +295,16 @@ class Scanner {
                 if (lineEnd < 0) lineEnd = src.length;
                 let line = src.slice(lineStart, lineEnd);
                 if (doc.stripTabs) line = line.replace(/^\t+/, '');
+                // Unquoted word: an unescaped backslash at the line end joins the next line.
+                // Once the joined line is longer than the end word, it is no longer built.
+                let part = line;
+                while (!doc.quoted && lineEnd < src.length && endsWithEscape(part)) {
+                    const next = src.indexOf('\n', lineEnd + 1);
+                    const nextEnd = next < 0 ? src.length : next;
+                    part = src.slice(lineEnd + 1, nextEnd);
+                    if (line.length <= doc.delimiter.length + 1) line = line.slice(0, -1) + part;
+                    lineEnd = nextEnd;
+                }
                 pos = lineEnd;
                 if (line === doc.delimiter) break;
             }
@@ -286,14 +318,17 @@ class Scanner {
         const block = f.blocks[f.blocks.length - 1];
         const casePattern = block?.kind === 'case' && block.phase === 'pattern';
         const next = this.at(1);
-        const afterFor = f.lastWord === 'for';
+        const lastWord = f.lastWord;
         f.lastWord = '';
         switch (c) {
             case ';':
                 if (next === ';' || next === '&') {
                     // ;; ;& ;;& end a case item.
                     this.i += next === ';' && this.at(2) === '&' ? 3 : 2;
-                    if (block?.kind === 'case') block.phase = 'pattern';
+                    if (block?.kind === 'case') {
+                        block.phase = 'pattern';
+                        block.patternStart = true;
+                    }
                     f.canBegin = false;
                 } else {
                     this.i++;
@@ -317,7 +352,11 @@ class Scanner {
                 return;
             case '|':
                 this.i += next === '|' || next === '&' ? 2 : 1;
-                if (casePattern && next !== '|') return; // a|b) separates patterns
+                if (casePattern && next !== '|') {
+                    // a|b) separates patterns
+                    if (block?.kind === 'case') block.patternStart = false;
+                    return;
+                }
                 f.canBegin = true;
                 f.needCommand = true;
                 return;
@@ -325,7 +364,7 @@ class Scanner {
             case '>':
                 return this.redirection(f, c, next);
             case '(':
-                return this.openParen(f, casePattern, next, afterFor);
+                return this.openParen(f, block, next, lastWord);
             case ')':
                 return this.closeParen(f, casePattern, block);
         }
@@ -355,9 +394,11 @@ class Scanner {
         const src = this.src;
         while (isBlank(this.at(0))) this.i++;
         let delimiter = '';
+        let quoted = false;
         while (this.i < src.length) {
             const c = this.at(0);
             if (isBlank(c) || c === '\n' || OPERATOR_CHARS.includes(c)) break;
+            if (c === "'" || c === '"' || c === '\\') quoted = true;
             if (c === "'") {
                 let end = src.indexOf("'", this.i + 1);
                 if (end < 0) end = src.length;
@@ -379,17 +420,23 @@ class Scanner {
                 this.i++;
             }
         }
-        if (delimiter !== '') this.hereDocs.push({ delimiter, stripTabs });
+        if (delimiter !== '') this.hereDocs.push({ delimiter, stripTabs, quoted });
     }
 
-    private openParen(f: CodeFrame, casePattern: boolean, next: string, afterFor: boolean) {
-        if (casePattern) {
+    private openParen(f: CodeFrame, block: Block | undefined, next: string, lastWord: string) {
+        if (block?.kind === 'case' && block.phase === 'pattern') {
             this.i++; // "(a|b)": the optional parenthesis before a case pattern
-        } else if (next === '(' && (f.canBegin || afterFor)) {
+            block.patternStart = false;
+            return;
+        }
+        f.needCommand = false;
+        if (next === '(' && (f.canBegin || lastWord === 'for')) {
             this.push({ kind: 'arith', depth: 0 }, 2); // (( ... )) and "for (( ... ))"
         } else {
             this.i++;
-            this.stack.push(codeFrame('subshell'));
+            const sub = codeFrame('subshell');
+            sub.afterName = lastWord !== '' && !isAssignment(lastWord);
+            this.stack.push(sub);
         }
     }
 
@@ -404,8 +451,9 @@ class Scanner {
         this.stack.pop();
         const parent = this.top();
         if (f.kind === 'subshell' && isCode(parent)) {
-            // "name()" is followed by the function body, such as "{".
+            // "name()" is followed by the function body, such as "{", also on a later line.
             parent.canBegin = f.empty;
+            if (f.empty && f.afterName) parent.needCommand = true;
         }
     }
 
@@ -422,13 +470,20 @@ class Scanner {
         f.needCommand = false;
         const block = f.blocks[f.blocks.length - 1];
         if (block?.kind === 'case' && block.phase !== 'body') {
-            if (block.phase === 'word' && word === 'in') block.phase = 'pattern';
-            else if (block.phase === 'pattern' && word === 'esac') f.blocks.pop();
+            if (block.phase === 'word' && word === 'in') {
+                block.phase = 'pattern';
+                block.patternStart = true;
+            } else if (block.phase === 'pattern') {
+                if (word === 'esac' && block.patternStart) f.blocks.pop();
+                else block.patternStart = false;
+            }
             return;
         }
         if (f.funcName) {
+            // "function f": the body follows, also on a later line.
             f.funcName = false;
             f.canBegin = true;
+            f.needCommand = true;
             return;
         }
         if (!f.canBegin) return;
@@ -451,7 +506,7 @@ class Scanner {
                 f.blocks.push({ kind: 'loop' });
                 break;
             case 'case':
-                f.blocks.push({ kind: 'case', phase: 'word' });
+                f.blocks.push({ kind: 'case', phase: 'word', patternStart: false });
                 break;
             case '{':
                 f.blocks.push({ kind: 'group' });
@@ -490,7 +545,8 @@ class Scanner {
  * Splits pasted text into commands: lines that bash would continue stay one
  * command with their line breaks as pasted, every other line is one command,
  * and blank lines and comment lines between commands are skipped. Blanks
- * around each command are removed. When the text ends while something is
+ * around each command are removed, except the line end after a final
+ * continuing backslash. When the text ends while something is
  * still open, the remaining lines are the last command.
  */
 export function splitShellCommands(text: string): string[] {

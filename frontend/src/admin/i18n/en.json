@@ -538,6 +538,7 @@
             "pasteHint": "Lines that bash would continue on the next line (a backslash at the end, an open quote or parenthesis, if ... fi, a here-document and so on) stay one command with their line breaks. Every other line becomes one command. Blank lines and comment lines are not added, and the commands are added after the existing ones.",
             "pastePreview": "Commands to add: {{count}}",
             "pasteNone": "There is no command in the text yet.",
+            "pasteMore": "Only the first {{shown}} are shown here. The other {{count}} are added too.",
             "pasteAdd": "Add",
             "commandLineHint": "Run by bash exactly as written. Pipes, redirections, cd and several lines can be used; a cd affects only this command.",
             "code": "Code",

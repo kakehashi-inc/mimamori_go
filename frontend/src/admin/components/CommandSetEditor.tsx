@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/Button';
 import { checkboxClass, Field, inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
@@ -233,6 +233,9 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
     );
 }
 
+/** The preview lists at most this many commands, so that a very large paste stays responsive. */
+const PREVIEW_MAX = 200;
+
 /**
  * Dialog that splits pasted text into commands (see splitShellCommands) and
  * shows them before they are added after the existing commands.
@@ -250,7 +253,7 @@ function PasteCommandsDialog({
     const { t } = useTranslation();
     const id = useId();
     const [text, setText] = useState('');
-    const commands = splitShellCommands(text);
+    const commands = useMemo(() => splitShellCommands(text), [text]);
 
     return (
         <Modal
@@ -296,7 +299,7 @@ function PasteCommandsDialog({
                         <p className='text-xs text-muted'>{t('commandSets.editor.pasteNone')}</p>
                     ) : (
                         <ol className='flex flex-col gap-2'>
-                            {commands.map((c, i) => (
+                            {commands.slice(0, PREVIEW_MAX).map((c, i) => (
                                 <li key={i} className='flex flex-col gap-1'>
                                     <span className='text-xs text-muted'>
                                         {t('commandSets.editor.command', { n: existing + i + 1 })}
@@ -307,6 +310,14 @@ function PasteCommandsDialog({
                                 </li>
                             ))}
                         </ol>
+                    )}
+                    {commands.length > PREVIEW_MAX && (
+                        <p className='text-xs text-muted'>
+                            {t('commandSets.editor.pasteMore', {
+                                shown: PREVIEW_MAX,
+                                count: commands.length - PREVIEW_MAX,
+                            })}
+                        </p>
                     )}
                 </div>
             </div>
