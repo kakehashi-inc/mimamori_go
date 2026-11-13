@@ -94,15 +94,23 @@ const (
 	// response must be written within it. (The head, and a body up to
 	// MaxHeadBytes, must arrive within the queue timeout.)
 	ConnTotalTimeout = 60 * time.Second
-	// TLSHandshakeTimeout bounds the TLS handshake, the only step that waits
-	// for the client in the accepting flow. It starts when the client's
-	// first record (the ClientHello) is complete, so only the client's next
-	// flight is waited for: one round trip and its key exchange.
+	// TLSHandshakeTimeout bounds a TLS handshake, counted from its start.
+	// A handshake starts when the client's first record (the ClientHello)
+	// is complete and it is the connection's turn (one at a time), so only
+	// the client's next flight is waited for: one round trip and its key
+	// exchange. While it waits, the accepting flow does all its other work.
 	TLSHandshakeTimeout = 2 * time.Second
+	// HandshakeGrace is how long a handshake may wait for its client while
+	// another ClientHello waits for its turn (counted from the start of the
+	// handshake): one round trip and the key exchange of an honest client,
+	// even across continents. It then gives way, and its source counts as
+	// stalled.
+	HandshakeGrace = 400 * time.Millisecond
 	// HandshakePenalty is how long the TLS listener takes the connections of
-	// a source address whose handshake ran into TLSHandshakeTimeout after
-	// those of other sources, and refuses them unless the source is this
-	// host (loopback or one of its addresses).
+	// a source whose handshake gave up after those of other sources. A
+	// source whose handshake ran into TLSHandshakeTimeout is also refused
+	// for that time, unless it is this host (loopback or one of its
+	// addresses).
 	HandshakePenalty = 60 * time.Second
 	// EvictGrace is how long a connection must wait on its peer before a
 	// full table (MaxPendingConns) drops it for a new one; until then new

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,18 +99,31 @@ type connTestServer struct {
 	done      chan struct{}
 }
 
+// startConnTestServer starts the test server on 127.0.0.1. Every source
+// address is a source of its own for the handshake order (the central
+// counts all loopback addresses as one source; see
+// TestConnServerLoopbackIsOneSource), so that loopback addresses can play
+// several hosts, and foreignSources are not exempt from the refusal.
 func startConnTestServer(t *testing.T, workers int, queueTimeout time.Duration) *connTestServer {
 	t.Helper()
-	ts := startConnTestServerOn(t, workers, queueTimeout, "127.0.0.1:0")
-	ts.srv.exempt = func(host string) bool {
-		return !foreignSources[host] && ts.srv.isOwnSource(host)
-	}
-	return ts
+	return startConnTestServerWith(t, workers, queueTimeout, "127.0.0.1:0", func(s *connServer) {
+		s.exempt = func(host string) bool {
+			return !foreignSources[host] && s.isOwnSource(host)
+		}
+		s.source = func(host string) string { return host }
+	})
 }
 
 // startConnTestServerOn starts the test server with both listeners on the
-// IP address of listen and the central's own exemption rule.
+// IP address of listen and the central's own rules for sources.
 func startConnTestServerOn(t *testing.T, workers int, queueTimeout time.Duration, listen string) *connTestServer {
+	t.Helper()
+	return startConnTestServerWith(t, workers, queueTimeout, listen, nil)
+}
+
+// startConnTestServerWith starts the test server; setup (if set) changes
+// the server before its accepting flow starts.
+func startConnTestServerWith(t *testing.T, workers int, queueTimeout time.Duration, listen string, setup func(*connServer)) *connTestServer {
 	t.Helper()
 	e := newTestEnv(t)
 	webLn, err := listenTCP(listen)
@@ -126,11 +140,15 @@ func startConnTestServerOn(t *testing.T, workers int, queueTimeout time.Duration
 	}
 	ts := &connTestServer{e: e, web: webLn.Addr().String(), agnt: agentLn.Addr().String(), done: make(chan struct{})}
 	ts.srv = newConnServer(specs, workers, queueTimeout, log.New(io.Discard, "", 0))
+	if setup != nil {
+		setup(ts.srv)
+	}
 	// The test runs the accepting flow on a goroutine of its own; with one
-	// worker the server itself starts none.
+	// worker the server itself starts none. The stop signal is reported
+	// once, like the central's (a signal read from a channel).
 	go func() {
 		defer close(ts.done)
-		ts.srv.run(ts.stop.Load, func() func() { return nil })
+		ts.srv.run(func() bool { return ts.stop.Swap(false) }, func() func() { return nil })
 	}()
 	t.Cleanup(ts.shutdown)
 	return ts
@@ -454,9 +472,10 @@ func TestConnServerStalledLoginBody(t *testing.T) {
 	})
 }
 
-// A complete ClientHello and then silence delays the others once by
-// TLSHandshakeTimeout at most; the source is then refused for the penalty
-// period while another source is served. This host itself is never refused.
+// A complete ClientHello and then silence delays no plain request (the
+// handshake waits in nested passes); the handshake ends at its limit, the
+// source is then refused for the penalty period while another source is
+// served. This host itself is never refused.
 func TestConnServerStalledHandshake(t *testing.T) {
 	forWorkers(t, func(t *testing.T, workers int) {
 		ts := startConnTestServer(t, workers, 10*time.Second)
@@ -467,8 +486,8 @@ func TestConnServerStalledHandshake(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 		line, d := ts.webRaw(t, healthRequest)
-		if !strings.Contains(line, " 200 ") || d > modules.TLSHandshakeTimeout+500*time.Millisecond {
-			t.Fatalf("request behind a stalled handshake: %q after %v", line, d)
+		if !strings.Contains(line, " 200 ") || d > 100*time.Millisecond {
+			t.Fatalf("request during a stalled handshake: %q after %v", line, d)
 		}
 		expectClosed(t, staller, 5*time.Second, "stalled handshake")
 
@@ -788,7 +807,24 @@ func TestTLSBufferWouldBlock(t *testing.T) {
 	}
 	defer sc.Close()
 	_ = sc.SetDeadline(time.Now().Add(10 * time.Second))
-	buf := &tlsBuffer{Conn: sc, blocking: true}
+	// During the handshake the buffer reads and writes the socket without
+	// waiting and calls await when it would have to wait; here await simply
+	// waits for the socket.
+	rc, err := sc.(syscall.Conn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := -1
+	_ = rc.Control(func(f uintptr) { fd = int(f) })
+	awaits := 0
+	buf := &tlsBuffer{Conn: sc, raw: rc, await: func(events int16) error {
+		awaits++
+		fds := []pollFd{{fd: int32(fd), events: events}}
+		if err := ppoll(fds, 10*time.Second); err != nil || fds[0].revents == 0 {
+			return errHandshakeLimit
+		}
+		return nil
+	}}
 	server := tls.Server(buf, e.c.tlsConfig())
 	if err := server.Handshake(); err != nil {
 		t.Fatal(err)
@@ -798,7 +834,10 @@ func TestTLSBufferWouldBlock(t *testing.T) {
 		t.Fatal("client handshake failed")
 	}
 	defer client.Close()
-	buf.blocking = false
+	if awaits == 0 {
+		t.Fatal("the handshake never waited for its peer through await")
+	}
+	buf.await = nil
 
 	p := make([]byte, 64)
 	if n, err := server.Read(p); n != 0 || err != errWouldBlock {
@@ -993,8 +1032,9 @@ func (ts *connTestServer) agentDoTo(addr, src, method, path string, body []byte,
 }
 
 // Twenty stalled ClientHellos from one (exempt) source delay a TLS request
-// of another source by one handshake limit at most; a request of the same
-// source is answered or rejected at its queue timeout, never later.
+// of another source by HandshakeGrace at most (the first staller's grace);
+// a request of the same source is answered or rejected at its queue
+// timeout, never later.
 func TestConnServerStalledHellosOfOneSource(t *testing.T) {
 	forWorkers(t, func(t *testing.T, workers int) {
 		const queueTimeout = 4 * time.Second
@@ -1034,12 +1074,251 @@ func TestConnServerStalledHellosOfOneSource(t *testing.T) {
 				}
 				continue
 			}
-			if r.err != nil || r.d > modules.TLSHandshakeTimeout+margin {
-				t.Fatalf("%s: %v after %v, want an answer within the handshake limit", r.what, r.err, r.d)
+			if r.err != nil || r.d > modules.HandshakeGrace+margin {
+				t.Fatalf("%s: %v after %v, want an answer within the grace", r.what, r.err, r.d)
 			}
 		}
 		ts.checkFast(t, 100*time.Millisecond, "after the stalled ClientHellos")
 	})
+}
+
+// stallHellos opens n connections to the agent listener that send a
+// complete ClientHello and then nothing; src(i) is the source address of
+// the i-th.
+func (ts *connTestServer) stallHellos(t *testing.T, n int, src func(i int) string) {
+	t.Helper()
+	hello := clientHello(t)
+	for i := 0; i < n; i++ {
+		c := dial(t, ts.agnt, src(i))
+		if _, err := c.Write(hello); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Stalled ClientHellos of five and of twenty different sources, each
+// stalling for the first time: a plain request is answered at once, and a
+// TLS request of another source waits at most HandshakeGrace per staller
+// ahead of it and is never rejected.
+func TestConnServerFirstTimeStallers(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		for _, n := range []int{5, 20} {
+			ts := startConnTestServer(t, workers, 10*time.Second)
+			ts.stallHellos(t, n, func(i int) string { return fmt.Sprintf("127.0.%d.%d", 1+workers, i+2) })
+			time.Sleep(50 * time.Millisecond)
+			type result struct {
+				code int
+				d    time.Duration
+				err  error
+			}
+			tlsDone := make(chan result, 1)
+			go func() {
+				code, _, d, err := ts.agentDo("127.0.0.1", "GET", "/agent/v1/ca", nil, nil)
+				tlsDone <- result{code, d, err}
+			}()
+			line, d := ts.webRaw(t, healthRequest)
+			if !strings.Contains(line, " 200 ") || d > 100*time.Millisecond {
+				t.Fatalf("%d stallers: plain request %q after %v, want 200 within 100 ms", n, line, d)
+			}
+			r := <-tlsDone
+			limit := time.Duration(n)*modules.HandshakeGrace + 700*time.Millisecond
+			if r.err != nil || r.code != http.StatusOK || r.d > limit {
+				t.Fatalf("%d stallers: TLS request of another source: %d %v after %v, want 200 within %v", n, r.code, r.err, r.d, limit)
+			}
+			ts.shutdown()
+		}
+	})
+}
+
+// A source that keeps twenty stalled ClientHellos open delays no request
+// of another source: once its first handshake gave way, a handshake of it
+// is taken only when nobody else waits and gives way at once.
+func TestConnServerStallingSourceKeptOpen(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		ts.stallHellos(t, 20, func(int) string { return "127.0.0.5" })
+		// The first of them is a first-time staller: it keeps its grace.
+		time.Sleep(modules.HandshakeGrace + 100*time.Millisecond)
+		const limit = 200 * time.Millisecond
+		for end := time.Now().Add(4 * time.Second); time.Now().Before(end); {
+			line, d := ts.webRaw(t, healthRequest)
+			if !strings.Contains(line, " 200 ") || d > limit {
+				t.Fatalf("plain request: %q after %v, want 200 within %v", line, d, limit)
+			}
+			for _, src := range []string{"127.0.0.1", "127.0.0.6"} {
+				code, _, d, err := ts.agentDo(src, "GET", "/agent/v1/ca", nil, nil)
+				if err != nil || code != http.StatusOK || d > limit {
+					t.Fatalf("TLS request from %s: %d %v after %v, want 200 within %v", src, code, err, d, limit)
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+}
+
+// slowFlight is a client connection whose second write (the client's
+// second handshake flight) is sent only after delay.
+type slowFlight struct {
+	net.Conn
+	writes int
+	delay  time.Duration
+}
+
+func (c *slowFlight) Write(p []byte) (int, error) {
+	c.writes++
+	if c.writes == 2 {
+		time.Sleep(c.delay)
+	}
+	return c.Conn.Write(p)
+}
+
+// slowTLSGet sends GET /agent/v1/ca over TLS from src with the client's
+// second flight delayed by flight and the request sent pause after the
+// handshake, and returns the status.
+func (ts *connTestServer) slowTLSGet(t *testing.T, src string, flight, pause time.Duration) (int, error) {
+	t.Helper()
+	raw := dial(t, ts.agnt, src)
+	_ = raw.SetDeadline(time.Now().Add(30 * time.Second))
+	pool, _ := modules.CertPoolFromPEMs(ts.e.c.currentCAPEMs(), time.Now())
+	c := tls.Client(&slowFlight{Conn: raw, delay: flight}, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12})
+	if err := c.Handshake(); err != nil {
+		return 0, err
+	}
+	time.Sleep(pause)
+	if _, err := io.WriteString(c, "GET /agent/v1/ca HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"); err != nil {
+		return 0, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// A slow but honest handshake (the client's second flight after 1 s)
+// succeeds when nobody else waits, and the time a connection waited for its
+// handshake to begin never cuts it: its handshake limit counts from the
+// start of the handshake, and its queue timeout is moved by that wait.
+func TestConnServerSlowHonestHandshake(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		const queueTimeout = 2 * time.Second
+		ts := startConnTestServer(t, workers, queueTimeout)
+		if code, err := ts.slowTLSGet(t, "127.0.0.1", time.Second, 0); err != nil || code != http.StatusOK {
+			t.Fatalf("slow handshake, nobody waiting: %d %v", code, err)
+		}
+		// Three stallers of the same source hold the turn for their grace
+		// each (1.2 s); the honest connection behind them then needs 1 s for
+		// its handshake (nobody waits behind it) and sends its request
+		// 500 ms later: 2.7 s after it arrived, past its queue timeout of
+		// 2 s counted from arrival.
+		ts.stallHellos(t, 3, func(int) string { return "127.0.0.9" })
+		time.Sleep(100 * time.Millisecond)
+		start := time.Now()
+		code, err := ts.slowTLSGet(t, "127.0.0.9", time.Second, 500*time.Millisecond)
+		if err != nil || code != http.StatusOK {
+			t.Fatalf("honest connection behind stallers of its source: %d %v after %v", code, err, time.Since(start))
+		}
+		if d := time.Since(start); d < queueTimeout {
+			t.Fatalf("honest connection behind stallers of its source answered after %v; it should have waited for them", d)
+		}
+	})
+}
+
+// A handler that runs inside a nested pass (with one worker, in the
+// accepting flow itself) while a handshake waits ends cleanly, the
+// handshake still ends at its limit, and a stop during a waiting handshake
+// ends the handshake and the central at once.
+func TestConnServerNestedPass(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		hello := clientHello(t)
+		staller := dial(t, ts.agnt, "127.0.0.7")
+		start := time.Now()
+		if _, err := staller.Write(hello); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		line, d := ts.webRaw(t, "GET /test/slow?ms=300 HTTP/1.1\r\nHost: x\r\n\r\n")
+		if !strings.Contains(line, " 200 ") || d > 500*time.Millisecond {
+			t.Fatalf("handler during a handshake: %q after %v", line, d)
+		}
+		// (Plain requests only: a TLS request of another source would make
+		// the staller give way.)
+		if line, d := ts.webRaw(t, healthRequest); !strings.Contains(line, " 200 ") || d > 100*time.Millisecond {
+			t.Fatalf("plain request after the handler: %q after %v", line, d)
+		}
+		expectClosed(t, staller, 5*time.Second, "stalled handshake")
+		if d := time.Since(start); d < modules.TLSHandshakeTimeout-100*time.Millisecond || d > modules.TLSHandshakeTimeout+500*time.Millisecond {
+			t.Fatalf("stalled handshake closed after %v, want at its limit", d)
+		}
+		ts.checkFast(t, 100*time.Millisecond, "after the stalled handshake")
+
+		staller = dial(t, ts.agnt, "127.0.0.8")
+		if _, err := staller.Write(hello); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		stopAt := time.Now()
+		ts.stop.Store(true)
+		select {
+		case <-ts.done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("run did not return after a stop during a handshake")
+		}
+		if d := time.Since(stopAt); d > modules.LoopWakeInterval+200*time.Millisecond {
+			t.Fatalf("stop during a handshake took %v", d)
+		}
+		expectClosed(t, staller, time.Second, "handshake at stop")
+	})
+}
+
+// All loopback addresses are one source for the handshake order and the
+// stall table: after a staller of 127.0.1.2 used its full limit, a staller
+// of 127.0.1.3 counts as stalled, so it gives way at once to a TLS request
+// of another source (a separate fresh source would keep its grace), and
+// the stall is remembered once, for loopback.
+func TestConnServerLoopbackIsOneSource(t *testing.T) {
+	for _, tc := range []struct{ host, want string }{
+		{"127.0.0.1", loopbackSource}, {"127.1.2.3", loopbackSource}, {"::1", loopbackSource},
+		{"::ffff:127.0.0.9", loopbackSource}, {"192.0.2.7", "192.0.2.7"}, {"fe80::7%eth0", "fe80::7%eth0"},
+	} {
+		if got := sourceOf(tc.host); got != tc.want {
+			t.Errorf("sourceOf(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+	own := ownIPv4(t)
+	ts := startConnTestServerOn(t, 1, 10*time.Second, "0.0.0.0:0")
+	_, port, _ := net.SplitHostPort(ts.agnt)
+	ts.agnt = net.JoinHostPort("127.0.0.1", port)
+	hello := clientHello(t)
+	first := dial(t, ts.agnt, "127.0.1.2")
+	start := time.Now()
+	if _, err := first.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	expectClosed(t, first, 5*time.Second, "first loopback staller")
+	if d := time.Since(start); d < modules.TLSHandshakeTimeout-100*time.Millisecond {
+		t.Fatalf("first loopback staller closed after %v, want at its full limit", d)
+	}
+
+	second := dial(t, ts.agnt, "127.0.1.3")
+	if _, err := second.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	code, _, d, err := ts.agentDoTo(net.JoinHostPort(own, port), own, "GET", "/agent/v1/ca", nil, nil)
+	if err != nil || code != http.StatusOK || d > 250*time.Millisecond {
+		t.Fatalf("request of %s behind a staller of the stalled loopback source: %d %v after %v, want 200 at once", own, code, err, d)
+	}
+	expectClosed(t, second, time.Second, "second loopback staller")
+	if code, _ := ts.agentGet(t, "/agent/v1/ca"); code != http.StatusOK {
+		t.Fatalf("loopback request after the stalls: %d", code)
+	}
+	ts.shutdown()
+	if st, ok := ts.srv.stalled[loopbackSource]; len(ts.srv.stalled) != 1 || !ok || !st.limit {
+		t.Fatalf("stall table %v, want one entry for loopback after a full limit", ts.srv.stalled)
+	}
 }
 
 // A burst of 500 simultaneous requests is answered completely: when the
