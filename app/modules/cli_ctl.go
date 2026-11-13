@@ -62,7 +62,7 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	}
 	db, err := OpenSQLite(dbPath, SchemaCentral)
 	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "central database: %v", err)
+		return nil, DBOpenFailed(err, ExitConfig, "central database")
 	}
 	cfg, err := LoadCentralConfig(db)
 	db.Close()

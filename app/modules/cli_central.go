@@ -49,9 +49,34 @@ func openCentralDBLocal() (*sql.DB, error) {
 	}
 	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 	if err != nil {
-		return nil, NewExitErrorf(ExitConfig, "database: %v", err)
+		return nil, DBOpenFailed(err, ExitConfig, "database")
 	}
 	return db, nil
+}
+
+// withLocalTx runs fn in one transaction of the central database: its
+// changes are saved only when fn succeeds. Errors are returned as they are
+// (as before the transaction, a failing statement ends the command with its
+// own text).
+func withLocalTx(db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// insertLocalHistory records the history row of a command on the central
+// host; its failure undoes the change it records.
+func insertLocalHistory(tx *sql.Tx, h *models.HistoryItem) error {
+	if err := models.InsertHistory(tx, h); err != nil {
+		return NewExitErrorf(ExitConfig, "history: %v (nothing was changed)", err)
+	}
+	return nil
 }
 
 func readNewPassword() (string, error) {
@@ -111,12 +136,25 @@ func (c *CentralInitAdminCmd) Run() error {
 		return err
 	}
 	a := &models.Account{Email: email, DisplayName: display, Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
-	if err := models.InsertAccount(db, a); err != nil {
-		return NewExitError(ExitArgument, err.Error())
+	// The account and its history row are written together or not at all.
+	err = withLocalTx(db, func(tx *sql.Tx) error {
+		// Checked again under the write lock: another command may have
+		// created an administrator while the password was typed.
+		if n, err := models.CountAdmins(tx); err != nil {
+			return err
+		} else if n > 0 {
+			return NewExitError(ExitArgument, "an administrator already exists; use reset-password or the accounts screen")
+		}
+		if err := models.InsertAccount(tx, a); err != nil {
+			return NewExitError(ExitArgument, err.Error())
+		}
+		detail := M("history.detail.first_admin_cli")
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email,
+			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
+	})
+	if err != nil {
+		return err
 	}
-	detail := M("history.detail.first_admin_cli")
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "created", Target: a.Email,
-		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("Administrator %q created.\n", a.Email)
 	return nil
 }
@@ -151,14 +189,25 @@ func (c *CentralResetPasswordCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	if err := models.UpdateAccountPassword(db, a.ID, hash); err != nil {
+	// The new password, the enabling, the revocation and the history row
+	// are written together or not at all.
+	err = withLocalTx(db, func(tx *sql.Tx) error {
+		if err := models.UpdateAccountPassword(tx, a.ID, hash); err != nil {
+			return err
+		}
+		if err := models.SetAccountDisabled(tx, a.ID, false); err != nil {
+			return err
+		}
+		if err := RevokeAccountAuth(tx, a.ID, ""); err != nil {
+			return err
+		}
+		detail := M("history.detail.admin_recovered_cli")
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email,
+			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
+	})
+	if err != nil {
 		return err
 	}
-	_ = models.SetAccountDisabled(db, a.ID, false)
-	_ = RevokeAccountAuth(db, a.ID, "")
-	detail := M("history.detail.admin_recovered_cli")
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistAccount, Action: "password_reset", Target: a.Email,
-		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("Password of %q reset; the account is enabled and its sessions, trusted browsers and pending codes were invalidated.\n", a.Email)
 	return nil
 }

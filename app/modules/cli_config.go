@@ -1,6 +1,8 @@
 package modules
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,6 +29,17 @@ func effectNote(f *ConfigField) string {
 		return "The change takes effect when the central is restarted."
 	}
 	return fmt.Sprintf("A running central applies the change at its next periodic check (every %s).", PeriodicTick)
+}
+
+// configChangeFailed is the error of a refused or failed change: the
+// failure of its history row keeps its code; a refused value, as before,
+// is an argument error.
+func configChangeFailed(err error) error {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) {
+		return err
+	}
+	return NewExitError(ExitArgument, err.Error())
 }
 
 // CentralConfigListCmd lists the configuration.
@@ -120,25 +133,27 @@ func (c *CentralConfigSetCmd) Run() error {
 		return err
 	}
 	defer db.Close()
-	changed, err := ApplyCentralConfigChanges(db, map[string]string{f.Name: value}, nil)
+	// The change and its history row are saved together or not at all.
+	changed, err := ApplyCentralConfigChangesRecorded(db, map[string]string{f.Name: value}, nil, func(tx *sql.Tx, _ []string) error {
+		detail := M("history.detail.config_secret", "name", f.Name)
+		if !f.Secret() {
+			// The history shows the value as saved (lists normalized).
+			shown := value
+			if saved, _, err := CentralConfigState(tx); err == nil {
+				shown = f.Value(saved)
+			}
+			detail = M("history.detail.config_value", "name", f.Name, "value", shown)
+		}
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name,
+			Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
+	})
 	if err != nil {
-		return NewExitError(ExitArgument, err.Error())
+		return configChangeFailed(err)
 	}
 	if len(changed) == 0 {
 		fmt.Printf("%s is unchanged.\n", f.Name)
 		return nil
 	}
-	detail := M("history.detail.config_secret", "name", f.Name)
-	if !f.Secret() {
-		// The history shows the value as saved (lists normalized).
-		shown := value
-		if saved, _, err := CentralConfigState(db); err == nil {
-			shown = f.Value(saved)
-		}
-		detail = M("history.detail.config_value", "name", f.Name, "value", shown)
-	}
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "set", Target: f.Name,
-		Detail: detail.Text(), I18n: HistoryTextsJSON(Msg{}, detail)})
 	fmt.Printf("%s set. %s\n", f.Name, effectNote(f))
 	return nil
 }
@@ -158,17 +173,19 @@ func (c *CentralConfigUnsetCmd) Run() error {
 	if err != nil {
 		return NewExitError(ExitArgument, err.Error())
 	}
-	changed, err := ApplyCentralConfigChanges(db, nil, []string{f.Name})
+	// The change and its history row are saved together or not at all.
+	changed, err := ApplyCentralConfigChangesRecorded(db, nil, []string{f.Name}, func(tx *sql.Tx, _ []string) error {
+		restored := M("history.detail.config_restored")
+		return insertLocalHistory(tx, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "unset", Target: c.Name,
+			Detail: restored.Text(), I18n: HistoryTextsJSON(Msg{}, restored)})
+	})
 	if err != nil {
-		return NewExitError(ExitArgument, err.Error())
+		return configChangeFailed(err)
 	}
 	if len(changed) == 0 {
 		fmt.Printf("%s already uses its default.\n", f.Name)
 		return nil
 	}
-	restored := M("history.detail.config_restored")
-	_ = models.InsertHistory(db, &models.HistoryItem{AccountName: localOperator(), Category: models.HistConfig, Action: "unset", Target: c.Name,
-		Detail: restored.Text(), I18n: HistoryTextsJSON(Msg{}, restored)})
 	fmt.Printf("%s uses its default. %s\n", c.Name, effectNote(f))
 	return nil
 }

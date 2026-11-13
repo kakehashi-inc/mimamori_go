@@ -481,6 +481,14 @@ func CentralConfigState(db models.Execer) (*CentralConfig, map[string]bool, erro
 // the items whose stored value changed. A refused change is answered with a
 // Msg or Problems error; any other error is a failure of the database.
 func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string) ([]string, error) {
+	return ApplyCentralConfigChangesRecorded(db, set, unset, nil)
+}
+
+// ApplyCentralConfigChangesRecorded is ApplyCentralConfigChanges with a
+// record function that, when an item changed, is called in the same
+// transaction (with the changed names) to write the history: the change is
+// saved only when record succeeds, and record's error is returned as it is.
+func ApplyCentralConfigChangesRecorded(db *sql.DB, set map[string]string, unset []string, record func(tx *sql.Tx, changed []string) error) ([]string, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, err
@@ -568,6 +576,11 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 				return nil, err
 			}
 			changed = append(changed, f.Name)
+		}
+	}
+	if record != nil && len(changed) > 0 {
+		if err := record(tx, changed); err != nil {
+			return nil, err
 		}
 	}
 	return changed, tx.Commit()

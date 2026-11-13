@@ -98,7 +98,7 @@ func AgentInit(o AgentInitOptions) error {
 	if _, err := os.Stat(dbPath); err == nil {
 		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 		if err != nil {
-			return NewExitErrorf(ExitFileIO, "local database: %v", err)
+			return DBOpenFailed(err, ExitFileIO, "local database")
 		}
 		agentID = models.GetLocalState(db, agentCfgID)
 		_, cfgErr := LoadAgentConfig(db)
@@ -145,7 +145,7 @@ func AgentInit(o AgentInitOptions) error {
 	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
 		removeCreated(created)
-		return NewExitErrorf(ExitFileIO, "local database: %v", err)
+		return DBOpenFailed(err, ExitFileIO, "local database")
 	}
 	// 4. connect, receive the CA, authenticate (binds the token to this agent)
 	cfg, resp, err := initConnect(o, token, agentID)
@@ -311,7 +311,7 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	defer lock.Release()
 	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
-		return NewExitErrorf(ExitConfig, "local database: %v", err)
+		return DBOpenFailed(err, ExitConfig, "local database")
 	}
 	defer db.Close()
 	cfg, err := LoadAgentConfig(db)
@@ -371,7 +371,7 @@ func AgentStart(dataDir string) error {
 	defer lock.Release()
 	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
 	if err != nil {
-		return NewExitErrorf(ExitConfig, "local database: %v", err)
+		return DBOpenFailed(err, ExitConfig, "local database")
 	}
 	defer db.Close()
 	cfg, err := LoadAgentConfig(db)

@@ -46,6 +46,9 @@ type core struct {
 
 	targetsMu sync.Mutex
 	targets   map[int64]*sql.DB
+	// refusedTargets holds the agents whose target database was refused as
+	// one of another build, so that the refusal is logged once.
+	refusedTargets map[int64]bool
 
 	serverCert atomic.Pointer[tls.Certificate]
 
@@ -113,6 +116,15 @@ func (c *core) targetDB(a *models.Agent) (*sql.DB, error) {
 	}
 	db, err := modules.OpenSQLite(modules.TargetDBPath(c.dataDir, file), modules.SchemaAgentDB)
 	if err != nil {
+		// A database of another build is logged here once, also for the
+		// callers that only skip the target; a request answers 500.
+		if modules.IsOtherBuildDB(err) && !c.refusedTargets[a.ID] {
+			if c.refusedTargets == nil {
+				c.refusedTargets = map[int64]bool{}
+			}
+			c.refusedTargets[a.ID] = true
+			c.logger.Print(err)
+		}
 		return nil, err
 	}
 	db.SetMaxOpenConns(2)

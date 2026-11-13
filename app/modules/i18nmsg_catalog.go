@@ -128,6 +128,7 @@ var msgCatalog = map[string]msgDef{
 	"common.body_refused":                           {en: "request body not read: a body this large needs an authenticated request"},
 	"common.busy":                                   {en: "busy"},
 	"common.command_not_in_path":                    {en: "command {{name}} not found in PATH"},
+	"common.db_other_build":                         {en: "database {{path}} was created by another build of the program and its tables do not match this build: the data directory has to be created again (move it away and set the program up anew)"},
 	"common.header_too_large":                       {en: "request header too large"},
 	"common.internal_error":                         {en: "internal error"},
 	"common.invalid_body":                           {en: "invalid request body: {{detail}}"},
