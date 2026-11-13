@@ -43,10 +43,6 @@ const pipeSizeCommand = 1 << 20
 // fSetPipeSz is the fcntl command F_SETPIPE_SZ of Linux.
 const fSetPipeSz = 1031
 
-// signalHelperWait bounds the wait for the helper that signals a process
-// group as the set's OS user.
-const signalHelperWait = 5 * time.Second
-
 // signalHelperScript is the script the helper's bash runs with the process
 // group ID as $1 and the signal name as $2.
 const signalHelperScript = `kill -s "$2" -- -"$1"`
@@ -396,7 +392,8 @@ var (
 )
 
 // signalGroupAs runs "sudo -n -u USER -- BASH -c 'kill -s SIG -- -PGID'" and
-// waits for it at most signalHelperWait, in the calling flow.
+// waits in the calling flow until it ends, without a time limit (it is an
+// external tool), draining the command's pipe meanwhile.
 func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()) error {
 	name := "KILL"
 	if sig == syscall.SIGTERM {
@@ -431,7 +428,6 @@ func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()
 		return fmt.Errorf("the helper could not be started: %v", err)
 	}
 	defer func() { _ = proc.Release() }()
-	deadline := time.Now().Add(signalHelperWait)
 	var ws syscall.WaitStatus
 	for {
 		wpid, err := syscall.Wait4(proc.Pid, &ws, syscall.WNOHANG, nil)
@@ -443,9 +439,6 @@ func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()
 		}
 		if wpid == proc.Pid {
 			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("no answer within %s", signalHelperWait)
 		}
 		drainPipe()
 		time.Sleep(10 * time.Millisecond)

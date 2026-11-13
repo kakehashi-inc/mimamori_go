@@ -11,10 +11,15 @@ import (
 	"time"
 )
 
-// ErrCommandTimeout is returned when an external command exceeds its timeout.
-var ErrCommandTimeout = errors.New("command timed out")
+// ErrToolStopped is returned when a tool was ended, or not started, because
+// the agent stops.
+var ErrToolStopped = errors.New("ended because the agent stops")
 
-// CommandResult is the outcome of RunCommand.
+// toolKillGrace is the time between SIGTERM and SIGKILL when a stop ends a
+// tool (replaced by tests).
+var toolKillGrace = CommandKillGrace
+
+// CommandResult is the outcome of RunTool.
 type CommandResult struct {
 	Stdout   []byte
 	Stderr   []byte
@@ -46,13 +51,21 @@ func commandEnv() []string {
 	return append(env, "LC_ALL=C", "TZ=UTC")
 }
 
-// RunCommand runs an external command with a timeout WITHOUT creating any
-// goroutine and without writing any file: the output is read from pipes
-// whose reads are bounded by an immediate deadline, and the process is
-// reaped by polling wait4 with WNOHANG, all from the calling flow. On timeout
-// the whole process group is killed. maxOutput limits how much of stdout is
-// kept (the rest is read and discarded so the command never blocks).
-func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...string) (*CommandResult, error) {
+// RunTool runs an external program and waits until it ends. Nothing limits
+// its running time. When stop is not nil and is closed while the program
+// runs, its process group gets SIGTERM, after toolKillGrace SIGKILL, and
+// RunTool waits until it has ended and returns ErrToolStopped (with what it
+// wrote). When stop is already closed, the program is not started.
+//
+// Nothing is written to a file: the output is read from pipes whose reads are
+// bounded by an immediate deadline, and the process is reaped by polling
+// wait4 with WNOHANG, all from the calling flow. maxOutput bounds what is
+// kept of standard output (the rest is read and dropped, so the program
+// never blocks on a full pipe); standard error is kept up to 64 KiB.
+func RunTool(stop <-chan struct{}, maxOutput int64, name string, args ...string) (*CommandResult, error) {
+	if isClosed(stop) {
+		return nil, fmt.Errorf("%s: %w", name, ErrToolStopped)
+	}
 	path, err := LookupCommand(name)
 	if err != nil {
 		return nil, err
@@ -87,9 +100,9 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 	stdout := &limitedBuffer{limit: maxOutput}
 	stderr := &limitedBuffer{limit: 64 << 10}
 	pid := proc.Pid
-	deadline := time.Now().Add(timeout)
 	var ws syscall.WaitStatus
-	timedOut := false
+	stopped, killed := false, false
+	var killAt time.Time
 	sleep := 2 * time.Millisecond
 	for {
 		drain(outR, stdout)
@@ -105,16 +118,15 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 		if wpid == pid {
 			break
 		}
-		if time.Now().After(deadline) {
-			timedOut = true
+		now := time.Now()
+		if !stopped && isClosed(stop) {
+			stopped = true
+			killAt = now.Add(toolKillGrace)
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
+		}
+		if stopped && !killed && !now.Before(killAt) {
+			killed = true
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
-			for {
-				_, werr = syscall.Wait4(pid, &ws, 0, nil)
-				if werr != syscall.EINTR {
-					break
-				}
-			}
-			break
 		}
 		time.Sleep(sleep)
 		if sleep < 50*time.Millisecond {
@@ -130,8 +142,8 @@ func RunCommand(timeout time.Duration, maxOutput int64, name string, args ...str
 	if ws.Signaled() {
 		res.ExitCode = 128 + int(ws.Signal())
 	}
-	if timedOut {
-		return res, fmt.Errorf("%s: %w after %s", name, ErrCommandTimeout, timeout)
+	if stopped {
+		return res, fmt.Errorf("%s: %w", name, ErrToolStopped)
 	}
 	return res, nil
 }
@@ -189,10 +201,10 @@ func drainAll(f *os.File, dst *limitedBuffer) {
 	}
 }
 
-// RunSimple runs a short command with the default timeout and returns an
+// RunSimple runs a tool through RunTool with 16 MiB of output and returns an
 // error that includes stderr when the exit code is not zero.
-func RunSimple(name string, args ...string) (*CommandResult, error) {
-	res, err := RunCommand(DefaultCommandTimeoutSec*time.Second, 16<<20, name, args...)
+func RunSimple(stop <-chan struct{}, name string, args ...string) (*CommandResult, error) {
+	res, err := RunTool(stop, 16<<20, name, args...)
 	if err != nil {
 		return res, err
 	}

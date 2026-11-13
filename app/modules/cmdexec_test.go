@@ -452,7 +452,7 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 // (ps, empty when none).
 func processesOf(t *testing.T, words ...string) string {
 	t.Helper()
-	res, err := RunCommand(10*time.Second, 1<<20, "ps", "-eo", "pid=,pgid=,user=,args=")
+	res, err := RunTool(nil, 1<<20, "ps", "-eo", "pid=,pgid=,user=,args=")
 	if err != nil {
 		t.Fatal(err)
 	}

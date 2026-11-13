@@ -13,7 +13,7 @@ import (
 // ReadAuditdStatus reports them.
 func globalsFromFake(t *testing.T) AuditGlobals {
 	t.Helper()
-	st, err := ReadAuditdStatus()
+	st, err := ReadAuditdStatus(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

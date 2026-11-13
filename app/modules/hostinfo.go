@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bufio"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -121,10 +122,16 @@ type HostInfoInput struct {
 	TrustedCAPEMs []string
 	// IncompleteScans is reported as it is.
 	IncompleteScans []IncompleteScan
+	// Stop is the agent's stop: closed, it ends the audit tools that are
+	// running (nil: never).
+	Stop <-chan struct{}
 }
 
-// CollectHostInfo gathers the host information reported to the central.
-func CollectHostInfo(in HostInfoInput) *HostInfo {
+// CollectHostInfo gathers the host information reported to the central. When
+// the stop ended or kept from starting one of its audit tools, it returns
+// ErrToolStopped and no host information (it would claim that auditd is not
+// running).
+func CollectHostInfo(in HostInfoInput) (*HostInfo, error) {
 	hi := &HostInfo{CollectedAt: time.Now().Unix(), AgentVersion: AppVersion, ScanBase: in.ScanBase, Rule: in.Rule, LastApply: in.LastApply,
 		IncompleteScans: in.IncompleteScans}
 	hi.Hostname, _ = os.Hostname()
@@ -135,14 +142,20 @@ func CollectHostInfo(in HostInfoInput) *HostInfo {
 	hi.OSUser = NameOrID(users, os.Geteuid())
 	hi.TimeZone, hi.UTCOffsetSec = HostTimeZone(time.Now())
 
-	if st, err := ReadAuditdStatus(); err == nil {
+	st, err := ReadAuditdStatus(in.Stop)
+	if errors.Is(err, ErrToolStopped) {
+		return nil, err
+	}
+	if err == nil {
 		hi.Auditd = *st
 	}
-	if rules, err := ListAuditRules(); err == nil {
-		for _, l := range rules {
-			if l == neverRuleLine {
-				hi.Auditd.NeverRule = true
-			}
+	rules, err := ListAuditRules(in.Stop)
+	if errors.Is(err, ErrToolStopped) {
+		return nil, err
+	}
+	for _, l := range rules {
+		if l == neverRuleLine {
+			hi.Auditd.NeverRule = true
 		}
 	}
 	hi.Auditd.HaltActions = HaltActions()
@@ -155,7 +168,7 @@ func CollectHostInfo(in HostInfoInput) *HostInfo {
 			hi.TrustedCAs = append(hi.TrustedCAs, TrustedCA{Fingerprint: Fingerprint(c), NotAfter: c.NotAfter.Unix()})
 		}
 	}
-	return hi
+	return hi, nil
 }
 
 // directoryStructure lists the directories under base down to DirectoryDepth

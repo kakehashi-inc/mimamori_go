@@ -235,8 +235,13 @@ func (rt *AgentRuntime) Cycle() {
 
 // monitorStep performs one periodic processing: sync, audit collection, file
 // scans and the report. It is also called from the wait loop of a running
-// command. A stop request does not interrupt it: the step completes and
-// saves its state first.
+// command. A stop does not interrupt it: the step completes and saves its
+// state, with these exceptions. A tool the step waits for when the stop
+// comes is ended (RunTool) and its part fails as a failure of that tool
+// does. After the stop the step starts no tool: the audit log is not read
+// (the position stays), a rule application or removal that has not begun is
+// not begun, and the report is queued without host information. An
+// application or removal that has begun runs to its end.
 func (rt *AgentRuntime) monitorStep() {
 	cycleStart := time.Now()
 	rt.lastMonitor = rt.now()
@@ -282,6 +287,11 @@ func (rt *AgentRuntime) sync() {
 		rt.storeCommandDefinitions(resp.CommandSets)
 	}
 	rt.receiveCommandRequests(resp.CommandRequests)
+	if isClosed(rt.stop) {
+		// After the stop no rule is applied or removed (both run tools); the
+		// next start syncs again.
+		return
+	}
 	switch {
 	case resp.Rule == nil:
 		rt.removeRule()
@@ -584,10 +594,19 @@ func (rt *AgentRuntime) setApply(r *ApplyResult) {
 // collectAudit reads the audit log from the stored position on. The position
 // is read on the read side and written after the audit tool has run: only
 // one monitoring step runs at a time, so nothing else moves it between.
+// After the stop the audit log is not read; a stop while the tool runs ends
+// it. In both cases the position stays where it is.
 func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []DetectionReport {
+	if isClosed(rt.stop) {
+		return nil
+	}
 	var last AuditEventID
 	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateLastAuditEvent)), &last)
-	events, next, err := CollectAuditEvents(last)
+	events, next, err := CollectAuditEvents(rt.stop, last)
+	if errors.Is(err, ErrToolStopped) {
+		rt.logf("reading the audit log was ended by the stop; the next start reads from the same position")
+		return nil
+	}
 	if err != nil {
 		rt.logf("reading the audit log failed: %v", err)
 		return nil
@@ -987,7 +1006,14 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	if rt.Config != nil {
 		in.TrustedCAPEMs = rt.Config.CAPEMs
 	}
-	hi := CollectHostInfo(in)
+	in.Stop = rt.stop
+	// After the stop, or when the stop cut its collection, the report goes
+	// without host information (its audit tools would not run); the central
+	// keeps the host information it has.
+	var hi *HostInfo
+	if !isClosed(rt.stop) {
+		hi, _ = CollectHostInfo(in)
+	}
 
 	// The dropped count is read, reported in the queued report and reset in
 	// one transaction, so that a count is neither lost nor reported twice.

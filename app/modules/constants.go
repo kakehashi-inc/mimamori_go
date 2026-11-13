@@ -60,7 +60,6 @@ const (
 	DefaultRememberDays       = 30
 	DefaultTrustDays          = 30
 	DefaultSMTPTimeoutSec     = 30
-	DefaultCommandTimeoutSec  = 60
 	DefaultHTTPTimeoutSec     = 30
 	DefaultOutboxMaxDetection = 10000
 )
@@ -235,8 +234,8 @@ const (
 	// MaxCommandLineBytes is the largest command line, in bytes.
 	MaxCommandLineBytes = 102400
 	// DefaultCommandSetTimeoutSec is the default time limit of one command;
-	// MaxCommandSetTimeoutSec the largest. (DefaultCommandTimeoutSec above
-	// is the limit of the agent's own external commands such as auditctl.)
+	// MaxCommandSetTimeoutSec the largest. (The agent's own external tools
+	// such as auditctl have no time limit.)
 	DefaultCommandSetTimeoutSec = 300
 	MaxCommandSetTimeoutSec     = 86400
 	// DefaultCommandLineLimit is the default number of lines of a command's

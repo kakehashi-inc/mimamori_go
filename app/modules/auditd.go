@@ -31,9 +31,10 @@ type AuditdStatus struct {
 // auditing for every task (default on Amazon Linux 2023 and others).
 const neverRuleLine = "-a never,task"
 
-// ReadAuditdStatus runs "auditctl -s" and parses it.
-func ReadAuditdStatus() (*AuditdStatus, error) {
-	res, err := RunSimple("auditctl", "-s")
+// ReadAuditdStatus runs "auditctl -s" and parses it. A stop closed while it
+// runs ends it (RunTool).
+func ReadAuditdStatus(stop <-chan struct{}) (*AuditdStatus, error) {
+	res, err := RunSimple(stop, "auditctl", "-s")
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,7 @@ func CheckAuditd() error {
 			return M("auditd.tool_missing", "tool", tool, "cause", AsMsg(err))
 		}
 	}
-	st, err := ReadAuditdStatus()
+	st, err := ReadAuditdStatus(nil)
 	if err != nil {
 		return M("auditd.status_failed", "cause", AsMsg(err))
 	}
@@ -84,7 +85,7 @@ func CheckAuditd() error {
 	if st.Enabled == 0 {
 		return M("auditd.disabled")
 	}
-	if _, err := RunSimple("auditctl", "-l"); err != nil {
+	if _, err := RunSimple(nil, "auditctl", "-l"); err != nil {
 		return M("auditd.list_failed", "cause", AsMsg(err))
 	}
 	return nil
@@ -123,9 +124,10 @@ func HaltActions() []string {
 	return out
 }
 
-// ListAuditRules returns the loaded rules ("auditctl -l").
-func ListAuditRules() ([]string, error) {
-	res, err := RunSimple("auditctl", "-l")
+// ListAuditRules returns the loaded rules ("auditctl -l"). A stop closed
+// while it runs ends it (RunTool).
+func ListAuditRules(stop <-chan struct{}) ([]string, error) {
+	res, err := RunSimple(stop, "auditctl", "-l")
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +295,7 @@ func setGlobals(g AuditGlobals) error {
 		{"-f", strconv.Itoa(g.Failure)},
 		{"--backlog_wait_time", strconv.FormatInt(g.BacklogWaitTime, 10)},
 	} {
-		if _, err := RunSimple("auditctl", args...); err != nil {
+		if _, err := RunSimple(nil, "auditctl", args...); err != nil {
 			errs = append(errs, M("auditd.command_failed", "args", strings.Join(args, " "), "cause", AsMsg(err)))
 		}
 	}
@@ -398,9 +400,10 @@ func neverRuleInRulesDir() bool {
 // configured state at once. When restore is not nil (the global settings
 // recorded before the first application), the global settings are set back
 // to it once the rules are removed; a failure there does not undo the
-// removal and is returned with the other failures.
+// removal and is returned with the other failures. Its tools are not ended
+// by a stop of the agent: a removal that has begun runs to its end.
 func RemoveAuditRules(restore *AuditGlobals) error {
-	st, err := ReadAuditdStatus()
+	st, err := ReadAuditdStatus(nil)
 	if err != nil {
 		return err
 	}
@@ -413,7 +416,7 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 	if err := deleteOwnRules(); err != nil {
 		return err
 	}
-	rules, err := ListAuditRules()
+	rules, err := ListAuditRules(nil)
 	if err != nil {
 		return err
 	}
@@ -428,7 +431,7 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 	}
 	var errs []error
 	if !neverLoaded && neverRuleInRulesDir() {
-		if _, err := RunSimple("auditctl", strings.Fields(neverRuleLine)...); err != nil {
+		if _, err := RunSimple(nil, "auditctl", strings.Fields(neverRuleLine)...); err != nil {
 			errs = append(errs, M("apply.never_reload_failed", "dir", filepath.Dir(auditRulesFile), "line", neverRuleLine, "cause", AsMsg(err)))
 		}
 	}
@@ -453,12 +456,15 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 //
 // The errors this function makes itself are messages (Msg) with the cause
 // nested; errors of auditctl and the OS are data (AsMsg gives Raw).
+//
+// Its tools are not ended by a stop of the agent: an application with its
+// own rollback is never cut in the middle.
 func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, error) {
-	before, err := ListAuditRules()
+	before, err := ListAuditRules(nil)
 	if err != nil {
 		return nil, err
 	}
-	prevStatus, err := ReadAuditdStatus()
+	prevStatus, err := ReadAuditdStatus(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +492,7 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, er
 		// so the message never claims more than what was restored.
 		failed := 0
 		try := func(args ...string) {
-			if _, err := RunSimple("auditctl", args...); err != nil {
+			if _, err := RunSimple(nil, "auditctl", args...); err != nil {
 				failed++
 			}
 		}
@@ -541,26 +547,26 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, er
 		return rollback(err)
 	}
 	for _, l := range globalSettingLines() {
-		if _, err := RunSimple("auditctl", strings.Fields(l)...); err != nil {
+		if _, err := RunSimple(nil, "auditctl", strings.Fields(l)...); err != nil {
 			return rollback(err)
 		}
 	}
 	for _, l := range before {
 		if l == neverRuleLine {
-			if _, err := RunSimple("auditctl", "-d", "never,task"); err != nil {
+			if _, err := RunSimple(nil, "auditctl", "-d", "never,task"); err != nil {
 				return rollback(err)
 			}
 			neverRemoved = true
 		}
 	}
 	for _, l := range lines {
-		if _, err := RunSimple("auditctl", splitRule(l)...); err != nil {
+		if _, err := RunSimple(nil, "auditctl", splitRule(l)...); err != nil {
 			return rollback(err)
 		}
 	}
 
 	// Verify.
-	after, err := ListAuditRules()
+	after, err := ListAuditRules(nil)
 	if err != nil {
 		return rollback(err)
 	}
@@ -576,7 +582,7 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, er
 	if n != len(lines) {
 		return rollback(M("apply.rule_count", "expected", len(lines), "key", AuditKey, "found", n))
 	}
-	stNow, err := ReadAuditdStatus()
+	stNow, err := ReadAuditdStatus(nil)
 	if err != nil {
 		return rollback(err)
 	}
@@ -589,7 +595,7 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, er
 // deleteOwnRules removes every loaded rule carrying this system's key, one by
 // one, so other rules are never touched.
 func deleteOwnRules() error {
-	rules, err := ListAuditRules()
+	rules, err := ListAuditRules(nil)
 	if err != nil {
 		return err
 	}
@@ -599,7 +605,7 @@ func deleteOwnRules() error {
 		}
 		args := splitRule(l)
 		args[0] = "-d"
-		if _, err := RunSimple("auditctl", args...); err != nil {
+		if _, err := RunSimple(nil, "auditctl", args...); err != nil {
 			return err
 		}
 	}

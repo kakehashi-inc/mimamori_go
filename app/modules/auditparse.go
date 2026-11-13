@@ -364,8 +364,10 @@ func (id AuditEventID) After(o AuditEventID) bool {
 // version): it searches from the second of the last event, which also covers
 // rotated logs (--input-logs reads every log file), and drops the events it
 // already read. A zero last starts ten minutes back. It returns the events
-// and the new position.
-func CollectAuditEvents(last AuditEventID) ([]*AuditEvent, AuditEventID, error) {
+// and the new position. ausearch is waited for until it ends; a stop closed
+// meanwhile ends it and the error is ErrToolStopped (the position is
+// returned unchanged).
+func CollectAuditEvents(stop <-chan struct{}, last AuditEventID) ([]*AuditEvent, AuditEventID, error) {
 	start := time.Unix(last.Sec, 0).UTC()
 	if last.Sec == 0 {
 		start = time.Now().UTC().Add(-10 * time.Minute)
@@ -373,7 +375,7 @@ func CollectAuditEvents(last AuditEventID) ([]*AuditEvent, AuditEventID, error) 
 	// ausearch runs with LC_ALL=C and TZ=UTC (see commandEnv), so it reads
 	// -ts in the C locale date format (two-digit year) and in UTC.
 	args := []string{"--input-logs", "--raw", "-k", AuditKey, "-ts", start.Format("01/02/06"), start.Format("15:04:05")}
-	res, err := RunCommand(120*time.Second, 256<<20, "ausearch", args...)
+	res, err := RunTool(stop, 256<<20, "ausearch", args...)
 	if err != nil {
 		return nil, last, err
 	}
