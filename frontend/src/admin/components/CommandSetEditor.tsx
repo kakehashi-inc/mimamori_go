@@ -1,7 +1,8 @@
-import { useId, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/Button';
 import { checkboxClass, Field, inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
+import { Modal } from '../../components/Modal';
 import { Card } from '../../components/PageHeader';
 import { Alert } from '../../components/StateViews';
 import type { CodeSpecKind, CommandPurpose, Joiner, OnProblems, ScheduleKind } from '../../types';
@@ -22,6 +23,7 @@ import {
     type CommandDraft,
     type SetDraft,
 } from './commandSetDraft';
+import { splitShellCommands } from './splitCommands';
 
 // Editor of one command set: the set fields, the schedule with its summary
 // and the ordered list of commands.
@@ -55,6 +57,24 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
             'commands',
             draft.commands.map((x, j) => (j === i ? c : x))
         );
+
+    const [pasting, setPasting] = useState(false);
+    // Key of the first pasted command, scrolled into view once it is rendered.
+    const [revealKey, setRevealKey] = useState<number | null>(null);
+    const addPasted = (lines: string[]) => {
+        const added = lines.map(line => ({ ...newCommandDraft(), commandLine: line }));
+        set('commands', [...draft.commands, ...added]);
+        setPasting(false);
+        setRevealKey(added[0].key);
+    };
+    useEffect(() => {
+        if (revealKey === null) return;
+        const el = document.getElementById(`${id}-command-${revealKey}`);
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        el?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+        el?.querySelector('textarea')?.focus({ preventScroll: true });
+        setRevealKey(null);
+    }, [revealKey, id]);
 
     return (
         <div className='flex flex-col gap-4'>
@@ -176,29 +196,121 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
                     <p className='text-xs text-muted'>{t('commandSets.editor.commandsHint')}</p>
                 </div>
                 {draft.commands.map((c, i) => (
-                    <CommandEditor
-                        key={c.key}
-                        index={i}
-                        count={draft.commands.length}
-                        command={c}
-                        collect={collect}
-                        onChange={next => setCommand(i, next)}
-                        onMove={delta => set('commands', move(draft.commands, i, delta))}
-                        onRemove={() =>
-                            set(
-                                'commands',
-                                draft.commands.filter((_, j) => j !== i)
-                            )
-                        }
-                    />
+                    <div key={c.key} id={`${id}-command-${c.key}`} className='scroll-mt-28'>
+                        <CommandEditor
+                            index={i}
+                            count={draft.commands.length}
+                            command={c}
+                            collect={collect}
+                            onChange={next => setCommand(i, next)}
+                            onMove={delta => set('commands', move(draft.commands, i, delta))}
+                            onRemove={() =>
+                                set(
+                                    'commands',
+                                    draft.commands.filter((_, j) => j !== i)
+                                )
+                            }
+                        />
+                    </div>
                 ))}
-                <div>
+                <div className='flex flex-wrap gap-2'>
                     <Button icon='add' onClick={() => set('commands', [...draft.commands, newCommandDraft()])}>
                         {t('commandSets.editor.addCommand')}
                     </Button>
+                    <Button icon='content_paste' onClick={() => setPasting(true)}>
+                        {t('commandSets.editor.pasteCommands')}
+                    </Button>
                 </div>
             </section>
+            {pasting && (
+                <PasteCommandsDialog
+                    existing={draft.commands.length}
+                    onAdd={addPasted}
+                    onClose={() => setPasting(false)}
+                />
+            )}
         </div>
+    );
+}
+
+/**
+ * Dialog that splits pasted text into commands (see splitShellCommands) and
+ * shows them before they are added after the existing commands.
+ */
+function PasteCommandsDialog({
+    existing,
+    onAdd,
+    onClose,
+}: {
+    /** Number of commands the set already has. */
+    existing: number;
+    onAdd: (lines: string[]) => void;
+    onClose: () => void;
+}) {
+    const { t } = useTranslation();
+    const id = useId();
+    const [text, setText] = useState('');
+    const commands = splitShellCommands(text);
+
+    return (
+        <Modal
+            open
+            title={t('commandSets.editor.pasteTitle')}
+            onClose={onClose}
+            size='lg'
+            footer={
+                <>
+                    <Button onClick={onClose}>{t('common.cancel')}</Button>
+                    <Button
+                        variant='primary'
+                        icon='add'
+                        disabled={commands.length === 0}
+                        onClick={() => onAdd(commands)}
+                    >
+                        {t('commandSets.editor.pasteAdd')}
+                    </Button>
+                </>
+            }
+        >
+            <div className='flex flex-col gap-4'>
+                <Field
+                    label={t('commandSets.editor.pasteText')}
+                    htmlFor={`${id}-text`}
+                    hint={t('commandSets.editor.pasteHint')}
+                >
+                    <textarea
+                        id={`${id}-text`}
+                        className={`${inputClass} font-mono text-xs leading-5`}
+                        rows={8}
+                        spellCheck={false}
+                        autoCapitalize='none'
+                        value={text}
+                        onChange={e => setText(e.target.value)}
+                    />
+                </Field>
+                <div className='flex flex-col gap-2'>
+                    <p className='text-sm font-medium text-ink' aria-live='polite'>
+                        {t('commandSets.editor.pastePreview', { count: commands.length })}
+                    </p>
+                    {commands.length === 0 ? (
+                        <p className='text-xs text-muted'>{t('commandSets.editor.pasteNone')}</p>
+                    ) : (
+                        <ol className='flex flex-col gap-2'>
+                            {commands.map((c, i) => (
+                                <li key={i} className='flex flex-col gap-1'>
+                                    <span className='text-xs text-muted'>
+                                        {t('commandSets.editor.command', { n: existing + i + 1 })}
+                                    </span>
+                                    <pre className='rounded-md border border-line bg-canvas px-3 py-2 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-ink'>
+                                        {c}
+                                    </pre>
+                                </li>
+                            ))}
+                        </ol>
+                    )}
+                </div>
+            </div>
+        </Modal>
     );
 }
 
