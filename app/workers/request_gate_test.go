@@ -143,7 +143,10 @@ func TestGateLargeBodyNeedsAuthentication(t *testing.T) {
 		}
 		return readAnswer(c, bufio.NewReader(c), "POST", 30*time.Second)
 	}
-	got := send(s.dialAgent(t), "POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "+tok+"\r\n"+modules.HeaderInstanceID+": m-big\r\nContent-Length: %d\r\n\r\n", paddedAgentReport(n))
+	// Each body is built before its dial, so the client is never silent for
+	// the idle time while it builds one.
+	report := paddedAgentReport(n)
+	got := send(s.dialAgent(t), "POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "+tok+"\r\n"+modules.HeaderInstanceID+": m-big\r\nContent-Length: %d\r\n\r\n", report)
 	if got.status != http.StatusOK {
 		t.Fatalf("authenticated 20 MiB report: %d %q %v", got.status, got.body, got.err)
 	}
@@ -212,10 +215,15 @@ func TestGateUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 			_, _ = c.Write(chunk)
 		}()
 	}
+	// The request is built before the dial: building 20 MiB under the race
+	// detector can take longer than the idle time, and a client that is
+	// silent that long is rightly cut.
+	report := paddedAgentReport(20 << 20)
+	raw := append([]byte(fmt.Sprintf("POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n%s: m-busy\r\nContent-Length: %d\r\n\r\n", tok, modules.HeaderInstanceID, len(report))), report...)
 	time.Sleep(500 * time.Millisecond)
 	start := time.Now()
 	c := s.dialAgent(t)
-	a, werr := sendWholeThenRead(t, c, append([]byte(fmt.Sprintf("POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n%s: m-busy\r\nContent-Length: %d\r\n\r\n", tok, modules.HeaderInstanceID, len(paddedAgentReport(20<<20)))), paddedAgentReport(20<<20)...))
+	a, werr := sendWholeThenRead(t, c, raw)
 	if werr != nil || a.status != http.StatusOK || time.Since(start) > 10*time.Second {
 		t.Fatalf("authenticated 20 MiB report behind 256 unauthenticated bodies: %d %v %v after %v", a.status, a.err, werr, time.Since(start))
 	}
@@ -223,7 +231,7 @@ func TestGateUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 	s.budget.mu.Lock()
 	p := s.budget.peak
 	s.budget.mu.Unlock()
-	if p != int64(len(paddedAgentReport(20<<20))) {
+	if p != int64(len(report)) {
 		t.Fatalf("the budget held %d bytes at most, want only the report's", p)
 	}
 }
