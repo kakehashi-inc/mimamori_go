@@ -186,11 +186,14 @@ func (cl *ctlClient) callError(err error) error {
 }
 
 // show prints a value: a table when columns are given and --json is off.
+// The human output leaves out the coded texts for the screens (the keys
+// ending in "_i18n"); --json prints the answer as it was received.
 func (cl *ctlClient) show(v any, columns ...string) {
 	if cl.json {
 		fmt.Println(marshalIndent(v))
 		return
 	}
+	v = withoutI18n(v)
 	if len(columns) == 0 {
 		fmt.Println(marshalIndent(localizeValue(v)))
 		return
@@ -223,6 +226,29 @@ func (cl *ctlClient) show(v any, columns ...string) {
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	tw.Flush()
+}
+
+// withoutI18n returns a decoded JSON value without the keys ending in
+// "_i18n" at any depth: the codes and parameters the central sends next to
+// its English texts for the screens of the browser.
+func withoutI18n(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			if !strings.HasSuffix(k, "_i18n") {
+				out[k] = withoutI18n(x)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = withoutI18n(x)
+		}
+		return out
+	}
+	return v
 }
 
 // rfc3339Re finds RFC3339 timestamps (as returned by the API in UTC).
