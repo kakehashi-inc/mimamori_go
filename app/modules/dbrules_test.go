@@ -198,12 +198,39 @@ func TestNoRawDatabaseFindsUses(t *testing.T) {
 
 // outsideWaits are the calls a write transaction must not make (rule R4):
 // they answer the request, send mail, reach the central, run an external
-// program, hash a password or sleep. A call is recognized by the name it
-// is made through; time.Sleep also by its package.
+// program, walk the file system, hash a password or sleep. A call of the
+// program's own functions is recognized by the name it is made through.
 var outsideWaits = map[string]bool{
 	"writeJSON": true, "writeError": true, "writeErr": true, "writeProblems": true,
-	"internalError": true, "sendMail": true, "sendCodeMail": true, "Transport": true,
-	"RunCommand": true, "HashPassword": true, "VerifyPassword": true,
+	"internalError": true, "sendMail": true, "sendCodeMail": true, "SendMailTo": true,
+	"Transport": true, "RunCommand": true, "HashPassword": true, "VerifyPassword": true,
+	"ScanWritable": true, "ScanWritableFrom": true, "ScanExecFiles": true, "ScanExecFilesFrom": true,
+}
+
+// packageWaits are the functions of the standard library that wait on the
+// outside, by import path; they are recognized by their package, so that a
+// method of the same name elsewhere does not count.
+var packageWaits = map[string]map[string]bool{
+	"time":          {"Sleep": true},
+	"path/filepath": {"Walk": true, "WalkDir": true},
+	"io/fs":         {"WalkDir": true},
+	"os/exec":       {"Command": true, "CommandContext": true},
+	"net/http":      {"Get": true, "Head": true, "Post": true, "PostForm": true},
+	"net":           {"Dial": true, "DialTimeout": true},
+	"crypto/tls":    {"Dial": true, "DialWithDialer": true},
+	"net/smtp":      {"SendMail": true},
+}
+
+// methodWaits are the methods of the standard library that wait on the
+// outside, with the number of arguments they take: without type checking
+// the receiver is not known, and the count keeps apart a method of the same
+// name with another signature (http.Client.Do takes one argument; the
+// program's HTTPSClient.Do takes three and is found through its body). The
+// methods Get and Head of http.Client are not listed: they cannot be told
+// from url.Values.Get and http.Header.Get by the count; the program's
+// clients go through Do or Dial.
+var methodWaits = map[string]int{
+	"Do": 1, "Post": 3, "PostForm": 2, "Dial": 2, "DialContext": 3, "Handshake": 0,
 }
 
 // txFuncs is what checkWriteCallbacks knows about the functions of the
@@ -219,6 +246,13 @@ type txFuncs struct {
 	// txNames are the names of the declared functions that take a
 	// models.Writer: passing one of them to Write is a write transaction.
 	txNames map[string]bool
+	// methodKeys maps a method name to the keys it is declared under (one
+	// per number of parameters).
+	methodKeys map[string][]string
+	// dbNames are the names declared with the type *modules.DB (fields,
+	// parameters, variables, and the results of OpenSQLite): Close through
+	// one of them closes a handle.
+	dbNames map[string]bool
 }
 
 // isWriterType reports whether e is the type models.Writer as the file
@@ -246,12 +280,51 @@ func takesWriter(ft *ast.FuncType, imports map[string]string) bool {
 	return false
 }
 
+// paramCount returns the number of parameters of ft and whether the last
+// one is variadic.
+func paramCount(ft *ast.FuncType) (int, bool) {
+	if ft.Params == nil {
+		return 0, false
+	}
+	n, variadic := 0, false
+	for _, p := range ft.Params.List {
+		if len(p.Names) == 0 {
+			n++
+		} else {
+			n += len(p.Names)
+		}
+		_, variadic = p.Type.(*ast.Ellipsis)
+	}
+	return n, variadic
+}
+
+// methodKey returns the key a method declaration is kept under: ".Name/N"
+// with N its number of parameters, ".Name/vN" when the last one is
+// variadic.
+func methodKey(fd *ast.FuncDecl) string {
+	n, variadic := paramCount(fd.Type)
+	if variadic {
+		return fmt.Sprintf(".%s/v%d", fd.Name.Name, n)
+	}
+	return fmt.Sprintf(".%s/%d", fd.Name.Name, n)
+}
+
+// shownKey returns a key as the problems name it: the function or method
+// name, without the leading dot of a method and its parameter count.
+func shownKey(k string) string {
+	k = strings.TrimPrefix(k, ".")
+	if i := strings.Index(k, "/"); i >= 0 {
+		k = k[:i]
+	}
+	return k
+}
+
 // calleeKeys returns the keys under which the function that call calls is
 // declared in the packages read: "pkg.Name" for a function of the package
-// pkg, ".Name" for a method (its receiver type is not known without type
-// checking, so every method of that name counts). A call of another
-// package (models included) has no key.
-func calleeKeys(call *ast.CallExpr, pkg string, imports map[string]string) []string {
+// pkg; for a method (its receiver type is not known without type
+// checking) every method of that name whose parameters the arguments can
+// fill. A call of another package (models included) has no key.
+func (fs *txFuncs) calleeKeys(call *ast.CallExpr, pkg string, imports map[string]string) []string {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
 		return []string{pkg + "." + fn.Name}
@@ -270,35 +343,108 @@ func calleeKeys(call *ast.CallExpr, pkg string, imports map[string]string) []str
 				return nil
 			}
 		}
-		return []string{"." + fn.Sel.Name}
+		args := len(call.Args)
+		// f(g()) passes all results of g: the count of the call says
+		// nothing then.
+		spread := false
+		if args == 1 {
+			_, spread = call.Args[0].(*ast.CallExpr)
+		}
+		var keys []string
+		for _, k := range fs.methodKeys[fn.Sel.Name] {
+			n, variadic := paramCount(fs.decls[k][0].Type)
+			if spread || n == args || variadic && args >= n-1 {
+				keys = append(keys, k)
+			}
+		}
+		return keys
 	}
 	return nil
 }
 
-// callName returns the name a call is made through (the identifier or the
-// selected name), and whether it is time.Sleep.
-func callName(call *ast.CallExpr, imports map[string]string) (string, bool) {
+// callName returns the name a call is made through: the identifier or the
+// selected name.
+func callName(call *ast.CallExpr) string {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
-		return fn.Name, false
+		return fn.Name
 	case *ast.SelectorExpr:
-		if x, ok := fn.X.(*ast.Ident); ok && imports["time"] != "" && x.Name == imports["time"] && fn.Sel.Name == "Sleep" {
-			return "time.Sleep", true
-		}
-		return fn.Sel.Name, false
+		return fn.Sel.Name
 	}
-	return "", false
+	return ""
+}
+
+// lastName returns the last name of the expression x (v of v, f of a.b.f),
+// or "".
+func lastName(x ast.Expr) string {
+	switch x := x.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		return x.Sel.Name
+	}
+	return ""
+}
+
+// isDBType reports whether e is *DB in the package modules, or *X.DB with X
+// the file's name for it.
+func isDBType(e ast.Expr, pkg string, imports map[string]string) bool {
+	star, ok := e.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	switch t := star.X.(type) {
+	case *ast.Ident:
+		return pkg == "modules" && t.Name == "DB"
+	case *ast.SelectorExpr:
+		x, ok := t.X.(*ast.Ident)
+		return ok && t.Sel.Name == "DB" && imports[importModules] != "" && x.Name == imports[importModules]
+	}
+	return false
+}
+
+// collectDBNames adds to fs.dbNames the names f declares with the type
+// *modules.DB, and the names the result of OpenSQLite is assigned to.
+func (fs *txFuncs) collectDBNames(f *ast.File, imports map[string]string) {
+	pkg := f.Name.Name
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.Field:
+			if isDBType(n.Type, pkg, imports) {
+				for _, name := range n.Names {
+					fs.dbNames[name.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			if n.Type != nil && isDBType(n.Type, pkg, imports) {
+				for _, name := range n.Names {
+					fs.dbNames[name.Name] = true
+				}
+			}
+		case *ast.AssignStmt:
+			if len(n.Rhs) == 1 && len(n.Lhs) > 0 {
+				if call, ok := n.Rhs[0].(*ast.CallExpr); ok && callName(call) == "OpenSQLite" {
+					if name := lastName(n.Lhs[0]); name != "" && name != "_" {
+						fs.dbNames[name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
 }
 
 // reachesHandleDirectly returns how call itself asks for a database, or "":
-// a statement through Read(), a Write with a transaction function, or an
-// open (OpenSQLite).
+// a statement through Read(), a Write with a transaction function, an open
+// (OpenSQLite) or a Close of a handle.
 func (fs *txFuncs) reachesHandleDirectly(call *ast.CallExpr, imports map[string]string) string {
-	name, _ := callName(call, imports)
-	_, isSel := call.Fun.(*ast.SelectorExpr)
+	name := callName(call)
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
 	switch {
 	case name == "OpenSQLite":
 		return "OpenSQLite"
+	case isSel && name == "Close" && len(call.Args) == 0 && fs.dbNames[lastName(sel.X)]:
+		return "Close"
 	case isSel && name == "Read" && len(call.Args) == 0:
 		return "Read()"
 	case isSel && name == "Write" && len(call.Args) == 1:
@@ -322,14 +468,32 @@ func (fs *txFuncs) reachesHandleDirectly(call *ast.CallExpr, imports map[string]
 
 // waitsOutsideDirectly returns the outside operation call is, or "".
 func waitsOutsideDirectly(call *ast.CallExpr, imports map[string]string) string {
-	name, sleep := callName(call, imports)
-	if sleep || outsideWaits[name] {
-		return name
-	}
-	// A call through the field Transport (rt.Transport.Sync) reaches the
-	// central.
-	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-		if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "Transport" {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		if outsideWaits[fn.Name] {
+			return fn.Name
+		}
+	case *ast.SelectorExpr:
+		if x, ok := fn.X.(*ast.Ident); ok {
+			for path, names := range packageWaits {
+				if imports[path] == "" || x.Name != imports[path] {
+					continue
+				}
+				if names[fn.Sel.Name] {
+					return path[strings.LastIndex(path, "/")+1:] + "." + fn.Sel.Name
+				}
+				return ""
+			}
+		}
+		if outsideWaits[fn.Sel.Name] {
+			return fn.Sel.Name
+		}
+		if n, ok := methodWaits[fn.Sel.Name]; ok && n == len(call.Args) {
+			return fn.Sel.Name
+		}
+		// A call through the field Transport (rt.Transport.Sync) reaches
+		// the central.
+		if inner, ok := fn.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "Transport" {
 			return "Transport"
 		}
 	}
@@ -362,9 +526,9 @@ func (fs *txFuncs) closure(direct func(*ast.CallExpr, map[string]string) string)
 						found = s
 						return false
 					}
-					for _, k := range calleeKeys(call, pkg, imports) {
+					for _, k := range fs.calleeKeys(call, pkg, imports) {
 						if s, ok := how[k]; ok && k != key {
-							found = strings.TrimPrefix(k, ".") + " -> " + s
+							found = shownKey(k) + " -> " + s
 							return false
 						}
 					}
@@ -390,11 +554,13 @@ func (fs *txFuncs) closure(direct func(*ast.CallExpr, map[string]string) string)
 // functions it checked.
 func checkWriteCallbacks(fset *token.FileSet, files []*ast.File) ([]string, int) {
 	fs := &txFuncs{fset: fset, decls: map[string][]*ast.FuncDecl{}, declPkg: map[*ast.FuncDecl]string{},
-		declImports: map[*ast.FuncDecl]map[string]string{}, txNames: map[string]bool{}}
+		declImports: map[*ast.FuncDecl]map[string]string{}, txNames: map[string]bool{},
+		methodKeys: map[string][]string{}, dbNames: map[string]bool{}}
 	fileImports := map[*ast.File]map[string]string{}
 	for _, f := range files {
 		imports := importNames(f)
 		fileImports[f] = imports
+		fs.collectDBNames(f, imports)
 		pkg := f.Name.Name
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
@@ -403,7 +569,10 @@ func checkWriteCallbacks(fset *token.FileSet, files []*ast.File) ([]string, int)
 			}
 			key := pkg + "." + fd.Name.Name
 			if fd.Recv != nil {
-				key = "." + fd.Name.Name
+				key = methodKey(fd)
+				if len(fs.decls[key]) == 0 {
+					fs.methodKeys[fd.Name.Name] = append(fs.methodKeys[fd.Name.Name], key)
+				}
 			}
 			fs.decls[key] = append(fs.decls[key], fd)
 			fs.declPkg[fd] = pkg
@@ -433,12 +602,12 @@ func checkWriteCallbacks(fset *token.FileSet, files []*ast.File) ([]string, int)
 			if s := waitsOutsideDirectly(call, imports); s != "" {
 				problems = append(problems, fmt.Sprintf("%s: inside a write transaction waits on the outside (%s)", where, s))
 			}
-			for _, k := range calleeKeys(call, pkg, imports) {
+			for _, k := range fs.calleeKeys(call, pkg, imports) {
 				if s, ok := reaches[k]; ok {
-					problems = append(problems, fmt.Sprintf("%s: inside a write transaction calls %s, which asks for a database (%s)", where, strings.TrimPrefix(k, "."), s))
+					problems = append(problems, fmt.Sprintf("%s: inside a write transaction calls %s, which asks for a database (%s)", where, shownKey(k), s))
 				}
 				if s, ok := waits[k]; ok {
-					problems = append(problems, fmt.Sprintf("%s: inside a write transaction calls %s, which waits on the outside (%s)", where, strings.TrimPrefix(k, "."), s))
+					problems = append(problems, fmt.Sprintf("%s: inside a write transaction calls %s, which waits on the outside (%s)", where, shownKey(k), s))
 				}
 			}
 			return true
@@ -490,8 +659,14 @@ func TestWriteCallbacksUseOnlyTheirTransaction(t *testing.T) {
 // TestWriteCallbacksFindsNestedUse proves that the check above fails for
 // each way a transaction could reach a database again or wait outside.
 func TestWriteCallbacksFindsNestedUse(t *testing.T) {
-	const head = "package workers\n\nimport (\n\t\"time\"\n\t\"mimamori/app/models\"\n\t\"mimamori/app/modules\"\n)\n\n" +
-		"type core struct{ db *modules.DB }\n" +
+	const head = "package workers\n\nimport (\n\t\"net\"\n\t\"net/http\"\n\t\"os\"\n\t\"os/exec\"\n\t\"path/filepath\"\n\t\"time\"\n" +
+		"\t\"mimamori/app/models\"\n\t\"mimamori/app/modules\"\n)\n\n" +
+		"type core struct{ db *modules.DB; web *http.Client; cl *client }\n" +
+		"type client struct{ addr string }\n" +
+		"func (c *client) Do(method, path string, body []byte) error { var d net.Dialer; _, err := d.Dial(\"tcp\", c.addr); return err }\n" +
+		"func (c *client) JSON(method, path string, in, out any) error { return c.Do(method, path, nil) }\n" +
+		"type content struct{}\n" +
+		"func (content) JSON() string { return \"\" }\n" +
 		"func (c *core) load() string { v, _ := models.Get(c.db.Read()); return v }\n" +
 		"func (c *core) save() error { return c.db.Write(func(tx models.Writer) error { return nil }) }\n" +
 		"func (c *core) saveVia() error { return c.save() }\n" +
@@ -514,6 +689,18 @@ func TestWriteCallbacksFindsNestedUse(t *testing.T) {
 		{"a mail through a function", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { c.mail(); return nil }) }", "calls mail, which waits on the outside (sendMail)"},
 		{"the central", "func (c *core) f(rt *modules.AgentRuntime) error { return c.db.Write(func(tx models.Writer) error { rt.Transport.Sync(nil); return nil }) }", "waits on the outside (Transport)"},
 		{"a password hash", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { modules.HashPassword(\"\"); return nil }) }", "waits on the outside (HashPassword)"},
+		{"a file walk", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { return filepath.WalkDir(\".\", nil) }) }", "waits on the outside (filepath.WalkDir)"},
+		{"a scan", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { _, err := modules.ScanWritable(\"/\", nil, nil, \"\"); return err }) }", "waits on the outside (ScanWritable)"},
+		{"a mail sent directly", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { return modules.SendMailTo(modules.SMTPConfig{}, nil, \"\", \"\") }) }", "waits on the outside (SendMailTo)"},
+		{"an external program", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { return exec.Command(\"true\").Run() }) }", "waits on the outside (exec.Command)"},
+		{"an HTTP request", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { _, err := http.Get(\"x\"); return err }) }", "waits on the outside (http.Get)"},
+		{"an HTTP client request", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { _, err := c.web.Do(nil); return err }) }", "waits on the outside (Do)"},
+		{"the agent's client", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { return c.cl.JSON(\"POST\", \"/x\", nil, nil) }) }", "calls JSON, which waits on the outside (Do -> Dial)"},
+		{"a method of the same name", "func (c *core) f(r content) error { return c.db.Write(func(tx models.Writer) error { _ = r.JSON(); return nil }) }", ""},
+		{"close of the handle", "func (c *core) f() error { return c.db.Write(func(tx models.Writer) error { return c.db.Close() }) }", "asks for a database (Close)"},
+		{"close of another handle", "func (c *core) f(e *modules.DB) error { return c.db.Write(func(tx models.Writer) error { return e.Close() }) }", "asks for a database (Close)"},
+		{"close of an opened handle", "func (c *core) f() error { h, _ := modules.OpenSQLite(\"x\", \"y\"); return c.db.Write(func(tx models.Writer) error { return h.Close() }) }", "asks for a database (Close)"},
+		{"close of a file", "func (c *core) f() error { fh, _ := os.Open(\"x\"); return c.db.Write(func(tx models.Writer) error { return fh.Close() }) }", ""},
 	}
 	for _, tc := range cases {
 		fset := token.NewFileSet()
