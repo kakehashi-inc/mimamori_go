@@ -567,7 +567,7 @@ func TestEnglishUnchanged(t *testing.T) {
 	}
 	MigrationsFS = os.DirFS("../..")
 	for i, ch := range englishConfigChanges {
-		db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+		db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 		if err != nil {
 			t.Fatal(err)
 		}

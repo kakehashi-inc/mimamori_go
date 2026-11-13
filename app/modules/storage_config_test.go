@@ -2,7 +2,6 @@ package modules
 
 import (
 	"bufio"
-	"database/sql"
 	"net"
 	"net/smtp"
 	"os"
@@ -23,7 +22,7 @@ func TestOpenSQLitePathCharacters(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			parent := t.TempDir()
 			path := filepath.Join(parent, name, "central.db")
-			db, err := OpenSQLitePool(path, SchemaCentral)
+			db, err := OpenSQLite(path, SchemaCentral)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +43,7 @@ func TestOpenSQLitePathCharacters(t *testing.T) {
 func TestOpenSQLiteKeepsExistingMode(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	path := filepath.Join(t.TempDir(), "central.db")
-	db, err := OpenSQLitePool(path, SchemaCentral)
+	db, err := OpenSQLite(path, SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func TestOpenSQLiteKeepsExistingMode(t *testing.T) {
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	db, err = OpenSQLitePool(path, SchemaCentral)
+	db, err = OpenSQLite(path, SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +94,8 @@ func TestAcquireLockWaitsForStatusCheck(t *testing.T) {
 
 // applyConfig applies configuration changes in one transaction, as the
 // commands and the settings screen do.
-func applyConfig(db *sql.DB, set map[string]string, unset []string) (changed []string, err error) {
-	err = withLocalTx(db, func(tx models.Writer) error {
+func applyConfig(db *DB, set map[string]string, unset []string) (changed []string, err error) {
+	err = db.Write(func(tx models.Writer) error {
 		changed, err = ApplyCentralConfigChanges(tx, set, unset)
 		return err
 	})
@@ -106,7 +105,7 @@ func applyConfig(db *sql.DB, set map[string]string, unset []string) (changed []s
 // TestCentralConfigValidation checks the checks made when items are saved.
 func TestCentralConfigValidation(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +149,7 @@ func TestCentralConfigValidation(t *testing.T) {
 			t.Errorf("%s = %q rejected: %v", name, v, err)
 		}
 	}
-	cfg, err := LoadCentralConfig(db)
+	cfg, err := LoadCentralConfig(db.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,17 +163,17 @@ func TestCentralConfigValidation(t *testing.T) {
 // still be corrected one item at a time.
 func TestCentralConfigRepairable(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	for k, v := range map[string]string{"retention_days": "200000", "server_names": "a b", "web_listen": "127.0.0.1:0"} {
-		if err := models.SetSetting(db, configKeyPrefix+k, v); err != nil {
+		if err := db.Write(func(tx models.Writer) error { return models.SetSetting(tx, configKeyPrefix+k, v) }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := LoadCentralConfig(db); err == nil {
+	if _, err := LoadCentralConfig(db.Read()); err == nil {
 		t.Fatal("invalid stored values loaded")
 	}
 	if _, err := applyConfig(db, map[string]string{"workers": "65"}, nil); err == nil {
@@ -189,7 +188,7 @@ func TestCentralConfigRepairable(t *testing.T) {
 	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19102"}, nil); err != nil {
 		t.Fatalf("correction rejected: %v", err)
 	}
-	if _, err := LoadCentralConfig(db); err != nil {
+	if _, err := LoadCentralConfig(db.Read()); err != nil {
 		t.Fatalf("corrected configuration not loaded: %v", err)
 	}
 }
@@ -313,18 +312,20 @@ func TestSendMailLoginWithoutEncryption(t *testing.T) {
 // any unknown name.
 func TestRemovedConfigItemIgnored(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := models.SetSetting(db, configKeyPrefix+"smtp.to", "not a mail address"); err != nil {
+	if err := db.Write(func(tx models.Writer) error {
+		return models.SetSetting(tx, configKeyPrefix+"smtp.to", "not a mail address")
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadCentralConfig(db); err != nil {
+	if _, err := LoadCentralConfig(db.Read()); err != nil {
 		t.Fatalf("stored smtp.to not ignored: %v", err)
 	}
-	if _, stored, err := CentralConfigState(db); err != nil || stored["smtp.to"] {
+	if _, stored, err := CentralConfigState(db.Read()); err != nil || stored["smtp.to"] {
 		t.Fatalf("state: %v %v", stored, err)
 	}
 	if _, err := applyConfig(db, map[string]string{"retention_days": "30"}, nil); err != nil {
@@ -342,33 +343,33 @@ func TestRemovedConfigItemIgnored(t *testing.T) {
 // text central status prints from it.
 func TestRunningConfigStatus(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if LoadRunningConfig(db) != nil {
+	if LoadRunningConfig(db.Read()) != nil {
 		t.Fatal("record without a start")
 	}
 	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "workers": "2"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	started, err := LoadCentralConfig(db)
+	started, err := LoadCentralConfig(db.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveRunningConfig(db, started); err != nil {
+	if err := db.Write(func(tx models.Writer) error { return SaveRunningConfig(tx, started) }); err != nil {
 		t.Fatal(err)
 	}
 	// A change saved while running waits for a restart.
 	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19612", "workers": "3"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := LoadCentralConfig(db)
+	saved, err := LoadCentralConfig(db.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := LoadRunningConfig(db)
+	run := LoadRunningConfig(db.Read())
 	if run["web_listen"] != "127.0.0.1:19610" || run["workers"] != "2" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
 		t.Fatalf("record: %v", run)
 	}
@@ -391,7 +392,7 @@ func TestRunningConfigStatus(t *testing.T) {
 	if _, ok := statusValue("workers", "", nil, nil); ok {
 		t.Error("value without saved or running configuration")
 	}
-	if err := ClearRunningConfig(db); err != nil || LoadRunningConfig(db) != nil {
+	if err := db.Write(ClearRunningConfig); err != nil || LoadRunningConfig(db.Read()) != nil {
 		t.Fatalf("clear: %v", err)
 	}
 }

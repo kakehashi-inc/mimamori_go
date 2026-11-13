@@ -41,34 +41,19 @@ func localOperator() string {
 }
 
 // openCentralDBLocal opens the central database directly on the central
-// host. Access is controlled by the permissions of the data directory.
-func openCentralDBLocal() (*sql.DB, error) {
+// host. Access is controlled by the permissions of the data directory. The
+// central may be running: its transactions and those of the command meet at
+// SQLite's lock, and the command waits for the central's for DBLockWaitMS.
+func openCentralDBLocal() (*DB, error) {
 	dir := DataDir()
 	if err := EnsureDataDir(dir); err != nil {
 		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
 	}
-	db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 	if err != nil {
 		return nil, DBOpenFailed(err, ExitConfig, "database")
 	}
 	return db, nil
-}
-
-// withLocalTx runs fn in one transaction of a database of this host (the
-// central database for the central's commands, the local database of an
-// agent): its changes are saved only when fn succeeds. Errors are returned
-// as they are (as before the transaction, a failing statement ends the
-// command with its own text).
-func withLocalTx(db *sql.DB, fn func(tx models.Writer) error) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // insertLocalHistory records the history row of a command on the central
@@ -121,7 +106,9 @@ func (c *CentralInitAdminCmd) Run() error {
 		return err
 	}
 	defer db.Close()
-	n, err := models.CountAdmins(db)
+	// Checked before the password is asked for, and again in the transaction
+	// that creates the account.
+	n, err := models.CountAdmins(db.Read())
 	if err != nil {
 		return err
 	}
@@ -138,7 +125,7 @@ func (c *CentralInitAdminCmd) Run() error {
 	}
 	a := &models.Account{Email: email, DisplayName: display, Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
 	// The account and its history row are written together or not at all.
-	err = withLocalTx(db, func(tx models.Writer) error {
+	err = db.Write(func(tx models.Writer) error {
 		// Checked again under the write lock: another command may have
 		// created an administrator while the password was typed.
 		if n, err := models.CountAdmins(tx); err != nil {
@@ -172,7 +159,10 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	defer db.Close()
 	email := strings.TrimSpace(c.Email)
-	a, err := models.GetAccountByEmail(db, email)
+	// Read on the read side: the password is typed between the read and the
+	// write. The updates are by the account's ID and fail when the account
+	// was deleted meanwhile.
+	a, err := models.GetAccountByEmail(db.Read(), email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return NewExitErrorf(ExitArgument, "account %q not found", email)
 	}
@@ -192,7 +182,7 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	// The new password, the enabling, the revocation and the history row
 	// are written together or not at all.
-	err = withLocalTx(db, func(tx models.Writer) error {
+	err = db.Write(func(tx models.Writer) error {
 		if err := models.UpdateAccountPassword(tx, a.ID, hash); err != nil {
 			return err
 		}

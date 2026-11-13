@@ -70,15 +70,15 @@ func (c *CentralStatusCmd) Run() error {
 	fmt.Printf("%-16s %s\n", "data dir:", dir)
 	dbPath := filepath.Join(dir, CentralDBFileName)
 	if _, err := os.Stat(dbPath); err == nil {
-		if db, err := OpenSQLitePool(dbPath, SchemaCentral); IsOtherBuildDB(err) {
+		if db, err := OpenSQLite(dbPath, SchemaCentral); IsOtherBuildDB(err) {
 			return DBOpenFailed(err, ExitConfig, "database")
 		} else if err == nil {
-			cfg, cfgErr := LoadCentralConfig(db)
+			cfg, cfgErr := LoadCentralConfig(db.Read())
 			// While the central runs, the values it started with are shown;
 			// a saved value that differs takes effect after a restart.
 			var runningValues map[string]string
 			if running {
-				runningValues = LoadRunningConfig(db)
+				runningValues = LoadRunningConfig(db.Read())
 			}
 			db.Close()
 			if cfgErr != nil {

@@ -60,11 +60,11 @@ func (c *CtlCmd) client() (*ctlClient, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, NewExitErrorf(ExitConfig, "central database: %v", err)
 	}
-	db, err := OpenSQLitePool(dbPath, SchemaCentral)
+	db, err := OpenSQLite(dbPath, SchemaCentral)
 	if err != nil {
 		return nil, DBOpenFailed(err, ExitConfig, "central database")
 	}
-	cfg, err := LoadCentralConfig(db)
+	cfg, err := LoadCentralConfig(db.Read())
 	db.Close()
 	if err != nil {
 		return nil, NewExitError(ExitConfig, err.Error())

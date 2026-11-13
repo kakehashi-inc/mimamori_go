@@ -191,43 +191,51 @@ func TestTwoStepTrustDaysConfig(t *testing.T) {
 
 func TestRevokeAccountAuth(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(t.TempDir()+"/central.db", SchemaCentral)
+	db, err := OpenSQLite(t.TempDir()+"/central.db", SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	now := time.Now().Unix()
 	ids := make([]int64, 2)
-	for i, email := range []string{"a@example.com", "b@example.com"} {
-		a := &models.Account{Email: email, DisplayName: "x", PasswordHash: "h", Role: models.RoleViewer}
-		if err := models.InsertAccount(db, a); err != nil {
-			t.Fatal(err)
-		}
-		ids[i] = a.ID
-		for _, s := range []string{"s1", "s2"} {
-			if err := models.InsertSession(db, &models.Session{ID: email + s, AccountID: a.ID, CreatedAt: now, ExpiresAt: now + 60, LastSeenAt: now}); err != nil {
-				t.Fatal(err)
+	err = db.Write(func(tx models.Writer) error {
+		for i, email := range []string{"a@example.com", "b@example.com"} {
+			a := &models.Account{Email: email, DisplayName: "x", PasswordHash: "h", Role: models.RoleViewer}
+			if err := models.InsertAccount(tx, a); err != nil {
+				return err
+			}
+			ids[i] = a.ID
+			for _, s := range []string{"s1", "s2"} {
+				if err := models.InsertSession(tx, &models.Session{ID: email + s, AccountID: a.ID, CreatedAt: now, ExpiresAt: now + 60, LastSeenAt: now}); err != nil {
+					return err
+				}
+			}
+			if err := models.InsertBrowserVerification(tx, &models.BrowserVerification{ID: email + "v", AccountID: a.ID, CreatedAt: now, ExpiresAt: now + 60}); err != nil {
+				return err
+			}
+			if err := models.InsertAuthCode(tx, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: a.ID, ChallengeHash: email, CodeHash: "c", CreatedAt: now, ExpiresAt: now + 60}); err != nil {
+				return err
 			}
 		}
-		if err := models.InsertBrowserVerification(db, &models.BrowserVerification{ID: email + "v", AccountID: a.ID, CreatedAt: now, ExpiresAt: now + 60}); err != nil {
-			t.Fatal(err)
-		}
-		if err := models.InsertAuthCode(db, &models.AuthCode{Purpose: models.CodePurposeLogin, AccountID: a.ID, ChallengeHash: email, CodeHash: "c", CreatedAt: now, ExpiresAt: now + 60}); err != nil {
-			t.Fatal(err)
-		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := models.InsertAccount(db, &models.Account{Email: "A@EXAMPLE.COM", DisplayName: "dup", PasswordHash: "h", Role: models.RoleViewer}); err == nil {
+	if err := db.Write(func(tx models.Writer) error {
+		return models.InsertAccount(tx, &models.Account{Email: "A@EXAMPLE.COM", DisplayName: "dup", PasswordHash: "h", Role: models.RoleViewer})
+	}); err == nil {
 		t.Fatal("e-mail addresses must be unique without regard to case")
 	}
-	if a, err := models.GetAccountByEmail(db, "B@Example.com"); err != nil || a.ID != ids[1] {
+	if a, err := models.GetAccountByEmail(db.Read(), "B@Example.com"); err != nil || a.ID != ids[1] {
 		t.Fatalf("lookup without regard to case: %v %v", a, err)
 	}
-	if err := RevokeAccountAuth(db, ids[0], "a@example.coms1"); err != nil {
+	if err := db.Write(func(tx models.Writer) error { return RevokeAccountAuth(tx, ids[0], "a@example.coms1") }); err != nil {
 		t.Fatal(err)
 	}
 	count := func(q string, id int64) int {
 		var n int
-		_ = db.QueryRow(q, id).Scan(&n)
+		_ = db.Read().QueryRow(q, id).Scan(&n)
 		return n
 	}
 	for i, want := range [][3]int{{1, 0, 0}, {2, 1, 1}} {
@@ -241,12 +249,17 @@ func TestRevokeAccountAuth(t *testing.T) {
 		}
 	}
 	// Code bookkeeping used by the login and e-mail address change steps.
-	c, err := models.GetLoginCodeByChallenge(db, "b@example.com")
+	c, err := models.GetLoginCodeByChallenge(db.Read(), "b@example.com")
 	if err != nil || c.AccountID != ids[1] {
 		t.Fatalf("code by challenge: %v %v", c, err)
 	}
 	for want := 1; want <= 2; want++ {
-		if n, err := models.RecordAuthCodeAttempt(db, c.ID); err != nil || n != want {
+		var n int
+		err := db.Write(func(tx models.Writer) (err error) {
+			n, err = models.RecordAuthCodeAttempt(tx, c.ID)
+			return err
+		})
+		if err != nil || n != want {
 			t.Fatalf("attempt %d: %d %v", want, n, err)
 		}
 	}
@@ -257,14 +270,21 @@ func TestRevokeAccountAuth(t *testing.T) {
 		now  int64
 		want bool
 	}{{2, now, false}, {3, now + 60, false}, {3, now, true}, {3, now, false}} {
-		if ok, err := models.ConsumeAuthCode(db, c.ID, tc.max, tc.now); err != nil || ok != tc.want {
+		var ok bool
+		err := db.Write(func(tx models.Writer) (err error) {
+			ok, err = models.ConsumeAuthCode(tx, c.ID, tc.max, tc.now)
+			return err
+		})
+		if err != nil || ok != tc.want {
 			t.Fatalf("consume (max %d, now %d): %v %v, want %v", tc.max, tc.now-now, ok, err, tc.want)
 		}
 	}
-	if err := models.DeleteExpiredAuthCodes(db, now+61); err != nil {
-		t.Fatal(err)
-	}
-	if err := models.DeleteExpiredBrowserVerifications(db, now+61); err != nil {
+	if err := db.Write(func(tx models.Writer) error {
+		if err := models.DeleteExpiredAuthCodes(tx, now+61); err != nil {
+			return err
+		}
+		return models.DeleteExpiredBrowserVerifications(tx, now+61)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if count(`SELECT COUNT(*) FROM auth_codes WHERE account_id = ?`, ids[1])+count(`SELECT COUNT(*) FROM browser_verifications WHERE account_id = ?`, ids[1]) != 0 {

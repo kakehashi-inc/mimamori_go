@@ -313,7 +313,7 @@ func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
 		t.Run(schema, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), schema+".db")
 			MigrationsFS = repo
-			db, err := OpenSQLitePool(path, schema)
+			db, err := OpenSQLite(path, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -330,16 +330,16 @@ func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
 					"-- +goose Down\n-- +goose StatementBegin\nDROP TABLE upgrade_check;\n-- +goose StatementEnd\n")}
 			MigrationsFS = next
 			defer func() { MigrationsFS = repo }()
-			db, err = OpenSQLitePool(path, schema)
+			db, err = OpenSQLite(path, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer db.Close()
 			var v int64
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version`).Scan(&v); err != nil || v != 9999 {
+			if err := db.Read().QueryRow(`SELECT MAX(version_id) FROM goose_db_version`).Scan(&v); err != nil || v != 9999 {
 				t.Fatalf("schema version %d, %v", v, err)
 			}
-			if _, err := db.Exec(`INSERT INTO upgrade_check (id) VALUES (1)`); err != nil {
+			if err := execWrite(db, `INSERT INTO upgrade_check (id) VALUES (1)`); err != nil {
 				t.Fatalf("new table missing: %v", err)
 			}
 		})

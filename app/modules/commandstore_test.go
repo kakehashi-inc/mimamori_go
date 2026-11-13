@@ -11,7 +11,7 @@ import (
 
 func TestCommandSetRowsRoundTrip(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "target.db"), SchemaAgentDB)
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "target.db"), SchemaAgentDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestCommandSetRowsRoundTrip(t *testing.T) {
 		`{"name":"e","purpose":"run_only","os_user":"root","commands":[{"command_line":"true"}]}`,
 	}
 	var empty string
-	if empty, err = TargetCommandSignature(db); err != nil {
+	if empty, err = TargetCommandSignature(db.Read()); err != nil {
 		t.Fatal(err)
 	}
 	for _, js := range specs {
@@ -40,13 +40,15 @@ func TestCommandSetRowsRoundTrip(t *testing.T) {
 			t.Fatalf("%s: %v", spec.Name, errs)
 		}
 		row, items := CommandSetRows(spec)
-		if err := models.InsertCommandSet(db, row, 1); err != nil {
+		if err := db.Write(func(tx models.Writer) error {
+			if err := models.InsertCommandSet(tx, row, 1); err != nil {
+				return err
+			}
+			return models.ReplaceCommandItems(tx, row.ID, items)
+		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := models.ReplaceCommandItems(db, row.ID, items); err != nil {
-			t.Fatal(err)
-		}
-		def, _, err := LoadCommandSet(db, row.ID)
+		def, _, err := LoadCommandSet(db.Read(), row.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,18 +56,18 @@ func TestCommandSetRowsRoundTrip(t *testing.T) {
 			t.Fatalf("round trip of %s:\n got %+v\nwant %+v", spec.Name, def.CommandSetSpec, *spec)
 		}
 	}
-	defs, err := LoadCommandDefinitions(db)
+	defs, err := LoadCommandDefinitions(db.Read())
 	if err != nil || len(defs.Sets) != len(specs) {
 		t.Fatalf("definitions: %v %d", err, len(defs.Sets))
 	}
-	sig, _ := TargetCommandSignature(db)
+	sig, _ := TargetCommandSignature(db.Read())
 	if sig != defs.Signature || sig == empty {
 		t.Fatalf("signature %s / %s / %s", sig, defs.Signature, empty)
 	}
-	if err := models.DeleteCommandSet(db, defs.Sets[0].ID, "x", 2); err != nil {
+	if err := db.Write(func(tx models.Writer) error { return models.DeleteCommandSet(tx, defs.Sets[0].ID, "x", 2) }); err != nil {
 		t.Fatal(err)
 	}
-	if after, _ := TargetCommandSignature(db); after == sig {
+	if after, _ := TargetCommandSignature(db.Read()); after == sig {
 		t.Fatal("signature unchanged after a delete")
 	}
 }

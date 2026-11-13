@@ -84,12 +84,12 @@ func TestCLIHistoryEntriesCoded(t *testing.T) {
 	if err := (&CentralConfigUnsetCmd{Name: "server_names"}).Run(); err != nil {
 		t.Fatal(err)
 	}
-	db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	items, _, err := models.ListHistory(db, "", "", nil, 10, 0)
+	items, _, err := models.ListHistory(db.Read(), "", "", nil, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

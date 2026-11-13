@@ -50,7 +50,7 @@ func (c *CentralConfigListCmd) Run() error {
 		return err
 	}
 	defer db.Close()
-	cfg, stored, err := CentralConfigState(db)
+	cfg, stored, err := CentralConfigState(db.Read())
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
@@ -97,7 +97,7 @@ func (c *CentralConfigGetCmd) Run() error {
 		return err
 	}
 	defer db.Close()
-	cfg, _, err := CentralConfigState(db)
+	cfg, _, err := CentralConfigState(db.Read())
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
@@ -134,7 +134,7 @@ func (c *CentralConfigSetCmd) Run() error {
 	defer db.Close()
 	// The change and its history row are saved together or not at all.
 	var changed []string
-	err = withLocalTx(db, func(tx models.Writer) error {
+	err = db.Write(func(tx models.Writer) error {
 		var err error
 		if changed, err = ApplyCentralConfigChanges(tx, map[string]string{f.Name: value}, nil); err != nil || len(changed) == 0 {
 			return err
@@ -179,7 +179,7 @@ func (c *CentralConfigUnsetCmd) Run() error {
 	}
 	// The change and its history row are saved together or not at all.
 	var changed []string
-	err = withLocalTx(db, func(tx models.Writer) error {
+	err = db.Write(func(tx models.Writer) error {
 		var err error
 		if changed, err = ApplyCentralConfigChanges(tx, nil, []string{f.Name}); err != nil || len(changed) == 0 {
 			return err
