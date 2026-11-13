@@ -606,9 +606,9 @@
             "builtin_disabled": "内蔵エージェントが無効のため、監査ルールを削除しました。",
             "cleared_by_init": "エージェントの初期化で、保存していた監視ルールを消去しました。適用する監視ルールは次の同期で決まります。",
             "failed_file_unknown": "監査ルールを適用できなかったため、以前の状態に戻しました。ただし {{file}} は変更前に読めなかったため戻していません（{{detail}}）: {{cause}}",
-            "failed_partly_restored": "監査ルールを適用できず、以前の状態にも完全には戻せませんでした（{{count}} 個の手順が失敗。読み込まれているルールを auditctl -l で確認してください）: {{cause}}",
+            "failed_partly_restored": "監査ルールを適用できず、以前の状態にも完全には戻せませんでした（失敗した手順: {{count}} 件。読み込まれている監査ルールを auditctl -l で確認してください）: {{cause}}",
             "failed_restored": "監査ルールを適用できなかったため、以前の状態に戻しました: {{cause}}",
-            "global_settings": "全体の設定が反映されていません（failure {{failure}}、backlog_wait_time {{wait}}）。",
+            "global_settings": "監査の全体の設定が反映されていません（failure {{failure}}、backlog_wait_time {{wait}}）。",
             "globals_record_failed": "変更前の監査の全体の設定を記録できませんでした: {{cause}}",
             "globals_restore_failed": "監査ルールは削除しましたが、監査の全体の設定を元に戻せませんでした（backlog_limit {{limit}}、backlog_wait_time {{wait}}、failure {{failure}}）: {{cause}}",
             "immutable": "監査ルールを変更できない状態です（enabled 2）。変更するにはホストの再起動が必要です。",
@@ -616,13 +616,13 @@
             "never_rule_loaded": "すべてのシステムコールの監査を抑制するルールが、まだ読み込まれています。",
             "none_remove_failed": "監視ルールが割り当てられていませんが、監査ルールを削除できませんでした: {{cause}}",
             "none_removed": "監視ルールが割り当てられていないため、監査ルールを削除しました。",
-            "own_rule_left": "キー {{key}} のルールがまだ読み込まれています: {{line}}",
-            "rule_count": "キー {{key}} のルールが {{expected}} 件読み込まれているはずですが、{{found}} 件でした。",
+            "own_rule_left": "キー {{key}} の監査ルールがまだ読み込まれています: {{line}}",
+            "rule_count": "キー {{key}} の監査ルールが {{expected}} 件読み込まれているはずですが、{{found}} 件でした。",
             "rules_file_dir": "{{file}} がディレクトリです。",
             "validation_failed": "監視ルールの内容に誤りがあります: {{problems}}",
             "warn_dir_missing": "ディレクトリ {{value}} は存在しません。",
             "warn_exe_missing": "実行ファイル {{value}} は存在しません。",
-            "warn_rules_dir_missing": "{{dir}} が無いため、次回の起動用にルールを保存していません（エージェントは起動時にもう一度適用します）。",
+            "warn_rules_dir_missing": "{{dir}} が無いため、次回の起動に備えた監査ルールを保存していません（エージェントは起動時にもう一度適用します）。",
             "warn_scan_base_missing": "走査の起点 {{value}} は存在しません。",
             "warn_user_missing": "OSユーザー {{value}} は存在しません。"
         },
@@ -691,8 +691,8 @@
                     "expired_token": "期限切れのトークン",
                     "instance_id_mismatch": "インスタンスIDの不一致",
                     "invalid_token": "不正なトークン",
-                    "missing_instance_id": "インスタンスIDが無い",
-                    "missing_token": "トークンが無い",
+                    "missing_instance_id": "インスタンスIDなし",
+                    "missing_token": "トークンなし",
                     "revoked_token": "失効したトークン"
                 },
                 "rule": {
@@ -729,12 +729,12 @@
             },
             "detail": {
                 "acknowledged": "検知 {{count}} 件",
-                "apply_result": "{{rule}} 版 {{version}}: {{result}}",
+                "apply_result": "{{rule}} の版 {{version}}: {{result}}",
                 "ca_created": "独自の CA を作成",
                 "ca_discarded": "期限切れの CA を削除",
                 "ca_next_created": "新しい CA を作成し、エージェントに配布しています。{{at}} 以降にサーバー証明書を切り替えます",
                 "ca_switched": "サーバー証明書を新しい CA で署名しました",
-                "dropped": "エージェントが保存の上限で検知 {{count}} 件を破棄しました",
+                "dropped": "保存量の上限を超えたため、エージェントが検知 {{count}} 件を破棄しました",
                 "rule_applied": "版 {{version}} を {{agents}} に適用",
                 "rule_fallback": "監視ルール {{id}}",
                 "rule_saved": "版 {{version}}: {{comment}}",
@@ -756,18 +756,6 @@
                 "token_unbound": "エージェントのインスタンスとの紐付けを解除（以前: {{instance}}）"
             }
         },
-        "json": {
-            "kind": {
-                "array": "配列",
-                "bool": "true か false",
-                "integer": "整数",
-                "number": "数値",
-                "object": "オブジェクト",
-                "string": "文字列",
-                "the_content": "内容",
-                "valid": "正しい値"
-            }
-        },
         "loc": {
             "entry": "{{name}} {{value}}",
             "field": "{{name}}"
@@ -776,11 +764,9 @@
             "content": {
                 "base_root": "/ は指定できません。",
                 "category_invalid": "alert、normal、空のいずれかにしてください。",
-                "decode": "監視ルールの内容が正しくありません: {{detail}}",
                 "extension_invalid": "拡張子 {{value}} が正しくありません。",
                 "legit_category": "分類は alert か normal にしてください。",
                 "legit_extension_required": "拡張子を 1 つ以上指定してください。",
-                "not_object": "監視ルールの内容が正しくありません: 内容は JSON のオブジェクトにしてください。",
                 "path_char": "{{path}} に使えない文字が含まれています。",
                 "path_dot": "{{path}} に . や .. の部分は使えません。",
                 "path_not_absolute": "{{path}} は絶対パスではありません。",
@@ -790,8 +776,7 @@
                 "relpath_empty": "パスが空です。",
                 "relpath_invalid": "{{path}} は、ディレクトリ名を / で区切ったものにしてください（. と .. は使えません）。",
                 "too_many": "{{max}} 件までにしてください。",
-                "user_invalid": "ユーザー名 {{value}} が正しくありません。",
-                "wrong_type": "監視ルールの内容が正しくありません: {{field}} は {{expected}}にしてください（{{found}} になっています）。"
+                "user_invalid": "ユーザー名 {{value}} が正しくありません。"
             },
             "diff_from_to": "比較する 2 つの版を指定してください。",
             "not_found": "監視ルールが見つかりません。",

@@ -756,18 +756,6 @@
                 "token_unbound": "binding to the agent instance removed (was {{instance}})"
             }
         },
-        "json": {
-            "kind": {
-                "array": "an array",
-                "bool": "true or false",
-                "integer": "an integer",
-                "number": "a number",
-                "object": "an object",
-                "string": "a string",
-                "the_content": "the content",
-                "valid": "a valid value"
-            }
-        },
         "loc": {
             "entry": "{{name}} {{value}}",
             "field": "{{name}}"
@@ -776,11 +764,9 @@
             "content": {
                 "base_root": "/ is not allowed",
                 "category_invalid": "must be alert, normal or empty",
-                "decode": "invalid rule content: {{detail}}",
                 "extension_invalid": "invalid extension {{value}}",
                 "legit_category": "category must be alert or normal",
                 "legit_extension_required": "at least one extension is required",
-                "not_object": "invalid rule content: the content must be a JSON object",
                 "path_char": "{{path}} contains a forbidden character",
                 "path_dot": "{{path}} must not contain dot segments",
                 "path_not_absolute": "{{path}} is not an absolute path",
@@ -790,8 +776,7 @@
                 "relpath_empty": "empty path",
                 "relpath_invalid": "{{path}} must be directory names separated by slashes, without dot segments",
                 "too_many": "at most {{max}} entries",
-                "user_invalid": "invalid user name {{value}}",
-                "wrong_type": "invalid rule content: {{field}} must be {{expected}}, not {{found}}"
+                "user_invalid": "invalid user name {{value}}"
             },
             "diff_from_to": "from and to are required",
             "not_found": "rule not found",

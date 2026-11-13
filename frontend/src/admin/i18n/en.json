@@ -735,6 +735,19 @@
                 "command_set_fallback": "set {{set}}"
             }
         },
+        "json": {
+            "kind": {
+                "array": "an array",
+                "bool": "true or false",
+                "integer": "an integer",
+                "number": "a number",
+                "object": "an object",
+                "string": "a string",
+                "the_content": "the content",
+                "the_definition": "the definition",
+                "valid": "a valid value"
+            }
+        },
         "loc": {
             "command": "command {{n}}",
             "item": "item {{n}}",
@@ -762,6 +775,11 @@
         },
         "rule": {
             "choose_template": "choose the template for: {{fields}}",
+            "content": {
+                "decode": "invalid rule content: {{detail}}",
+                "not_object": "invalid rule content: the content must be a JSON object",
+                "wrong_type": "invalid rule content: {{field}} must be {{expected}}, not {{found}}"
+            },
             "in_use": "the rule is applied to an agent and cannot be deleted",
             "name_invalid": "rule name must be 1-100 characters",
             "name_taken": "a rule with this name already exists",
@@ -790,11 +808,6 @@
             "name_invalid": "token name must be 1-64 characters of A-Z a-z 0-9 . _ -",
             "name_taken": "a token with this name already exists",
             "valid_days_range": "valid_days must be between {{min}} and {{max}}"
-        },
-        "json": {
-            "kind": {
-                "the_definition": "the definition"
-            }
         }
     }
 }
