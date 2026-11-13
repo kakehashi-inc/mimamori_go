@@ -358,14 +358,19 @@ func readJSON(r *http.Request, v any) error {
 	return nil
 }
 
-// rawMsgs returns texts that have no code yet as data messages, for a list
-// parameter (joined with "; " in English, as the texts were joined before).
-func rawMsgs(texts []string) []modules.Msg {
-	out := make([]modules.Msg, len(texts))
-	for i, t := range texts {
-		out[i] = modules.Raw(t)
-	}
-	return out
+// problemsBody returns the answer fields of a list of validation problems:
+// "errors" with their English texts and "errors_i18n" with the coded
+// problems in the same order (both empty lists when there is none).
+func problemsBody(ps []modules.Problem) map[string]any {
+	return map[string]any{"errors": modules.ProblemTexts(ps), "errors_i18n": nonNil(ps)}
+}
+
+// writeProblems answers an error that carries a list of problems: the
+// error message m and the problems as problemsBody gives them.
+func writeProblems(w http.ResponseWriter, status int, m modules.Msg, ps []modules.Problem) {
+	out := problemsBody(ps)
+	out["error"], out["error_i18n"] = m.Text(), m
+	writeJSON(w, status, out)
 }
 
 // invalidBody returns the answer to a request body that could not be

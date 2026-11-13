@@ -73,8 +73,17 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	changed, err := modules.ApplyCentralConfigChanges(c.db, in.Set, in.Unset)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	switch e := err.(type) {
+	case nil:
+	case modules.Problems:
+		writeProblems(w, http.StatusBadRequest, modules.AsMsg(e), e)
+		return
+	case modules.Msg:
+		writeError(w, http.StatusBadRequest, e)
+		return
+	default:
+		// Anything else is a failure of the database, not a refused value.
+		c.internalError(w, r, err)
 		return
 	}
 	if len(changed) > 0 {

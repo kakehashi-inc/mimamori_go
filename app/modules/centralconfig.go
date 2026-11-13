@@ -3,7 +3,6 @@ package modules
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/mail"
@@ -104,7 +103,7 @@ func cfgIntField(name, help string, p func(c *CentralConfig) *int) ConfigField {
 		set: func(c *CentralConfig, v string) error {
 			n, err := strconv.Atoi(strings.TrimSpace(v))
 			if err != nil || n <= 0 {
-				return fmt.Errorf("%s must be a positive integer", name)
+				return M("config.not_positive_int", "name", name)
 			}
 			*p(c) = n
 			return nil
@@ -120,7 +119,7 @@ func cfgStringField(name, help string, p func(c *CentralConfig) *string) ConfigF
 func parseBool(name, v string) (bool, error) {
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
-		return false, fmt.Errorf("%s must be true or false", name)
+		return false, M("config.not_bool", "name", name)
 	}
 	return b, nil
 }
@@ -196,7 +195,7 @@ func FindConfigField(name string) (*ConfigField, error) {
 		names = append(names, f.Name)
 	}
 	sort.Strings(names)
-	return nil, fmt.Errorf("unknown configuration item %q (items: %s)", name, strings.Join(names, ", "))
+	return nil, M("config.unknown_item", "name", strconv.Quote(name), "items", names)
 }
 
 // Secret reports whether the value must not be displayed.
@@ -355,67 +354,70 @@ func validMailAddress(s string) bool {
 	return err == nil && a.Address == s
 }
 
-// Validate checks the configuration values.
+// Validate checks the configuration values. The error is a Problems value
+// (its text: the problems joined with "; ").
 func (c *CentralConfig) Validate() error {
-	if errs := c.validationErrors(); len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
+	if ps := c.validationProblems(); len(ps) > 0 {
+		return Problems(ps)
 	}
 	return nil
 }
 
-// validationErrors returns one message per problem of the configuration.
-func (c *CentralConfig) validationErrors() []string {
-	var errs []string
+// validationProblems returns one problem per problem of the configuration.
+// The item name is part of each message.
+func (c *CentralConfig) validationProblems() []Problem {
+	var errs []Problem
+	add := func(m Msg) { errs = append(errs, Problem{Msg: m}) }
 	for _, a := range []struct{ name, addr string }{{"web_listen", c.WebListen}, {"agent_listen", c.AgentListen}} {
 		host, port, err := net.SplitHostPort(a.addr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", a.name, err))
+			add(M("config.listen_invalid", "field", a.name, "detail", err.Error()))
 			continue
 		}
 		if host != "" && net.ParseIP(host) == nil {
-			errs = append(errs, fmt.Sprintf("%s: the address must be an IP address", a.name))
+			add(M("config.listen_ip", "field", a.name))
 		}
 		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
-			errs = append(errs, fmt.Sprintf("%s: the port must be 1-65535", a.name))
+			add(M("config.listen_port", "field", a.name))
 		}
 	}
 	if c.WebListen == c.AgentListen {
-		errs = append(errs, "web_listen and agent_listen must differ")
+		add(M("config.listen_same"))
 	}
 	for _, n := range c.ServerNames {
 		if net.ParseIP(n) == nil && !validHostName(n) {
-			errs = append(errs, fmt.Sprintf("server_names: %q is not a host name or IP address", n))
+			add(M("config.server_name_invalid", "value", strconv.Quote(n)))
 		}
 	}
 	switch c.SMTP.Security {
 	case "starttls", "tls", "none":
 	default:
-		errs = append(errs, "smtp.security must be starttls, tls or none")
+		add(M("config.smtp_security"))
 	}
 	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validMailHost(h) {
-		errs = append(errs, "smtp.host must be a host name or IP address")
+		add(M("config.smtp_host"))
 	}
 	if c.SMTP.From != "" && !validMailAddress(c.SMTP.From) {
-		errs = append(errs, "smtp.from must be one mail address")
+		add(M("config.smtp_from"))
 	}
 	for i := range ConfigFields {
 		f := &ConfigFields[i]
 		switch f.Kind {
 		case "int":
 			if n, _ := strconv.Atoi(f.get(c)); n > configIntMax[f.Name] {
-				errs = append(errs, fmt.Sprintf("%s must be %d or less", f.Name, configIntMax[f.Name]))
+				add(M("config.int_max", "name", f.Name, "max", configIntMax[f.Name]))
 			}
 		case "string", "list", "secret":
 			if strings.IndexFunc(f.get(c), unicode.IsControl) >= 0 {
-				errs = append(errs, f.Name+" must not contain control characters")
+				add(M("config.control_chars", "name", f.Name))
 			}
 		}
 	}
 	if c.DefaultCheckIntervalSec < MinCheckInterval {
-		errs = append(errs, fmt.Sprintf("default_check_interval_sec must be %d or more", MinCheckInterval))
+		add(M("config.check_interval_min", "min", MinCheckInterval))
 	}
 	if c.TokenRenewBeforeDays >= c.TokenValidDays {
-		errs = append(errs, "token_renew_before_days must be less than token_valid_days")
+		add(M("config.renew_before"))
 	}
 	return errs
 }
@@ -476,7 +478,8 @@ func CentralConfigState(db models.Execer) (*CentralConfig, map[string]bool, erro
 
 // ApplyCentralConfigChanges sets and unsets items in one transaction after
 // checking the resulting configuration as a whole. It returns the names of
-// the items whose stored value changed.
+// the items whose stored value changed. A refused change is answered with a
+// Msg or Problems error; any other error is a failure of the database.
 func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string) ([]string, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -499,7 +502,7 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 			return nil, err
 		}
 		if _, ok := set[name]; ok {
-			return nil, fmt.Errorf("%s is both set and unset", name)
+			return nil, M("config.set_and_unset", "name", name)
 		}
 		removed[name] = true
 	}
@@ -516,7 +519,7 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 			return nil, err
 		}
 		if strings.TrimSpace(v) == "" && !emptyAllowed[name] {
-			return nil, fmt.Errorf("a value is required for %s", name)
+			return nil, M("config.value_required", "name", name)
 		}
 		probe := &CentralConfig{}
 		if err := f.set(probe, v); err != nil {
@@ -531,24 +534,24 @@ func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string
 		}
 	}
 	next.applyDefaults()
-	if errs := next.validationErrors(); len(errs) > 0 {
+	if errs := next.validationProblems(); len(errs) > 0 {
 		// Problems the stored configuration already has (for example a value
 		// saved by an older version) do not block a change, so that it can
 		// be corrected one item at a time; a change must not add a problem.
 		before := *cur
 		before.applyDefaults()
 		known := map[string]bool{}
-		for _, e := range before.validationErrors() {
-			known[e] = true
+		for _, e := range before.validationProblems() {
+			known[e.Text()] = true
 		}
-		var added []string
+		var added Problems
 		for _, e := range errs {
-			if !known[e] {
+			if !known[e.Text()] {
 				added = append(added, e)
 			}
 		}
 		if len(added) > 0 {
-			return nil, errors.New(strings.Join(added, "; "))
+			return nil, added
 		}
 	}
 	var changed []string

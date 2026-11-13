@@ -3,6 +3,7 @@ package modules
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -339,4 +340,16 @@ func keysOf(m map[string]any) []string {
 func IsMsg(err error, code string) bool {
 	m, ok := err.(Msg)
 	return ok && m.Code == code
+}
+
+// FieldProblem returns the problem of a field: the field name (a JSON field
+// name, shown as it is in every language) as its location.
+func FieldProblem(field string, m Msg) Problem {
+	return Problem{Where: []Msg{M("loc.field", "name", field)}, Msg: m}
+}
+
+// SortProblems sorts problems by their English text (the order a sorted
+// list of the texts has).
+func SortProblems(ps []Problem) {
+	sort.SliceStable(ps, func(i, j int) bool { return ps[i].Text() < ps[j].Text() })
 }

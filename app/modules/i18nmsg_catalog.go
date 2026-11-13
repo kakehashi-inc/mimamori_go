@@ -224,6 +224,7 @@ var msgCatalog = map[string]msgDef{
 	"json.kind.object":                              {en: "an object"},
 	"json.kind.string":                              {en: "a string"},
 	"json.kind.the_content":                         {en: "the content"},
+	"json.kind.the_definition":                      {en: "the definition", admin: true},
 	"json.kind.valid":                               {en: "a valid value"},
 	"loc.command":                                   {en: "command {{n}}", admin: true},
 	"loc.entry":                                     {en: "{{name}} {{value}}"},

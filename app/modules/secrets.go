@@ -8,7 +8,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -103,10 +102,10 @@ func VerifyPassword(hash, password string) bool {
 // ValidatePassword enforces the password policy.
 func ValidatePassword(p string) error {
 	if len([]rune(p)) < MinPasswordLength {
-		return fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+		return M("account.password_too_short", "min", MinPasswordLength)
 	}
 	if len(p) > 256 {
-		return errors.New("password is too long")
+		return M("account.password_too_long")
 	}
 	return nil
 }

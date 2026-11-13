@@ -94,7 +94,7 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 		// api_accounts.go
 		{"api_accounts not found", e.cli("PUT", "/accounts/9999/role", map[string]any{"role": "viewer"}), 404, "account.not_found"},
 		{"api_accounts role", e.cli("PUT", "/accounts/1/role", map[string]any{"role": "owner"}), 400, "account.role_invalid"},
-		{"api_accounts validator", e.cli("POST", "/accounts", map[string]any{"email": "not an address", "display_name": "x", "password": "Some-pass-123", "role": "viewer"}), 400, ""},
+		{"api_accounts validator", e.cli("POST", "/accounts", map[string]any{"email": "not an address", "display_name": "x", "password": "Some-pass-123", "role": "viewer"}), 400, "account.email_chars"},
 		{"api_accounts login", e.do(e.web, "POST", "/api/v1/auth/login", map[string]string{"email": testAdminEmail, "password": "wrong"}, map[string]string{csrfHeader: "1"}, "192.0.2.9:1"), 401, "auth.login_failed"},
 		{"api_accounts language", web("PUT", "/api/v1/auth/language", map[string]any{"language": "fr"}), 400, "account.language_invalid"},
 		// api_agents.go
@@ -109,7 +109,7 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 		{"api_rules select template", e.cli("POST", "/rules/merge-preview", map[string]any{"templates": []string{}}), 400, "rule.select_template"},
 		{"api_rules template", e.cli("POST", "/rules", map[string]any{"name": "r", "templates": []string{"nope"}}), 400, "rule.template_not_found_named"},
 		{"api_rules problems", e.cli("POST", "/rules", map[string]any{"name": "r", "content": map[string]any{"users": []any{map[string]any{"value": "a b"}}, "read": map[string]any{"dirs": []any{map[string]any{"value": "rel"}}}}}), 400, "common.problems"},
-		{"api_rules content", e.cli("POST", "/rules", map[string]any{"name": "r", "content": map[string]any{"users": "alice"}}), 400, ""},
+		{"api_rules content", e.cli("POST", "/rules", map[string]any{"name": "r", "content": map[string]any{"users": "alice"}}), 400, "rule.content.wrong_type"},
 		{"api_rules unassign", e.cli("POST", "/rules/unassign", map[string]any{"agent_ids": []int64{9999}}), 400, "agent.id_not_found"},
 		{"api_rules select agent", e.cli("POST", "/rules/unassign", map[string]any{"agent_ids": []int64{}}), 400, "rule.select_agent"},
 		{"api_rules builtin name", e.cli("POST", "/templates", map[string]any{"name": "base", "content": map[string]any{}}), 409, "template.builtin_name"},
@@ -118,14 +118,14 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 		// api_commands.go
 		{"api_commands set", e.cli("GET", agent+"/command-sets/9999", nil), 404, "command.set_not_found"},
 		{"api_commands invalid set", e.cli("POST", agent+"/command-sets", map[string]any{"name": "", "purpose": "run_only", "commands": []any{}}), 400, "command.invalid_set"},
-		{"api_commands decode (validator, coded later)", e.rawRequest(e.agent, "POST", "/admin/v1"+agent+"/command-sets", `[1]`, cliHdr, "127.0.0.1:1"), 400, ""},
+		{"api_commands decode", e.rawRequest(e.agent, "POST", "/admin/v1"+agent+"/command-sets", `[1]`, cliHdr, "127.0.0.1:1"), 400, "command.spec.not_object"},
 		{"api_commands import", e.cli("POST", agent+"/command-sets/import", map[string]any{"source_agent_id": a.ID, "items": []any{}}), 400, "command.import_select"},
 		{"api_commands import source", e.cli("POST", agent+"/command-sets/import", map[string]any{"source_agent_id": 9999, "items": []any{map[string]any{"set_id": 1}}}), 400, "command.import_source_not_found"},
 		{"api_commands run", e.cli("GET", agent+"/command-runs/9999", nil), 404, "command.run_not_found"},
 		{"api_commands request", e.cli("DELETE", agent+"/command-requests/9999", nil), 404, "command.request_not_found"},
-		// api_config.go (the configuration's own texts are coded in a later step)
+		// api_config.go
 		{"api_config body", e.cli("PUT", "/config", map[string]any{"bogus": 1}), 400, "common.invalid_body"},
-		{"api_config item", e.cli("PUT", "/config", map[string]any{"set": map[string]string{"nope": "1"}}), 400, ""},
+		{"api_config item", e.cli("PUT", "/config", map[string]any{"set": map[string]string{"nope": "1"}}), 400, "config.unknown_item"},
 		// api_profile.go
 		{"api_profile unchanged", web("POST", "/api/v1/auth/email", map[string]any{"email": testAdminEmail}), 400, "account.email_unchanged"},
 		{"api_profile verify", web("POST", "/api/v1/auth/email/verify", map[string]any{"code": "1"}), 410, "auth.email_code_expired"},

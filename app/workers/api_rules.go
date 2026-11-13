@@ -261,10 +261,10 @@ func (c *core) handleValidateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	content, err := modules.ParseRuleContent(in.Content)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"errors": []string{err.Error()}})
+		writeJSON(w, http.StatusOK, problemsBody([]modules.Problem{{Msg: modules.AsMsg(err)}}))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"errors": nonNil(content.Validate())})
+	writeJSON(w, http.StatusOK, problemsBody(content.Problems()))
 }
 
 func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
@@ -314,8 +314,8 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	default:
 		content = emptyContent()
 	}
-	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
+	if ps := content.Problems(); len(ps) > 0 {
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", ps))
 		return
 	}
 	p := principalFrom(r)
@@ -370,8 +370,8 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
+	if ps := content.Problems(); len(ps) > 0 {
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", ps))
 		return
 	}
 	desc := rule.Description
@@ -628,8 +628,8 @@ func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc
 		writeError(w, http.StatusConflict, modules.M("template.builtin_name"))
 		return
 	}
-	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
+	if ps := content.Problems(); len(ps) > 0 {
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", ps))
 		return
 	}
 	p := principalFrom(r)
@@ -723,8 +723,8 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
+	if ps := content.Problems(); len(ps) > 0 {
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", ps))
 		return
 	}
 	var desc string

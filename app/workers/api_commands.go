@@ -317,9 +317,8 @@ func readCommandSetSpec(r *http.Request, defaultUser string) (*modules.CommandSe
 }
 
 // writeCommandProblems answers 400 with every validation problem.
-func writeCommandProblems(w http.ResponseWriter, problems []string) {
-	m := modules.M("command.invalid_set", "problems", rawMsgs(problems))
-	writeJSON(w, http.StatusBadRequest, map[string]any{"error": m.Text(), "error_i18n": m, "errors": problems})
+func writeCommandProblems(w http.ResponseWriter, problems []modules.Problem) {
+	writeProblems(w, http.StatusBadRequest, modules.M("command.invalid_set", "problems", problems), problems)
 }
 
 // validationTime returns the time a once schedule is checked against: 0
@@ -370,7 +369,7 @@ func (c *core) handleCreateCommandSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	if problems := spec.Validate(now); len(problems) > 0 {
+	if problems := spec.Problems(now); len(problems) > 0 {
 		writeCommandProblems(w, problems)
 		return
 	}
@@ -419,7 +418,7 @@ func (c *core) handleUpdateCommandSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().Unix()
-	if problems := spec.Validate(validationTime(spec, stored, now)); len(problems) > 0 {
+	if problems := spec.Problems(validationTime(spec, stored, now)); len(problems) > 0 {
 		writeCommandProblems(w, problems)
 		return
 	}
@@ -501,10 +500,12 @@ func (c *core) handleValidateCommandSet(w http.ResponseWriter, r *http.Request) 
 	}
 	spec, err := readCommandSetSpec(r, defaultUser)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"errors": []string{err.Error()}, "definition": nil})
+		out := problemsBody([]modules.Problem{{Msg: modules.AsMsg(err)}})
+		out["definition"] = nil
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	problems := spec.Validate(validationTime(spec, stored, time.Now().Unix()))
+	problems := spec.Problems(validationTime(spec, stored, time.Now().Unix()))
 	if spec.Name != "" {
 		taken, err := models.CommandSetNameTaken(tdb, spec.Name, int64(setID))
 		if err != nil {
@@ -512,10 +513,12 @@ func (c *core) handleValidateCommandSet(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if taken {
-			problems = append(problems, commandNameTaken.Text())
+			problems = append(problems, modules.Problem{Msg: commandNameTaken})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"errors": nonNil(problems), "definition": spec})
+	out := problemsBody(problems)
+	out["definition"] = spec
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
@@ -558,12 +561,14 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 		spec modules.CommandSetSpec
 	}
 	var list []copied
-	var problems, conflicts []string
+	var problems []modules.Problem
+	var conflicts []string
 	seen := map[string]bool{}
 	for i, it := range in.Items {
 		def, row, err := modules.LoadCommandSet(sdb, it.SetID)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && row.DeletedAt > 0) {
-			problems = append(problems, fmt.Sprintf("item %d: command set %d not found in the source", i+1, it.SetID))
+			problems = append(problems, modules.Problem{Where: []modules.Msg{modules.M("loc.item", "n", i+1)},
+				Msg: modules.M("command.import_item_not_found", "set", it.SetID)})
 			continue
 		}
 		if err != nil {
@@ -576,8 +581,9 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 		}
 		// The definition was valid at the source; the check covers the
 		// new name (a past once time is kept as it is).
-		for _, p := range spec.Validate(0) {
-			problems = append(problems, fmt.Sprintf("item %d: %s", i+1, p))
+		for _, p := range spec.Problems(0) {
+			p.Where = append([]modules.Msg{modules.M("loc.item", "n", i+1)}, p.Where...)
+			problems = append(problems, p)
 		}
 		if seen[spec.Name] {
 			conflicts = append(conflicts, spec.Name)

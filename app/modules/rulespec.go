@@ -7,7 +7,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
-	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -103,7 +103,7 @@ type RuleContent struct {
 // normalizes the result.
 func ParseRuleContent(data []byte) (*RuleContent, error) {
 	if !IsJSONObject(data) {
-		return nil, fmt.Errorf("invalid rule content: the content must be a JSON object")
+		return nil, M("rule.content.not_object")
 	}
 	var c RuleContent
 	dec := json.NewDecoder(strings.NewReader(string(data)))
@@ -111,13 +111,13 @@ func ParseRuleContent(data []byte) (*RuleContent, error) {
 	if err := dec.Decode(&c); err != nil {
 		var te *json.UnmarshalTypeError
 		if errors.As(err, &te) {
-			field := te.Field
-			if field == "" {
-				field = "the content"
+			var field any = te.Field
+			if te.Field == "" {
+				field = M("json.kind.the_content")
 			}
-			return nil, fmt.Errorf("invalid rule content: %s must be %s, not %s", field, jsonKindName(te.Type), te.Value)
+			return nil, M("rule.content.wrong_type", "field", field, "expected", jsonKindName(te.Type), "found", te.Value)
 		}
-		return nil, fmt.Errorf("invalid rule content: %s", strings.TrimPrefix(err.Error(), "json: "))
+		return nil, M("rule.content.decode", "detail", strings.TrimPrefix(err.Error(), "json: "))
 	}
 	c.Normalize()
 	return &c, nil
@@ -132,29 +132,29 @@ func IsJSONObject(data []byte) bool {
 
 // jsonKindName names the JSON form expected for a Go type, for messages
 // that must not expose Go type names.
-func jsonKindName(t reflect.Type) string {
+func jsonKindName(t reflect.Type) Msg {
 	if t == nil {
-		return "a valid value"
+		return M("json.kind.valid")
 	}
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {
 	case reflect.Slice, reflect.Array:
-		return "an array"
+		return M("json.kind.array")
 	case reflect.Struct, reflect.Map:
-		return "an object"
+		return M("json.kind.object")
 	case reflect.String:
-		return "a string"
+		return M("json.kind.string")
 	case reflect.Bool:
-		return "true or false"
+		return M("json.kind.bool")
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return "an integer"
+		return M("json.kind.integer")
 	case reflect.Float32, reflect.Float64:
-		return "a number"
+		return M("json.kind.number")
 	}
-	return "a valid value"
+	return M("json.kind.valid")
 }
 
 // JSON returns the canonical indented JSON of the content.
@@ -263,26 +263,26 @@ var (
 // ValidateAbsPath checks that p is a clean absolute path without "..".
 func ValidateAbsPath(p string) error {
 	if !strings.HasPrefix(p, "/") {
-		return fmt.Errorf("%q is not an absolute path", p)
+		return M("rule.content.path_not_absolute", "path", strconv.Quote(p))
 	}
 	for _, part := range strings.Split(p, "/") {
 		if part == ".." || part == "." {
-			return fmt.Errorf("%q must not contain dot segments", p)
+			return M("rule.content.path_dot", "path", strconv.Quote(p))
 		}
 	}
 	if path.Clean(p) != p {
-		return fmt.Errorf("%q is not a clean path", p)
+		return M("rule.content.path_not_clean", "path", strconv.Quote(p))
 	}
 	// The path becomes one argument of an auditd rule line, which is split
 	// at white space: no white space (in any script), control character or
 	// quote is allowed.
 	for _, r := range p {
 		if unicode.IsSpace(r) || unicode.IsControl(r) || r == '"' || r == '\'' {
-			return fmt.Errorf("%q contains a forbidden character", p)
+			return M("rule.content.path_char", "path", strconv.Quote(p))
 		}
 	}
 	if len(p) > 4096 {
-		return fmt.Errorf("%q is too long", p)
+		return M("rule.content.path_too_long", "path", strconv.Quote(p))
 	}
 	return nil
 }
@@ -290,11 +290,11 @@ func ValidateAbsPath(p string) error {
 // ValidateRelPath checks a directory-name sequence such as "bootstrap/cache".
 func ValidateRelPath(p string) error {
 	if p == "" {
-		return fmt.Errorf("empty path")
+		return M("rule.content.relpath_empty")
 	}
 	for _, part := range strings.Split(p, "/") {
 		if part == "" || part == "." || part == ".." || !componentRe.MatchString(part) {
-			return fmt.Errorf("%q must be directory names separated by slashes, without dot segments", p)
+			return M("rule.content.relpath_invalid", "path", strconv.Quote(p))
 		}
 	}
 	return nil
@@ -304,23 +304,34 @@ func validCategory(c string, allowEmpty bool) bool {
 	return c == CategoryAlert || c == CategoryNormal || (allowEmpty && c == "")
 }
 
-// Validate returns every problem found in the content (empty when valid).
+// Validate returns every problem found in the content (empty when valid),
+// sorted by their English text.
 func (c *RuleContent) Validate() []string {
-	var errs []string
-	add := func(format string, a ...any) { errs = append(errs, fmt.Sprintf(format, a...)) }
+	return ProblemTexts(c.Problems())
+}
+
+// Problems returns every problem found in the content as coded messages,
+// sorted by their English text (the order of Validate).
+func (c *RuleContent) Problems() []Problem {
+	var errs []Problem
+	add := func(field string, m Msg) { errs = append(errs, FieldProblem(field, m)) }
+	entry := func(name, value string, m Msg) {
+		errs = append(errs, Problem{Where: []Msg{M("loc.entry", "name", name, "value", strconv.Quote(value))}, Msg: m})
+	}
+	tooMany := func(field string, limit int) { add(field, M("rule.content.too_many", "max", limit)) }
 	if len(c.Users) > MaxRuleElements {
-		add("users: at most %d entries", MaxRuleElements)
+		tooMany("users", MaxRuleElements)
 	}
 	for _, u := range c.Users {
 		if !userNameRe.MatchString(u.Value) {
-			add("users: invalid user name %q", u.Value)
+			add("users", M("rule.content.user_invalid", "value", strconv.Quote(u.Value)))
 		}
 	}
 	if c.CheckIntervalSec != 0 && (c.CheckIntervalSec < MinCheckInterval || c.CheckIntervalSec > MaxCheckInterval) {
-		add("check_interval_sec: must be between %d and %d", MinCheckInterval, MaxCheckInterval)
+		add("check_interval_sec", M("rule.content.range", "min", MinCheckInterval, "max", MaxCheckInterval))
 	}
 	if c.ScanIntervalSec != 0 && (c.ScanIntervalSec < MinScanInterval || c.ScanIntervalSec > MaxScanInterval) {
-		add("scan_interval_sec: must be between %d and %d", MinScanInterval, MaxScanInterval)
+		add("scan_interval_sec", M("rule.content.range", "min", MinScanInterval, "max", MaxScanInterval))
 	}
 	for name, cat := range map[string]string{
 		"exec.category": c.Exec.Category, "denied.category": c.Denied.Category, "read.category": c.Read.Category,
@@ -328,68 +339,68 @@ func (c *RuleContent) Validate() []string {
 		"exec_files.other_category": c.ExecFiles.OtherCategory,
 	} {
 		if !validCategory(cat, true) {
-			add("%s: must be alert, normal or empty", name)
+			add(name, M("rule.content.category_invalid"))
 		}
 	}
 	if len(c.Read.Dirs) > MaxRuleElements {
-		add("read.dirs: at most %d entries", MaxRuleElements)
+		tooMany("read.dirs", MaxRuleElements)
 	}
 	for _, d := range c.Read.Dirs {
 		if err := ValidateAbsPath(d.Value); err != nil {
-			add("read.dirs: %v", err)
+			add("read.dirs", AsMsg(err))
 		}
 	}
 	if len(c.Network.Executables) > MaxRuleElements {
-		add("network.executables: at most %d entries", MaxRuleElements)
+		tooMany("network.executables", MaxRuleElements)
 	}
 	for _, e := range c.Network.Executables {
 		if err := ValidateAbsPath(e.Value); err != nil {
-			add("network.executables: %v", err)
+			add("network.executables", AsMsg(err))
 		}
 	}
 	if c.Writable.Base != "" {
 		if err := ValidateAbsPath(c.Writable.Base); err != nil {
-			add("writable.base: %v", err)
+			add("writable.base", AsMsg(err))
 		} else if c.Writable.Base == "/" {
-			add("writable.base: / is not allowed")
+			add("writable.base", M("rule.content.base_root"))
 		}
 	}
 	if len(c.Writable.AllowedPaths) > MaxRuleElements {
-		add("writable.allowed_paths: at most %d entries", MaxRuleElements)
+		tooMany("writable.allowed_paths", MaxRuleElements)
 	}
 	for _, p := range c.Writable.AllowedPaths {
 		if err := ValidateRelPath(p); err != nil {
-			add("writable.allowed_paths: %v", err)
+			add("writable.allowed_paths", AsMsg(err))
 		}
 	}
 	if len(c.ExecFiles.Extensions) > MaxExtensions {
-		add("exec_files.extensions: at most %d entries", MaxExtensions)
+		tooMany("exec_files.extensions", MaxExtensions)
 	}
 	for _, e := range c.ExecFiles.Extensions {
 		if !extensionRe.MatchString(e) {
-			add("exec_files.extensions: invalid extension %q", e)
+			add("exec_files.extensions", M("rule.content.extension_invalid", "value", strconv.Quote(e)))
 		}
 	}
 	if len(c.ExecFiles.Legit) > MaxRuleElements {
-		add("exec_files.legit: at most %d entries", MaxRuleElements)
+		tooMany("exec_files.legit", MaxRuleElements)
 	}
 	for _, l := range c.ExecFiles.Legit {
 		if err := ValidateRelPath(l.Path); err != nil {
-			add("exec_files.legit: %v", err)
+			add("exec_files.legit", AsMsg(err))
 		}
 		if len(l.Extensions) == 0 {
-			add("exec_files.legit %q: at least one extension is required", l.Path)
+			entry("exec_files.legit", l.Path, M("rule.content.legit_extension_required"))
 		}
 		for _, e := range l.Extensions {
 			if !extensionRe.MatchString(e) {
-				add("exec_files.legit %q: invalid extension %q", l.Path, e)
+				entry("exec_files.legit", l.Path, M("rule.content.extension_invalid", "value", strconv.Quote(e)))
 			}
 		}
 		if !validCategory(l.Category, false) {
-			add("exec_files.legit %q: category must be alert or normal", l.Path)
+			entry("exec_files.legit", l.Path, M("rule.content.legit_category"))
 		}
 	}
-	sort.Strings(errs)
+	SortProblems(errs)
 	return errs
 }
 

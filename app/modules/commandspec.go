@@ -135,24 +135,24 @@ func (c CodeSpec) String() string {
 	return strconv.Itoa(c.A)
 }
 
-func (c CodeSpec) validate(field string) []string {
-	var errs []string
+func (c CodeSpec) validate(field string) []Problem {
+	var errs []Problem
 	switch c.Kind {
 	case CodeSingle, CodeRange, CodeMin, CodeMax:
 	default:
-		return []string{field + ".kind: must be single, range, min or max"}
+		return []Problem{FieldProblem(field+".kind", M("command.spec.code_kind"))}
 	}
 	if c.A < 0 || c.A > MaxCommandExitCode {
-		errs = append(errs, fmt.Sprintf("%s.a: must be between 0 and %d", field, MaxCommandExitCode))
+		errs = append(errs, FieldProblem(field+".a", M("command.spec.code_range", "max", MaxCommandExitCode)))
 	}
 	if c.Kind == CodeRange {
 		if c.B < 0 || c.B > MaxCommandExitCode {
-			errs = append(errs, fmt.Sprintf("%s.b: must be between 0 and %d", field, MaxCommandExitCode))
+			errs = append(errs, FieldProblem(field+".b", M("command.spec.code_range", "max", MaxCommandExitCode)))
 		} else if c.B <= c.A {
-			errs = append(errs, field+".b: must be greater than a")
+			errs = append(errs, FieldProblem(field+".b", M("command.spec.code_b_greater")))
 		}
 	} else if c.B != 0 {
-		errs = append(errs, field+".b: is used only by the kind range")
+		errs = append(errs, FieldProblem(field+".b", M("command.spec.code_b_unused")))
 	}
 	return errs
 }
@@ -234,9 +234,9 @@ func ParseScheduleAt(s string, loc *time.Location) (time.Time, error) {
 				return t, nil
 			}
 		}
-		return time.Time{}, fmt.Errorf("%q is not a date and time such as 2026-12-01 03:00", s)
+		return time.Time{}, M("command.spec.at_format_local", "value", strconv.Quote(s))
 	}
-	return time.Time{}, fmt.Errorf("%q is not a date and time with a UTC offset such as 2026-12-01T03:00:00+09:00", s)
+	return time.Time{}, M("command.spec.at_format_offset", "value", strconv.Quote(s))
 }
 
 // FormatScheduleAt returns the canonical form of a once time.
@@ -361,61 +361,54 @@ func contains[T comparable](list []T, v T) bool {
 
 // validate checks the schedule. now (Unix seconds) is used to refuse a once
 // time in the past; 0 skips that check.
-func (s *CommandSchedule) validate(now int64) []string {
-	var errs []string
+func (s *CommandSchedule) validate(now int64) []Problem {
+	var errs []Problem
+	add := func(field string, m Msg) { errs = append(errs, FieldProblem(field, m)) }
 	switch s.Kind {
 	case ScheduleOnce:
 		t, err := ParseScheduleAt(s.At, nil)
 		switch {
 		case s.At == "":
-			errs = append(errs, "schedule.at: a date and time is required")
+			add("schedule.at", M("command.spec.at_required"))
 		case err != nil:
-			errs = append(errs, "schedule.at: "+err.Error())
+			add("schedule.at", AsMsg(err))
 		case now > 0 && t.Unix() <= now:
-			errs = append(errs, "schedule.at: must be in the future")
+			add("schedule.at", M("command.spec.at_past"))
 		}
 	case ScheduleWeekly:
 		if len(s.Weekdays) == 0 {
-			errs = append(errs, "schedule.weekdays: at least one weekday is required")
+			add("schedule.weekdays", M("command.spec.weekdays_required"))
 		}
 		for _, w := range s.Weekdays {
 			if !contains(WeekdayNames, w) {
-				errs = append(errs, fmt.Sprintf("schedule.weekdays: %q is not one of %s", w, strings.Join(WeekdayNames, ", ")))
+				add("schedule.weekdays", M("command.spec.weekday_invalid", "value", strconv.Quote(w), "choices", WeekdayNames))
 			}
 		}
 		if _, ok := parseTimeOfDay(s.Time); !ok {
-			errs = append(errs, "schedule.time: must be a time of day from 00:00 to 23:59")
+			add("schedule.time", M("command.spec.time_of_day"))
 		}
 	case ScheduleDaily:
 		if _, ok := parseTimeOfDay(s.Time); !ok {
-			errs = append(errs, "schedule.time: must be a time of day from 00:00 to 23:59")
+			add("schedule.time", M("command.spec.time_of_day"))
 		}
 	case ScheduleEveryHours:
 		if !contains(ScheduleEveryHoursChoices, s.Every) {
-			errs = append(errs, "schedule.every: must be one of "+joinInts(ScheduleEveryHoursChoices))
+			add("schedule.every", M("command.spec.every_choices", "choices", ScheduleEveryHoursChoices))
 		}
 	case ScheduleEveryMinutes:
 		if !contains(ScheduleEveryMinutesChoices, s.Every) {
-			errs = append(errs, "schedule.every: must be one of "+joinInts(ScheduleEveryMinutesChoices))
+			add("schedule.every", M("command.spec.every_choices", "choices", ScheduleEveryMinutesChoices))
 		}
 	case ScheduleHourlyAt:
 		if s.Minute == nil {
-			errs = append(errs, "schedule.minute: a minute from 0 to 59 is required")
+			add("schedule.minute", M("command.spec.minute_required"))
 		} else if *s.Minute < 0 || *s.Minute > 59 {
-			errs = append(errs, "schedule.minute: must be between 0 and 59")
+			add("schedule.minute", M("command.spec.minute_range"))
 		}
 	default:
-		errs = append(errs, "schedule.kind: must be once, weekly, daily, every_hours, every_minutes or hourly_at")
+		add("schedule.kind", M("command.spec.schedule_kind"))
 	}
 	return errs
-}
-
-func joinInts(list []int) string {
-	parts := make([]string, len(list))
-	for i, n := range list {
-		parts[i] = strconv.Itoa(n)
-	}
-	return strings.Join(parts, ", ")
 }
 
 // CommandSpec is one command of a set. Commands have no name and no
@@ -461,7 +454,7 @@ type CommandSetDef struct {
 // rejected), then fills defaults and normalizes it. It does not validate.
 func ParseCommandSetSpec(data []byte) (*CommandSetSpec, error) {
 	if !IsJSONObject(data) {
-		return nil, fmt.Errorf("invalid command set: the definition must be a JSON object")
+		return nil, M("command.spec.not_object")
 	}
 	var s CommandSetSpec
 	dec := json.NewDecoder(strings.NewReader(string(data)))
@@ -469,16 +462,16 @@ func ParseCommandSetSpec(data []byte) (*CommandSetSpec, error) {
 	if err := dec.Decode(&s); err != nil {
 		var te *json.UnmarshalTypeError
 		if errors.As(err, &te) {
-			field := te.Field
-			if field == "" {
-				field = "the definition"
+			var field any = te.Field
+			if te.Field == "" {
+				field = M("json.kind.the_definition")
 			}
-			return nil, fmt.Errorf("invalid command set: %s must be %s, not %s", field, jsonKindName(te.Type), te.Value)
+			return nil, M("command.spec.wrong_type", "field", field, "expected", jsonKindName(te.Type), "found", te.Value)
 		}
-		return nil, fmt.Errorf("invalid command set: %s", strings.TrimPrefix(err.Error(), "json: "))
+		return nil, M("command.spec.decode", "detail", strings.TrimPrefix(err.Error(), "json: "))
 	}
 	if dec.More() {
-		return nil, fmt.Errorf("invalid command set: only one JSON object is allowed")
+		return nil, M("command.spec.one_object")
 	}
 	s.Normalize()
 	return &s, nil
@@ -537,102 +530,109 @@ func (s *CommandSetSpec) Normalize() {
 // (Unix seconds) refuses a once time in the past; 0 skips that check (the
 // agent re-validates delivered definitions whose once time may have passed).
 func (s *CommandSetSpec) Validate(now int64) []string {
-	var errs []string
-	add := func(format string, a ...any) { errs = append(errs, fmt.Sprintf(format, a...)) }
+	return ProblemTexts(s.Problems(now))
+}
+
+// Problems returns every problem of the definition as coded messages, in
+// the order and with the English texts of Validate.
+func (s *CommandSetSpec) Problems(now int64) []Problem {
+	var errs []Problem
+	add := func(field string, m Msg) { errs = append(errs, FieldProblem(field, m)) }
 
 	switch n := utf8.RuneCountInString(s.Name); {
 	case n == 0:
-		add("name: is required")
+		add("name", M("command.spec.required"))
 	case n > MaxCommandSetNameLength:
-		add("name: must be at most %d characters", MaxCommandSetNameLength)
+		add("name", M("command.spec.max_chars", "max", MaxCommandSetNameLength))
 	}
 	if hasControl(s.Name) {
-		add("name: must not contain control characters")
+		add("name", M("command.spec.control"))
 	}
-	if err := checkFreeText(s.Description); err != "" {
-		add("description: %s", err)
+	if err := checkFreeText(s.Description); err != nil {
+		add("description", AsMsg(err))
 	}
 	if s.Purpose != PurposeCollectOutput && s.Purpose != PurposeRunOnly {
-		add("purpose: must be collect_output or run_only")
+		add("purpose", M("command.spec.purpose"))
 	}
 	if err := ValidateCommandOSUser(s.OSUser); err != nil {
-		add("os_user: %v", err)
+		add("os_user", AsMsg(err))
 	}
 	if s.WorkDir != "" {
 		if err := validateWorkDir(s.WorkDir); err != nil {
-			add("work_dir: %v", err)
+			add("work_dir", AsMsg(err))
 		}
 	}
 	switch s.RunMode {
 	case RunModeManual:
 		if s.Schedule != nil {
-			add("schedule: must be null when run_mode is manual")
+			add("schedule", M("command.spec.schedule_null"))
 		}
 	case RunModeSchedule:
 		if s.Schedule == nil {
-			add("schedule: is required when run_mode is schedule")
+			add("schedule", M("command.spec.schedule_required"))
 		} else {
 			errs = append(errs, s.Schedule.validate(now)...)
 		}
 	default:
-		add("run_mode: must be manual or schedule")
+		add("run_mode", M("command.spec.run_mode"))
 	}
 	if s.KeepRuns < 1 || s.KeepRuns > MaxCommandKeepRuns {
-		add("keep_runs: must be between 1 and %d", MaxCommandKeepRuns)
+		add("keep_runs", M("command.spec.range_1", "max", MaxCommandKeepRuns))
 	}
 	if s.Joiner != JoinerComma && s.Joiner != JoinerNewline {
-		add("joiner: must be comma or newline")
+		add("joiner", M("command.spec.joiner"))
 	}
 	if len(s.Commands) == 0 {
-		add("commands: at least one command is required")
+		add("commands", M("command.spec.commands_required"))
 	}
 	for i, c := range s.Commands {
-		p := fmt.Sprintf("command %d: ", i+1)
+		at := M("loc.command", "n", i+1)
 		for _, e := range c.validate(s.Purpose) {
-			errs = append(errs, p+e)
+			e.Where = append([]Msg{at}, e.Where...)
+			errs = append(errs, e)
 		}
 	}
 	return errs
 }
 
-func (c *CommandSpec) validate(purpose string) []string {
-	var errs []string
-	add := func(format string, a ...any) { errs = append(errs, fmt.Sprintf(format, a...)) }
+func (c *CommandSpec) validate(purpose string) []Problem {
+	var errs []Problem
+	add := func(field string, m Msg) { errs = append(errs, FieldProblem(field, m)) }
 	switch {
 	case strings.TrimSpace(c.CommandLine) == "":
-		add("command_line: is required")
+		add("command_line", M("command.spec.required"))
 	case strings.IndexByte(c.CommandLine, 0) >= 0:
-		add("command_line: must not contain a NUL byte")
+		add("command_line", M("command.spec.command_line_nul"))
 	case len(c.CommandLine) > MaxCommandLineBytes:
-		add("command_line: must be at most %d bytes", MaxCommandLineBytes)
+		add("command_line", M("command.spec.max_bytes", "max", MaxCommandLineBytes))
 	}
-	if err := checkFreeText(c.Note); err != "" {
-		add("note: %s", err)
+	if err := checkFreeText(c.Note); err != nil {
+		add("note", AsMsg(err))
 	}
 	se := c.Success.validate("success")
 	fe := c.Failure.validate("failure")
 	errs = append(errs, se...)
 	errs = append(errs, fe...)
 	if len(se) == 0 && len(fe) == 0 && c.Success.Overlaps(c.Failure) {
-		add("success, failure: the success codes (%s) and the failure codes (%s) must not overlap", c.Success, c.Failure)
+		add("success, failure", M("command.spec.codes_overlap", "success", c.Success.String(), "failure", c.Failure.String()))
 	}
 	switch c.OnProblems {
 	case OnProblemsStop, OnProblemsContinueOnFailure, OnProblemsContinueAlways:
 	default:
-		add("on_problems: must be stop, continue_on_failure or continue_always")
+		add("on_problems", M("command.spec.on_problems"))
 	}
 	if c.TimeoutSec < 1 || c.TimeoutSec > MaxCommandSetTimeoutSec {
-		add("timeout_sec: must be between 1 and %d", MaxCommandSetTimeoutSec)
+		add("timeout_sec", M("command.spec.range_1", "max", MaxCommandSetTimeoutSec))
 	}
 	if c.LineLimit < 1 || c.LineLimit > MaxCommandLineLimit {
-		add("line_limit: must be between 1 and %d", MaxCommandLineLimit)
+		add("line_limit", M("command.spec.range_1", "max", MaxCommandLineLimit))
 	}
 	if purpose == PurposeRunOnly && len(c.Patterns) > 0 {
-		add("patterns: are used only when purpose is collect_output")
+		add("patterns", M("command.spec.patterns_run_only"))
 	}
 	for j, p := range c.Patterns {
 		if _, err := CompileCommandPattern(p); err != nil {
-			add("pattern %d: %v", j+1, err)
+			errs = append(errs, Problem{Where: []Msg{M("loc.pattern", "n", j+1)}, Msg: AsMsg(err)})
 		}
 	}
 	return errs
@@ -656,17 +656,17 @@ func CompileCommandPattern(p string) (*regexp2.Regexp, error) {
 func ValidateCommandOSUser(u string) error {
 	switch n := utf8.RuneCountInString(u); {
 	case n == 0:
-		return errors.New("is required")
+		return M("command.spec.required")
 	case n > MaxCommandOSUserLength:
-		return fmt.Errorf("must be at most %d characters", MaxCommandOSUserLength)
+		return M("command.spec.max_chars", "max", MaxCommandOSUserLength)
 	}
 	for _, r := range u {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return errors.New("must not contain white space or control characters")
+			return M("command.spec.os_user_space")
 		}
 	}
 	if strings.HasPrefix(u, "-") {
-		return errors.New(`must not start with "-"`)
+		return M("command.spec.os_user_dash")
 	}
 	return nil
 }
@@ -675,16 +675,16 @@ func ValidateCommandOSUser(u string) error {
 // NUL or line breaks, at most 4096 bytes.
 func validateWorkDir(p string) error {
 	if !strings.HasPrefix(p, "/") {
-		return errors.New("must be an absolute path")
+		return M("command.spec.work_dir_absolute")
 	}
 	if strings.ContainsAny(p, "\x00\n\r") {
-		return errors.New("must not contain NUL or line breaks")
+		return M("command.spec.work_dir_nul")
 	}
 	if path.Clean(p) != p {
-		return errors.New("must be a clean path (no empty, . or .. parts and no trailing slash)")
+		return M("command.spec.work_dir_clean")
 	}
 	if len(p) > MaxCommandWorkDirBytes {
-		return fmt.Errorf("must be at most %d bytes", MaxCommandWorkDirBytes)
+		return M("command.spec.max_bytes", "max", MaxCommandWorkDirBytes)
 	}
 	return nil
 }
@@ -699,17 +699,18 @@ func hasControl(s string) bool {
 }
 
 // checkFreeText checks a description or note: at most 1000 characters,
-// control characters only as line breaks and tabs.
-func checkFreeText(s string) string {
+// control characters only as line breaks and tabs. It returns nil when the
+// text is valid.
+func checkFreeText(s string) error {
 	if utf8.RuneCountInString(s) > MaxCommandTextLength {
-		return fmt.Sprintf("must be at most %d characters", MaxCommandTextLength)
+		return M("command.spec.max_chars", "max", MaxCommandTextLength)
 	}
 	for _, r := range s {
 		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
-			return "must not contain control characters other than line breaks and tabs"
+			return M("command.spec.text_control")
 		}
 	}
-	return ""
+	return nil
 }
 
 // ClassifyExit returns the result kind (and reason for an error) of a

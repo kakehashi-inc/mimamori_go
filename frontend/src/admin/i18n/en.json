@@ -789,6 +789,11 @@
             "name_invalid": "token name must be 1-64 characters of A-Z a-z 0-9 . _ -",
             "name_taken": "a token with this name already exists",
             "valid_days_range": "valid_days must be between {{min}} and {{max}}"
+        },
+        "json": {
+            "kind": {
+                "the_definition": "the definition"
+            }
         }
     }
 }

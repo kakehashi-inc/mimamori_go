@@ -2,7 +2,6 @@ package modules
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -76,7 +75,7 @@ type patternScanner struct {
 // of Python and the editors (see above).
 func compileCommandPattern(p string) (*commandPattern, error) {
 	if p == "" {
-		return nil, errors.New("must not be empty")
+		return nil, M("pattern.empty")
 	}
 	sc := &patternScanner{in: []rune(p), prefix: generatedGroupPrefix(p)}
 	rewritten, err := sc.rewrite()
@@ -92,7 +91,7 @@ func compileCommandPattern(p string) (*commandPattern, error) {
 			c.Expr = p
 			err = &c
 		}
-		return nil, fmt.Errorf("invalid regular expression: %v", err)
+		return nil, M("pattern.syntax", "detail", err.Error())
 	}
 	// Every capturing group must now be named, in the order of the scan:
 	// then the library's numbers are the numbers of the opening
@@ -111,10 +110,10 @@ func compileCommandPattern(p string) (*commandPattern, error) {
 	}
 	got := re.GetGroupNames()
 	if len(got) != len(want)+1 || !slices.Equal(got[1:], want) {
-		return nil, errors.New("the groups of this pattern cannot be numbered in the order of their opening parentheses; simplify the pattern")
+		return nil, M("pattern.numbering")
 	}
 	if len(names) == 0 {
-		return nil, errors.New("must have at least one named group such as (?P<name>...) or (?<name>...)")
+		return nil, M("pattern.named_group_required")
 	}
 	return &commandPattern{re: re, names: names}, nil
 }
@@ -159,9 +158,10 @@ func (s *patternScanner) copy(n int) {
 	s.pos = end
 }
 
-func (s *patternScanner) fail(format string, a ...any) {
+// fail records the first reason why the pattern is refused.
+func (s *patternScanner) fail(m Msg) {
 	if s.err == nil {
-		s.err = fmt.Errorf(format, a...)
+		s.err = m
 	}
 }
 
@@ -186,7 +186,7 @@ func (s *patternScanner) rewrite() (string, error) {
 				if s.at(n) == '\n' && s.oddBackslashes(n) {
 					// Python reads the backslash and the line break as one
 					// character and continues the comment on the next line.
-					s.fail(`a # comment that ends with a backslash is not supported`)
+					s.fail(M("pattern.comment_backslash"))
 					continue
 				}
 				s.copy(n)
@@ -228,11 +228,11 @@ func (s *patternScanner) finish() {
 			// An octal escape, as in Python and in the library.
 			continue
 		case !r.angled && r.digits >= 3:
-			s.fail(`%s: write references to groups with at most two digits and octal escapes with three octal digits`, r.text)
+			s.fail(M("pattern.backref_digits", "ref", r.text))
 		case r.num < 1 || r.num > r.defined:
-			s.fail(`%s refers to group %d, which is not defined before it`, r.text, r.num)
+			s.fail(M("pattern.backref_undefined", "ref", r.text, "n", r.num))
 		case r.open:
-			s.fail(`%s refers to group %d, which is still open at that point`, r.text, r.num)
+			s.fail(M("pattern.backref_open", "ref", r.text, "n", r.num))
 		default:
 			s.numbersUsed = true
 		}
@@ -242,7 +242,7 @@ func (s *patternScanner) finish() {
 	}
 	for _, n := range s.conds {
 		if n < 1 || n > total {
-			s.fail(`(?(%d)...) refers to group %d, which does not exist`, n, n)
+			s.fail(M("pattern.cond_missing", "n", n))
 			return
 		}
 		s.numbersUsed = true
@@ -251,7 +251,7 @@ func (s *patternScanner) finish() {
 		seen := map[string]bool{}
 		for _, g := range s.groups {
 			if seen[g.name] {
-				s.fail(`group numbers are ambiguous because the name %q is used for more than one group`, g.name)
+				s.fail(M("pattern.ambiguous_name", "name", strconv.Quote(g.name)))
 				return
 			}
 			seen[g.name] = true
@@ -296,7 +296,7 @@ func (s *patternScanner) escape() {
 // with them and would read them as the letters Q and E, so the pattern would
 // silently match something else than written.
 func (s *patternScanner) failQuote(c rune) {
-	s.fail(`\%c is not supported (quoting with \Q...\E); escape each special character with a backslash instead`, c)
+	s.fail(M("pattern.quote", "char", string(c)))
 }
 
 // angledRef handles "\k<...>", "\<...>" and "\'...'" whose name starts at
@@ -365,7 +365,7 @@ func (s *patternScanner) open() {
 		if s.at(n) == ')' && s.oddBackslashes(n) {
 			// Python reads "\)" as one character and continues the
 			// comment after it.
-			s.fail(`a comment (?#...) that ends with a backslash is not supported`)
+			s.fail(M("pattern.comment_group_backslash"))
 			return
 		}
 		s.copy(n + 1)
@@ -391,13 +391,13 @@ func (s *patternScanner) open() {
 		ch := s.at(3)
 		switch {
 		case ch >= '1' && ch <= '9':
-			s.fail(`numbered groups such as (?<1>...) are not supported; give the group a name`)
+			s.fail(M("pattern.numbered_group"))
 		case ch == '-':
-			s.fail(`balancing groups such as (?<-name>...) are not supported`)
+			s.fail(M("pattern.balancing", "form", "(?<-name>...)"))
 		case ch != '0' && isPatternWordChar(ch):
 			n := s.scanName(3)
 			if s.at(3+n) == '-' {
-				s.fail(`balancing groups such as (?<name1-name2>...) are not supported`)
+				s.fail(M("pattern.balancing", "form", "(?<name1-name2>...)"))
 				return
 			}
 			s.groups = append(s.groups, patternGroup{name: string(s.in[s.pos+3 : s.pos+3+n])})
@@ -432,14 +432,14 @@ func (s *patternScanner) open() {
 		}
 		switch {
 		case !defined:
-			s.fail(`(?P=%s) refers to a group name that is not defined before it`, name)
+			s.fail(M("pattern.named_ref_undefined", "name", name))
 		case !closed:
-			s.fail(`(?P=%s) refers to a group that is still open at that point`, name)
+			s.fail(M("pattern.named_ref_open", "name", name))
 		}
 		s.out.WriteString(`\k<` + name + `>`)
 		s.pos += 4 + n + 1
 	case c == ')':
-		s.fail(`the empty group (?) is not supported`)
+		s.fail(M("pattern.empty_group"))
 	default:
 		// Options, non-capturing groups, look-ahead, atomic groups and
 		// conditions. The options (as the library reads them) change the
@@ -451,7 +451,7 @@ func (s *patternScanner) open() {
 			switch s.at(n) {
 			case '-', '+':
 			case 'n', 'N':
-				s.fail(`the option n (explicit capture) is not supported`)
+				s.fail(M("pattern.option_n"))
 				return
 			case 'x', 'X':
 			case 'i', 'I', 'm', 'M', 's', 'S', 'd', 'D', 'u', 'U':

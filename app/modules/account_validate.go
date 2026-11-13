@@ -1,7 +1,6 @@
 package modules
 
 import (
-	"errors"
 	"net/mail"
 	"strings"
 	"unicode"
@@ -23,18 +22,18 @@ const (
 func ValidateEmail(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", errors.New("an e-mail address is required")
+		return "", M("account.email_required")
 	}
 	if len(s) > MaxEmailLength {
-		return "", errors.New("the e-mail address must be at most 254 characters")
+		return "", M("account.email_too_long", "max", MaxEmailLength)
 	}
 	if !utf8.ValidString(s) || strings.ContainsAny(s, "\"<>,") ||
 		strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
-		return "", errors.New("the e-mail address must not contain spaces, control characters or \" < > ,")
+		return "", M("account.email_chars")
 	}
 	a, err := mail.ParseAddress(s)
 	if err != nil || a.Name != "" || a.Address != s {
-		return "", errors.New("the e-mail address is not valid")
+		return "", M("account.email_invalid")
 	}
 	return s, nil
 }
@@ -45,13 +44,13 @@ func ValidateEmail(s string) (string, error) {
 func ValidateDisplayName(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", errors.New("a display name is required")
+		return "", M("account.display_name_required")
 	}
 	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxDisplayNameLength {
-		return "", errors.New("the display name must be at most 64 characters")
+		return "", M("account.display_name_too_long", "max", MaxDisplayNameLength)
 	}
 	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
-		return "", errors.New("the display name must not contain control characters")
+		return "", M("account.display_name_control")
 	}
 	return s, nil
 }
