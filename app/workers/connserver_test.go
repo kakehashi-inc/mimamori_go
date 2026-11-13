@@ -1121,6 +1121,7 @@ func TestConnServerFirstTimeStallers(t *testing.T) {
 				t.Fatalf("%d stallers: plain request %q after %v, want 200 within 100 ms", n, line, d)
 			}
 			r := <-tlsDone
+			t.Logf("%d stallers: plain request after %v, TLS request of another source after %v", n, d, r.d)
 			limit := time.Duration(n)*modules.HandshakeGrace + 700*time.Millisecond
 			if r.err != nil || r.code != http.StatusOK || r.d > limit {
 				t.Fatalf("%d stallers: TLS request of another source: %d %v after %v, want 200 within %v", n, r.code, r.err, r.d, limit)
@@ -1271,6 +1272,78 @@ func TestConnServerNestedPass(t *testing.T) {
 		}
 		expectClosed(t, staller, time.Second, "handshake at stop")
 	})
+}
+
+// The time the accepting flow spends on other work inside a nested pass (a
+// handler that runs in it with one worker) does not count against the
+// handshake: an honest client of a foreign source whose second flight
+// arrived while a 2.5 s handler ran completes its handshake and is not
+// refused afterwards.
+func TestConnServerBusyFlowKeepsHandshake(t *testing.T) {
+	forWorkers(t, func(t *testing.T, workers int) {
+		ts := startConnTestServer(t, workers, 10*time.Second)
+		type result struct {
+			code int
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() {
+			code, err := ts.slowTLSGet(t, "127.0.0.2", 200*time.Millisecond, 0)
+			done <- result{code, err}
+		}()
+		time.Sleep(50 * time.Millisecond)
+		if line, _ := ts.webRaw(t, "GET /test/slow?ms=2500 HTTP/1.1\r\nHost: x\r\n\r\n"); !strings.Contains(line, " 200 ") {
+			t.Fatalf("slow handler: %q", line)
+		}
+		if r := <-done; r.err != nil || r.code != http.StatusOK {
+			t.Fatalf("honest handshake while the flow ran a handler: %d %v", r.code, r.err)
+		}
+		if code, _, _, err := ts.agentDo("127.0.0.2", "GET", "/agent/v1/ca", nil, nil); err != nil || code != http.StatusOK {
+			t.Fatalf("the honest source afterwards: %d %v", code, err)
+		}
+	})
+}
+
+// recordingConn keeps the raw bytes a client reads.
+type recordingConn struct {
+	net.Conn
+	got []byte
+}
+
+func (c *recordingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.got = append(c.got, p[:n]...)
+	return n, err
+}
+
+// A TLS response ends with the close_notify alert before the connection is
+// closed (TLS 1.2, where the record type of an alert is visible), and the
+// client sees a clean end.
+func TestConnServerTLSCloseNotify(t *testing.T) {
+	ts := startConnTestServer(t, 1, 10*time.Second)
+	raw := &recordingConn{Conn: dial(t, ts.agnt, "")}
+	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
+	pool, _ := modules.CertPoolFromPEMs(ts.e.c.currentCAPEMs(), time.Now())
+	c := tls.Client(raw, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12})
+	if _, err := io.WriteString(c, "GET /agent/v1/ca HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(c)
+	if err != nil || !bytes.HasPrefix(data, []byte("HTTP/1.1 200 ")) {
+		t.Fatalf("response %q, end %v", data[:min(len(data), 40)], err)
+	}
+	// Walk the records the server sent: the last one is an alert.
+	last := byte(0)
+	for b := raw.got; len(b) >= 5; {
+		n := 5 + (int(b[3])<<8 | int(b[4]))
+		if n > len(b) {
+			break
+		}
+		last, b = b[0], b[n:]
+	}
+	if last != 0x15 {
+		t.Fatalf("last record type %#x, want an alert (close_notify)", last)
+	}
 }
 
 // All loopback addresses are one source for the handshake order and the

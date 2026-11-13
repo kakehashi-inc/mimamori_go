@@ -758,6 +758,9 @@ type handshakeState struct {
 	// by a pass whose ppoll reported the socket ready for it.
 	events int16
 	ready  bool
+	// looked is set once the socket was looked at again when the handshake
+	// was about to give up for lack of time (see awaitPeer).
+	looked bool
 	// end is why the handshake ends before crypto/tls is done (nil while it
 	// goes on). Once set, every further wait returns it at once.
 	end error
@@ -822,11 +825,25 @@ func (s *connServer) handshake(c *conn) {
 // before every pass, so a peer that sends a byte at a time ends at the
 // limit too. A nested pass starts no handshake, so awaitPeer is never
 // entered twice.
+//
+// The time runs out while the flow is busy too (a handler it runs with one
+// worker, a periodic task), and meanwhile it does not look at the socket.
+// So before the handshake gives up for lack of time, the socket is looked
+// at once more: an answer that arrived in time but was not seen is taken.
+// This happens once per handshake (the whole flight of an honest client is
+// then in the socket), so a peer that sends a byte at a time still ends.
 func (s *connServer) awaitPeer(events int16) error {
 	sh := s.shake
 	for {
 		if sh.end == nil {
 			sh.end = s.handshakeEnd(sh, time.Now())
+			if sh.end != nil && sh.end != errHandshakeStop && !sh.looked {
+				sh.looked = true
+				if socketReady(sh.c.fd, events) {
+					sh.end = nil
+					return nil
+				}
+			}
 		}
 		if sh.end != nil {
 			return sh.end
@@ -1254,7 +1271,10 @@ func (s *connServer) finish(r jobResult) {
 }
 
 // encode returns the bytes to send for resp: resp itself, or for TLS its
-// encryption (crypto/tls writes into the connection's outbound buffer).
+// encryption followed by the close_notify alert (the connection is closed
+// after the response; without the alert, a strict client such as openssl
+// reports an unexpected end). crypto/tls writes both into the connection's
+// outbound buffer.
 func (s *connServer) encode(c *conn, resp []byte) []byte {
 	if c.tlsConn == nil {
 		return resp
@@ -1262,6 +1282,7 @@ func (s *connServer) encode(c *conn, resp []byte) []byte {
 	if _, err := c.tlsConn.Write(resp); err != nil {
 		return nil
 	}
+	_ = c.tlsConn.CloseWrite()
 	out := c.tlsIO.out
 	c.tlsIO.out = nil
 	return out
@@ -1558,6 +1579,11 @@ func (b *tlsBuffer) Read(p []byte) (int, error) {
 	}
 }
 
+// SetWriteDeadline does nothing: the socket is never waited on, and a
+// deadline on it would make the accepting flow's later writes fail
+// (crypto/tls sets one around the close_notify alert; see encode).
+func (b *tlsBuffer) SetWriteDeadline(time.Time) error { return nil }
+
 func (b *tlsBuffer) Write(p []byte) (int, error) {
 	if b.await == nil {
 		b.out = append(b.out, p...)
@@ -1643,6 +1669,13 @@ func ppoll(fds []pollFd, timeout time.Duration) error {
 func pollReady(fd int) bool {
 	fds := []pollFd{{fd: int32(fd), events: pollIn}}
 	return ppoll(fds, 0) == nil && fds[0].revents&pollIn != 0
+}
+
+// socketReady reports whether fd is ready now for events (or has an error
+// or hang-up to report), without waiting.
+func socketReady(fd int, events int16) bool {
+	fds := []pollFd{{fd: int32(fd), events: events}}
+	return ppoll(fds, 0) == nil && fds[0].revents != 0
 }
 
 // respWriter buffers a response so it can be written with a Content-Length.
