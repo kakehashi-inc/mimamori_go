@@ -321,21 +321,62 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+// errorJSON is the body of every error answer: the English text in "error"
+// (what the CLI shows) and the coded message in "error_i18n" (what the
+// browser translates, falling back to "error").
+type errorJSON struct {
+	Error     string      `json:"error"`
+	ErrorI18n modules.Msg `json:"error_i18n"`
+}
+
+// errorBody returns the error answer of a message.
+func errorBody(m modules.Msg) errorJSON {
+	return errorJSON{Error: m.Text(), ErrorI18n: m}
+}
+
+// writeError answers with the message: {"error": English, "error_i18n": m}.
+func writeError(w http.ResponseWriter, status int, m modules.Msg) {
+	writeJSON(w, status, errorBody(m))
+}
+
+// writeErr answers with the text of err (a validator's error, a request
+// helper's Msg): its message when it is one, otherwise the text as data.
+func writeErr(w http.ResponseWriter, status int, err error) {
+	writeError(w, status, modules.AsMsg(err))
 }
 
 func readJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("invalid request body: %v", err)
+		return invalidBody(err)
 	}
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("invalid request body: unexpected data after the JSON value")
+		return modules.M("common.invalid_body_trailing")
 	}
 	return nil
+}
+
+// rawMsgs returns texts that have no code yet as data messages, for a list
+// parameter (joined with "; " in English, as the texts were joined before).
+func rawMsgs(texts []string) []modules.Msg {
+	out := make([]modules.Msg, len(texts))
+	for i, t := range texts {
+		out[i] = modules.Raw(t)
+	}
+	return out
+}
+
+// invalidBody returns the answer to a request body that could not be
+// decoded: the decoder's text is data, except the refusal of the connection
+// server to read a large body of an unauthenticated request.
+func invalidBody(err error) modules.Msg {
+	detail := modules.AsMsg(err)
+	if errors.Is(err, errBodyRefused) {
+		detail = modules.M("common.body_refused")
+	}
+	return modules.M("common.invalid_body", "detail", detail)
 }
 
 func pathID(r *http.Request, name string) (int64, bool) {
@@ -353,7 +394,7 @@ func queryInt(r *http.Request, name string, def, min, max int) (int, error) {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid %s %q: not an integer", name, s)
+		return 0, modules.M("common.query_not_integer", "name", name, "value", strconv.Quote(s))
 	}
 	if v < min {
 		return min, nil
@@ -371,5 +412,5 @@ func isUniqueErr(err error) bool {
 // internalError logs err and answers 500 without details.
 func (c *core) internalError(w http.ResponseWriter, r *http.Request, err error) {
 	c.logger.Printf("%s %s: %v", r.Method, r.URL.Path, err)
-	writeError(w, http.StatusInternalServerError, "internal error")
+	writeError(w, http.StatusInternalServerError, modules.M("common.internal_error"))
 }

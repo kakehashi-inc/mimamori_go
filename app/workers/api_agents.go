@@ -223,12 +223,12 @@ func (c *core) handleListAgents(w http.ResponseWriter, r *http.Request) {
 func (c *core) loadAgent(w http.ResponseWriter, r *http.Request, name string) *models.Agent {
 	id, ok := pathID(r, name)
 	if !ok {
-		writeError(w, http.StatusNotFound, "agent not found")
+		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
 	}
 	a, err := models.GetAgent(c.db, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "agent not found")
+		writeError(w, http.StatusNotFound, modules.M("agent.not_found"))
 		return nil
 	}
 	if err != nil {
@@ -335,12 +335,12 @@ func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
 func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
 	id, ok := pathID(r, "id")
 	if !ok {
-		writeError(w, http.StatusNotFound, "token not found")
+		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
 	}
 	t, err := models.GetToken(c.db, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "token not found")
+		writeError(w, http.StatusNotFound, modules.M("token.not_found"))
 		return nil
 	}
 	if err != nil {
@@ -361,7 +361,7 @@ func (c *core) validDays(v *int) (int, error) {
 		return c.conf().TokenValidDays, nil
 	}
 	if *v < 1 || *v > 3650 {
-		return 0, errors.New("valid_days must be between 1 and 3650")
+		return 0, modules.M("token.valid_days_range", "min", 1, "max", 3650)
 	}
 	return *v, nil
 }
@@ -374,24 +374,24 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		RuleVersion *int   `json:"rule_version"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	if !tokenNameRe.MatchString(in.Name) {
-		writeError(w, http.StatusBadRequest, "token name must be 1-64 characters of A-Z a-z 0-9 . _ -")
+		writeError(w, http.StatusBadRequest, modules.M("token.name_invalid"))
 		return
 	}
 	days, err := c.validDays(in.ValidDays)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	agent := &models.Agent{Kind: models.AgentToken}
 	if in.RuleID != nil && *in.RuleID > 0 {
 		rule, err := models.GetRule(c.db, *in.RuleID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "rule not found")
+			writeError(w, http.StatusBadRequest, modules.M("rule.not_found"))
 			return
 		}
 		ver := rule.LatestVersion
@@ -399,7 +399,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 			ver = *in.RuleVersion
 		}
 		if _, err := models.GetRuleVersion(c.db, rule.ID, ver); err != nil {
-			writeError(w, http.StatusBadRequest, "rule version not found")
+			writeError(w, http.StatusBadRequest, modules.M("rule.rule_version_not_found"))
 			return
 		}
 		agent.AssignedRuleID = sql.NullInt64{Int64: rule.ID, Valid: true}
@@ -415,7 +415,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	tok := &models.Token{Name: in.Name, Hash: modules.HashSecret(value), Value: value, ExpiresAt: time.Now().Unix() + int64(days)*86400, CreatedBy: p.operator()}
 	if err := models.InsertToken(c.db, tok); err != nil {
 		if isUniqueErr(err) {
-			writeError(w, http.StatusConflict, "a token with this name already exists")
+			writeError(w, http.StatusConflict, modules.M("token.name_taken"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -449,13 +449,13 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength != 0 {
 		if err := readJSON(r, &in); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	days, err := c.validDays(in.ValidDays)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	value, err := modules.GenerateSecret(modules.TokenPrefix)

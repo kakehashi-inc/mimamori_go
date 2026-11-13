@@ -69,12 +69,12 @@ func (c *core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var in configUpdateJSON
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	changed, err := modules.ApplyCentralConfigChanges(c.db, in.Set, in.Unset)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if len(changed) > 0 {

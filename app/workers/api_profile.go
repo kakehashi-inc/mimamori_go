@@ -18,12 +18,12 @@ func (c *core) handleOwnDisplayName(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	display, err := modules.ValidateDisplayName(in.DisplayName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if display != p.DisplayName {
@@ -63,16 +63,16 @@ func (c *core) handleOwnEmail(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	email, err := modules.ValidateEmail(in.Email)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if email == p.Email {
-		writeError(w, http.StatusBadRequest, "the e-mail address is unchanged")
+		writeError(w, http.StatusBadRequest, modules.M("account.email_unchanged"))
 		return
 	}
 	other, err := models.GetAccountByEmail(c.db, email)
@@ -123,7 +123,7 @@ func (c *core) handleOwnEmailVerify(w http.ResponseWriter, r *http.Request) {
 		Code string `json:"code"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	row, err := models.GetEmailChangeCode(c.db, p.AccountID, p.SessionID)

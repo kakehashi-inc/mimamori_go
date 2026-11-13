@@ -188,12 +188,12 @@ func (c *core) loadCommandTarget(w http.ResponseWriter, r *http.Request) (*model
 func (c *core) loadCommandSetRow(w http.ResponseWriter, r *http.Request, tdb *sql.DB, withDeleted bool) *models.CommandSet {
 	id, ok := pathID(r, "set")
 	if !ok {
-		writeError(w, http.StatusNotFound, "command set not found")
+		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return nil
 	}
 	s, err := models.GetCommandSet(tdb, id)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && s.DeletedAt > 0 && !withDeleted) {
-		writeError(w, http.StatusNotFound, "command set not found")
+		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return nil
 	}
 	if err != nil {
@@ -304,7 +304,7 @@ func (c *core) handleGetCommandSet(w http.ResponseWriter, r *http.Request) {
 func readCommandSetSpec(r *http.Request, defaultUser string) (*modules.CommandSetSpec, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, fmt.Errorf("invalid request body: %v", err)
+		return nil, invalidBody(err)
 	}
 	spec, err := modules.ParseCommandSetSpec(body)
 	if err != nil {
@@ -318,7 +318,8 @@ func readCommandSetSpec(r *http.Request, defaultUser string) (*modules.CommandSe
 
 // writeCommandProblems answers 400 with every validation problem.
 func writeCommandProblems(w http.ResponseWriter, problems []string) {
-	writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid command set: " + strings.Join(problems, "; "), "errors": problems})
+	m := modules.M("command.invalid_set", "problems", rawMsgs(problems))
+	writeJSON(w, http.StatusBadRequest, map[string]any{"error": m.Text(), "error_i18n": m, "errors": problems})
 }
 
 // validationTime returns the time a once schedule is checked against: 0
@@ -333,7 +334,8 @@ func validationTime(spec *modules.CommandSetSpec, stored *models.CommandSet, now
 	return now
 }
 
-const commandNameTaken = "name: another command set of this monitored target has this name"
+// commandNameTaken is the answer to a name another set of the target has.
+var commandNameTaken = modules.M("command.name_taken")
 
 // saveCommandSet inserts (row.ID == 0) or updates a set with its commands
 // in one transaction.
@@ -364,7 +366,7 @@ func (c *core) handleCreateCommandSet(w http.ResponseWriter, r *http.Request) {
 	}
 	spec, err := readCommandSetSpec(r, a.HostOSUser)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -413,7 +415,7 @@ func (c *core) handleUpdateCommandSet(w http.ResponseWriter, r *http.Request) {
 	// An omitted OS user keeps the set's current one.
 	spec, err := readCommandSetSpec(r, stored.OSUser)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -429,7 +431,7 @@ func (c *core) handleUpdateCommandSet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, commandNameTaken)
 		return
 	case errors.Is(err, sql.ErrNoRows):
-		writeError(w, http.StatusNotFound, "command set not found")
+		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return
 	case err != nil:
 		c.internalError(w, r, err)
@@ -455,7 +457,7 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
 	now := time.Now().Unix()
 	if err := models.DeleteCommandSet(tdb, stored.ID, p.operator(), now); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "command set not found")
+		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)
@@ -481,14 +483,14 @@ func (c *core) handleValidateCommandSet(w http.ResponseWriter, r *http.Request) 
 	var stored *models.CommandSet
 	setID, err := queryInt(r, "set_id", 0, 0, math.MaxInt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	defaultUser := a.HostOSUser
 	if setID > 0 {
 		s, err := models.GetCommandSet(tdb, int64(setID))
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && s.DeletedAt > 0) {
-			writeError(w, http.StatusNotFound, "command set not found")
+			writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 			return
 		}
 		if err != nil {
@@ -510,7 +512,7 @@ func (c *core) handleValidateCommandSet(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if taken {
-			problems = append(problems, commandNameTaken)
+			problems = append(problems, commandNameTaken.Text())
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"errors": nonNil(problems), "definition": spec})
@@ -529,16 +531,16 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 		} `json:"items"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if len(in.Items) == 0 {
-		writeError(w, http.StatusBadRequest, "items: choose at least one command set to import")
+		writeError(w, http.StatusBadRequest, modules.M("command.import_select"))
 		return
 	}
 	src, err := models.GetAgent(c.db, in.SourceAgentID)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusBadRequest, "source_agent_id: monitored target not found")
+		writeError(w, http.StatusBadRequest, modules.M("command.import_source_not_found"))
 		return
 	}
 	if err != nil {
@@ -595,10 +597,8 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 	if len(conflicts) > 0 {
 		slices.Sort(conflicts)
 		conflicts = slices.Compact(conflicts)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":     "these names are already used in the monitored target or repeated in the import: " + strings.Join(conflicts, ", "),
-			"conflicts": conflicts,
-		})
+		m := modules.M("command.import_conflicts", "names", conflicts)
+		writeJSON(w, http.StatusConflict, map[string]any{"error": m.Text(), "error_i18n": m, "conflicts": conflicts})
 		return
 	}
 	p := principalFrom(r)
@@ -614,10 +614,8 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 		row, items := modules.CommandSetRows(&cp.spec)
 		row.CreatedBy, row.ImportedFrom = p.operator(), truncate(cp.from, 400)
 		if err := models.InsertCommandSet(tx, row, now); errors.Is(err, models.ErrNameTaken) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":     "these names are already used in the monitored target or repeated in the import: " + row.Name,
-				"conflicts": []string{row.Name},
-			})
+			m := modules.M("command.import_conflicts", "names", []string{row.Name})
+			writeJSON(w, http.StatusConflict, map[string]any{"error": m.Text(), "error_i18n": m, "conflicts": []string{row.Name}})
 			return
 		} else if err != nil {
 			c.internalError(w, r, err)
@@ -665,7 +663,7 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 	q := &models.CommandRequest{SetID: stored.ID, RequestedAt: now, RequestedBy: p.operator(),
 		ExpiresAt: now + int64(modules.CommandRequestExpiry/time.Second)}
 	if err := models.InsertCommandRequest(tdb, q); errors.Is(err, models.ErrRequestActive) {
-		writeError(w, http.StatusConflict, "this command set already has a run request that has not been answered")
+		writeError(w, http.StatusConflict, modules.M("command.request_pending"))
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)
@@ -682,11 +680,11 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 	}
 	id, ok := pathID(r, "req")
 	if !ok {
-		writeError(w, http.StatusNotFound, "run request not found")
+		writeError(w, http.StatusNotFound, modules.M("command.request_not_found"))
 		return
 	}
 	if _, err := models.GetCommandRequest(tdb, id); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "run request not found")
+		writeError(w, http.StatusNotFound, modules.M("command.request_not_found"))
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)
@@ -694,7 +692,7 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 	}
 	p := principalFrom(r)
 	if err := models.DiscardCommandRequest(tdb, id, p.operator(), time.Now().Unix()); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusConflict, "only a run request that was not yet delivered to the agent can be discarded")
+		writeError(w, http.StatusConflict, modules.M("command.request_not_discardable"))
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)
@@ -825,12 +823,12 @@ func (c *core) handleListCommandRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, err := queryInt(r, "limit", 50, 1, 500)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	before, err := queryInt(r, "before", 0, 0, math.MaxInt)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	runs, err := models.ListCommandRuns(tdb, row.ID, limit+1, int64(before))
@@ -864,12 +862,12 @@ func (c *core) handleGetCommandRun(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := pathID(r, "run")
 	if !ok {
-		writeError(w, http.StatusNotFound, "run not found")
+		writeError(w, http.StatusNotFound, modules.M("command.run_not_found"))
 		return
 	}
 	run, err := models.GetCommandRun(tdb, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "run not found")
+		writeError(w, http.StatusNotFound, modules.M("command.run_not_found"))
 		return
 	}
 	if err != nil {

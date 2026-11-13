@@ -131,6 +131,7 @@ var msgCatalog = map[string]msgDef{
 	"common.internal_error":                         {en: "internal error"},
 	"common.invalid_body":                           {en: "invalid request body: {{detail}}"},
 	"common.invalid_body_trailing":                  {en: "invalid request body: unexpected data after the JSON value"},
+	"common.invalid_request":                        {en: "invalid request"},
 	"common.length_required":                        {en: "length required"},
 	"common.lines":                                  {en: "{{lines}}"},
 	"common.problems":                               {en: "{{problems}}"},

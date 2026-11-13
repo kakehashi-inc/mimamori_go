@@ -1,9 +1,11 @@
 package workers
 
 import (
-	"fmt"
 	"net/http"
+	"strconv"
 	"time"
+
+	"mimamori/app/modules"
 )
 
 // registerAPI registers the operations shared by the browser API
@@ -144,5 +146,5 @@ func parseTime(name, s string) (int64, error) {
 			return t.Unix(), nil
 		}
 	}
-	return 0, fmt.Errorf("invalid %s %q: use RFC3339 or YYYY-MM-DD[THH:MM[:SS]]", name, s)
+	return 0, modules.M("common.query_bad_time", "name", name, "value", strconv.Quote(s))
 }

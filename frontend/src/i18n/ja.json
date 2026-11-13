@@ -671,6 +671,7 @@
             "internal_error": "内部エラーが発生しました。",
             "invalid_body": "リクエストの本文が正しくありません: {{detail}}",
             "invalid_body_trailing": "リクエストの本文が正しくありません: JSON の値の後に余分なデータがあります。",
+            "invalid_request": "リクエストが正しくありません。",
             "length_required": "リクエストに本文の長さ（Content-Length）がありません。",
             "lines": "{{lines}}",
             "problems": "{{problems}}",

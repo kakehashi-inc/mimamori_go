@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"slices"
@@ -80,7 +79,7 @@ func boolQuery(r *http.Request, name string) (*bool, error) {
 		b := false
 		return &b, nil
 	default:
-		return nil, fmt.Errorf("invalid %s %q: use true or false", name, v)
+		return nil, modules.M("common.query_not_bool", "name", name, "value", strconv.Quote(v))
 	}
 }
 
@@ -99,12 +98,12 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	var agentID int64
 	if v := q.Get("agent_id"); v != "" {
 		if agentID, errs[6] = strconv.ParseInt(v, 10, 64); errs[6] != nil {
-			errs[6] = fmt.Errorf("invalid agent_id %q: not an integer", v)
+			errs[6] = modules.M("common.query_agent_id", "value", strconv.Quote(v))
 		}
 	}
 	for _, err := range errs {
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -152,7 +151,7 @@ func (c *core) handleGetDetection(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := pathID(r, "id")
 	if !ok {
-		writeError(w, http.StatusNotFound, "detection not found")
+		writeError(w, http.StatusNotFound, modules.M("detection.not_found"))
 		return
 	}
 	tdb, err := c.targetDB(a)
@@ -162,7 +161,7 @@ func (c *core) handleGetDetection(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := models.GetDetection(tdb, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "detection not found")
+		writeError(w, http.StatusNotFound, modules.M("detection.not_found"))
 		return
 	}
 	if err != nil {
@@ -180,7 +179,7 @@ func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
 		} `json:"items"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	p := principalFrom(r)
@@ -266,28 +265,28 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	s := &models.Suppression{Type: strings.TrimSpace(in.Type), OSUser: strings.TrimSpace(in.OSUser), Exe: strings.TrimSpace(in.Exe),
 		Target: strings.TrimSpace(in.Target), Comment: strings.TrimSpace(in.Comment), CreatedBy: principalFrom(r).operator()}
 	if s.Type != "" && !slices.Contains(modules.DetectionTypes, s.Type) {
-		writeError(w, http.StatusBadRequest, "unknown detection type")
+		writeError(w, http.StatusBadRequest, modules.M("suppression.type_invalid"))
 		return
 	}
 	if s.Type == "" && s.OSUser == "" && s.Exe == "" && s.Target == "" {
-		writeError(w, http.StatusBadRequest, "at least one condition is required")
+		writeError(w, http.StatusBadRequest, modules.M("suppression.condition_required"))
 		return
 	}
 	if err := validateSuppressionFields(s); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	var agentName = "all agents"
 	if in.AgentID != nil && *in.AgentID > 0 {
 		a, err := models.GetAgent(c.db, *in.AgentID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "agent not found")
+			writeError(w, http.StatusBadRequest, modules.M("agent.not_found"))
 			return
 		}
 		s.AgentID = sql.NullInt64{Int64: a.ID, Valid: true}
@@ -324,13 +323,13 @@ func validateSuppressionFields(s *models.Suppression) error {
 		{"comment", s.Comment, suppressionMaxCommentLength, true},
 	} {
 		if strings.IndexFunc(f.value, unicode.IsControl) >= 0 {
-			return fmt.Errorf("%s must not contain control characters", f.name)
+			return modules.M("suppression.field_control", "field", f.name)
 		}
 		if f.chars && utf8.RuneCountInString(f.value) > f.max {
-			return fmt.Errorf("%s is longer than %d characters", f.name, f.max)
+			return modules.M("suppression.field_too_long_chars", "field", f.name, "max", f.max)
 		}
 		if !f.chars && len(f.value) > f.max {
-			return fmt.Errorf("%s is longer than %d bytes", f.name, f.max)
+			return modules.M("suppression.field_too_long_bytes", "field", f.name, "max", f.max)
 		}
 	}
 	return nil
@@ -461,12 +460,12 @@ func (c *core) releaseSuppressionOf(tdb *sql.DB, agentID, suppressionID int64, s
 func (c *core) handleDeleteSuppression(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r, "id")
 	if !ok {
-		writeError(w, http.StatusNotFound, "suppression not found")
+		writeError(w, http.StatusNotFound, modules.M("suppression.not_found"))
 		return
 	}
 	s, err := models.GetSuppression(c.db, id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "suppression not found")
+		writeError(w, http.StatusNotFound, modules.M("suppression.not_found"))
 		return
 	}
 	if err := models.DeleteSuppression(c.db, id); err != nil {
@@ -576,12 +575,12 @@ var viewerHiddenHistory = []string{models.HistAccount, models.HistConfig, models
 func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 	limit, err := queryInt(r, "limit", 100, 1, 500)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	offset, err := queryInt(r, "offset", 0, 0, 10000000)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	// Viewers do not receive the history of accounts, of the system

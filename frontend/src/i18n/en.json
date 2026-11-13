@@ -671,6 +671,7 @@
             "internal_error": "internal error",
             "invalid_body": "invalid request body: {{detail}}",
             "invalid_body_trailing": "invalid request body: unexpected data after the JSON value",
+            "invalid_request": "invalid request",
             "length_required": "length required",
             "lines": "{{lines}}",
             "problems": "{{problems}}",

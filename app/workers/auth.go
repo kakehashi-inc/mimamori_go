@@ -83,7 +83,7 @@ func publicAPIRoute(r *http.Request) bool {
 func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get(csrfHeader) != "1" {
-			writeError(w, http.StatusForbidden, "missing request header")
+			writeError(w, http.StatusForbidden, modules.M("auth.missing_header"))
 			return
 		}
 		if publicAPIRoute(r) {
@@ -92,7 +92,7 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 		}
 		p, s := c.sessionPrincipal(r)
 		if p == nil {
-			writeError(w, http.StatusUnauthorized, "login required")
+			writeError(w, http.StatusUnauthorized, modules.M("auth.login_required"))
 			return
 		}
 		now := time.Now().Unix()
@@ -127,7 +127,7 @@ func (c *core) adminAPIAuth(next http.Handler) http.Handler {
 			return
 		}
 		if !c.cliCredential(r) {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+			writeError(w, http.StatusUnauthorized, modules.M("auth.unauthorized"))
 			return
 		}
 		next.ServeHTTP(w, withPrincipal(r, &principal{DisplayName: cliOperator, Role: models.RoleAdmin, ViaCLI: true}))
@@ -165,7 +165,7 @@ func requireAdmin(h http.HandlerFunc) http.HandlerFunc {
 func requireAny(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if principalFrom(r) == nil {
-			writeError(w, http.StatusUnauthorized, "login required")
+			writeError(w, http.StatusUnauthorized, modules.M("auth.login_required"))
 			return
 		}
 		h(w, r)

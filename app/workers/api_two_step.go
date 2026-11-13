@@ -22,11 +22,11 @@ const verifyCookie = "mimamori_verify"
 const verifyCookiePath = "/api/v1/auth/login"
 
 // Answers of the code steps.
-const (
-	codeMailFailed   = "the verification code could not be sent; contact an administrator"
-	invalidCode      = "invalid code"
-	loginCodeExpired = "the verification code has expired; log in again"
-	emailCodeExpired = "the verification code has expired or was entered wrongly too often; request the change again"
+var (
+	codeMailFailed   = modules.M("auth.code_mail_failed")
+	invalidCode      = modules.M("auth.invalid_code")
+	loginCodeExpired = modules.M("auth.login_code_expired")
+	emailCodeExpired = modules.M("auth.email_code_expired")
 )
 
 // codeBinding is what a code hash is tied to (see modules.HashAuthCode).
@@ -162,7 +162,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		Trust     bool   `json:"trust"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -187,7 +187,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.LockedUntil > now {
-		writeError(w, http.StatusLocked, "login is temporarily locked after repeated failures")
+		writeError(w, http.StatusLocked, modules.M("auth.locked"))
 		return
 	}
 	if !c.codeMatches(row, in.Code) {
@@ -198,7 +198,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
 			_ = models.DeleteAuthCode(c.db, row.ID)
 			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, "too many failed logins from "+remoteHost(r.RemoteAddr))
-			writeError(w, http.StatusLocked, "login is temporarily locked after repeated failures")
+			writeError(w, http.StatusLocked, modules.M("auth.locked"))
 			return
 		}
 		writeError(w, http.StatusUnauthorized, invalidCode)
@@ -223,7 +223,7 @@ func (c *core) handleLoginVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.LockedUntil > now {
-		writeError(w, http.StatusLocked, "login is temporarily locked after repeated failures")
+		writeError(w, http.StatusLocked, modules.M("auth.locked"))
 		return
 	}
 	if err := c.rememberBrowser(w, r, a.ID, in.Trust, now); err != nil {

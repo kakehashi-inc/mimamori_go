@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -274,14 +275,25 @@ const (
 
 // Answers the connection server writes itself.
 var (
-	busyResponse           = []byte("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"error\":\"busy\"}")
+	busyBody               = errorBodyBytes(modules.M("common.busy"))
+	busyResponse           = []byte(fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(busyBody), busyBody))
 	badRequestResponse     = []byte("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
-	headTooLargeResponse   = errorResponse(http.StatusRequestHeaderFieldsTooLarge, "request header too large")
-	lengthRequiredResponse = errorResponse(http.StatusLengthRequired, "length required")
+	headTooLargeResponse   = errorResponse(http.StatusRequestHeaderFieldsTooLarge, modules.M("common.header_too_large"))
+	lengthRequiredResponse = errorResponse(http.StatusLengthRequired, modules.M("common.length_required"))
+	internalErrorBody      = errorBodyBytes(modules.M("common.internal_error"))
 )
 
-func errorResponse(status int, msg string) []byte {
-	body := `{"error":"` + msg + `"}`
+// errorBodyBytes returns the JSON body of an error answer (see errorBody).
+func errorBodyBytes(m modules.Msg) []byte {
+	b, err := json.Marshal(errorBody(m))
+	if err != nil {
+		panic(err) // a message of strings and numbers always encodes
+	}
+	return b
+}
+
+func errorResponse(status int, m modules.Msg) []byte {
+	body := errorBodyBytes(m)
 	return []byte(fmt.Sprintf("HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
 		status, http.StatusText(status), len(body), body))
 }
@@ -1710,7 +1722,7 @@ func (s *connServer) serve(h http.Handler, req *http.Request) []byte {
 				w.header = http.Header{"Content-Type": {"application/json"}}
 				w.status = http.StatusInternalServerError
 				w.buf.Reset()
-				w.buf.WriteString(`{"error":"internal error"}`)
+				w.buf.Write(internalErrorBody)
 			}
 		}()
 		h.ServeHTTP(w, req)

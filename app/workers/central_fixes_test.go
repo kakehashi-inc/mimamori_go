@@ -63,7 +63,7 @@ func TestBusyResponseLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := io.ReadAll(resp.Body)
-	if err != nil || resp.StatusCode != http.StatusServiceUnavailable || string(body) != `{"error":"busy"}` {
+	if err != nil || resp.StatusCode != http.StatusServiceUnavailable || string(body) != `{"error":"busy","error_i18n":{"code":"common.busy"}}` {
 		t.Fatalf("503 response: %d %q %v", resp.StatusCode, body, err)
 	}
 }

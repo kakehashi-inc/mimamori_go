@@ -51,8 +51,8 @@ func meJSON(id int64, email, displayName, role, language string) map[string]any 
 	return map[string]any{"id": id, "email": email, "display_name": displayName, "role": role, "language": language}
 }
 
-// invalidEmail and duplicateEmail are the answers about an e-mail address.
-const duplicateEmail = "an account with this e-mail address already exists"
+// duplicateEmail is the answer to an e-mail address another account has.
+var duplicateEmail = modules.M("account.email_duplicate")
 
 func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -61,7 +61,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Remember bool   `json:"remember"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -69,11 +69,11 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Spend the same time as a real check so addresses cannot be probed.
 		modules.VerifyPassword(dummyPasswordHash(), in.Password)
-		writeError(w, http.StatusUnauthorized, "invalid e-mail address or password")
+		writeError(w, http.StatusUnauthorized, modules.M("auth.login_failed"))
 		return
 	}
 	if a.LockedUntil > now {
-		writeError(w, http.StatusLocked, "login is temporarily locked after repeated failures")
+		writeError(w, http.StatusLocked, modules.M("auth.locked"))
 		return
 	}
 	if a.Disabled || !modules.VerifyPassword(a.PasswordHash, in.Password) {
@@ -81,7 +81,7 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if locked, _ := models.RecordLoginFailure(c.db, a.ID, modules.LoginMaxFailures, lock); locked {
 			c.history(&principal{Email: a.Email}, models.HistAccount, "login_locked", a.Email, "too many failed logins from "+remoteHost(r.RemoteAddr))
 		}
-		writeError(w, http.StatusUnauthorized, "invalid e-mail address or password")
+		writeError(w, http.StatusUnauthorized, modules.M("auth.login_failed"))
 		return
 	}
 	cfg := c.conf()
@@ -155,11 +155,11 @@ func (c *core) handleOwnLanguage(w http.ResponseWriter, r *http.Request) {
 		Language string `json:"language"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if !models.ValidLanguage(in.Language) {
-		writeError(w, http.StatusBadRequest, "language must be auto, en or ja")
+		writeError(w, http.StatusBadRequest, modules.M("account.language_invalid"))
 		return
 	}
 	if err := models.UpdateAccountLanguage(c.db, p.AccountID, in.Language); err != nil {
@@ -176,7 +176,7 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		NewPassword     string `json:"new_password"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	a, err := models.GetAccount(c.db, p.AccountID)
@@ -185,11 +185,11 @@ func (c *core) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !modules.VerifyPassword(a.PasswordHash, in.CurrentPassword) {
-		writeError(w, http.StatusBadRequest, "the current password is wrong")
+		writeError(w, http.StatusBadRequest, modules.M("account.current_password_wrong"))
 		return
 	}
 	if err := modules.ValidatePassword(in.NewPassword); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	hash, err := modules.HashPassword(in.NewPassword)
@@ -228,32 +228,32 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		Password    string `json:"password"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	email, err := modules.ValidateEmail(in.Email)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	display, err := modules.ValidateDisplayName(in.DisplayName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Language == "" {
 		in.Language = models.LangAuto
 	}
 	if !models.ValidLanguage(in.Language) {
-		writeError(w, http.StatusBadRequest, "language must be auto, en or ja")
+		writeError(w, http.StatusBadRequest, modules.M("account.language_invalid"))
 		return
 	}
 	if in.Role != models.RoleAdmin && in.Role != models.RoleViewer {
-		writeError(w, http.StatusBadRequest, "role must be admin or viewer")
+		writeError(w, http.StatusBadRequest, modules.M("account.role_invalid"))
 		return
 	}
 	if err := modules.ValidatePassword(in.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	hash, err := modules.HashPassword(in.Password)
@@ -278,12 +278,12 @@ func (c *core) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 func (c *core) loadAccount(w http.ResponseWriter, r *http.Request) *models.Account {
 	id, ok := pathID(r, "id")
 	if !ok {
-		writeError(w, http.StatusNotFound, "account not found")
+		writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 		return nil
 	}
 	a, err := models.GetAccount(c.db, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "account not found")
+		writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 		return nil
 	}
 	if err != nil {
@@ -328,11 +328,11 @@ func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
 		Role string `json:"role"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Role != models.RoleAdmin && in.Role != models.RoleViewer {
-		writeError(w, http.StatusBadRequest, "role must be admin or viewer")
+		writeError(w, http.StatusBadRequest, modules.M("account.role_invalid"))
 		return
 	}
 	if in.Role == a.Role {
@@ -345,7 +345,7 @@ func (c *core) handleAccountRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if last {
-		writeError(w, http.StatusConflict, "the last enabled administrator cannot be changed to viewer")
+		writeError(w, http.StatusConflict, modules.M("account.last_admin_role"))
 		return
 	}
 	c.invalidateAccount(a.ID)
@@ -363,11 +363,11 @@ func (c *core) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := modules.ValidatePassword(in.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	hash, err := modules.HashPassword(in.Password)
@@ -397,12 +397,12 @@ func (c *core) handleAccountEmail(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	email, err := modules.ValidateEmail(in.Email)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if email == a.Email {
@@ -434,12 +434,12 @@ func (c *core) handleAccountDisplayName(w http.ResponseWriter, r *http.Request) 
 		DisplayName string `json:"display_name"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	display, err := modules.ValidateDisplayName(in.DisplayName)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if display == a.DisplayName {
@@ -467,11 +467,11 @@ func (c *core) handleAccountNotify(w http.ResponseWriter, r *http.Request) {
 		Notify *bool `json:"notify"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Notify == nil {
-		writeError(w, http.StatusBadRequest, "notify must be true or false")
+		writeError(w, http.StatusBadRequest, modules.M("account.notify_invalid"))
 		return
 	}
 	if *in.Notify == a.Notify {
@@ -480,7 +480,7 @@ func (c *core) handleAccountNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := models.SetAccountNotify(c.db, a.ID, *in.Notify); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "account not found")
+			writeError(w, http.StatusNotFound, modules.M("account.not_found"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -506,7 +506,7 @@ func (c *core) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool
 		return
 	}
 	if last {
-		writeError(w, http.StatusConflict, "the last enabled administrator cannot be disabled")
+		writeError(w, http.StatusConflict, modules.M("account.last_admin_disable"))
 		return
 	}
 	action := "enabled"
@@ -537,7 +537,7 @@ func (c *core) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if last {
-		writeError(w, http.StatusConflict, "the last enabled administrator cannot be deleted")
+		writeError(w, http.StatusConflict, modules.M("account.last_admin_delete"))
 		return
 	}
 	c.history(principalFrom(r), models.HistAccount, "deleted", a.Email, "")

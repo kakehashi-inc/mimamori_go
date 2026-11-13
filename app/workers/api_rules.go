@@ -89,12 +89,12 @@ func (c *core) handleListRules(w http.ResponseWriter, r *http.Request) {
 func (c *core) loadRule(w http.ResponseWriter, r *http.Request) *models.Rule {
 	id, ok := pathID(r, "id")
 	if !ok {
-		writeError(w, http.StatusNotFound, "rule not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.not_found"))
 		return nil
 	}
 	rule, err := models.GetRule(c.db, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "rule not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.not_found"))
 		return nil
 	}
 	if err != nil {
@@ -155,12 +155,12 @@ func (c *core) handleGetRuleVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	ver, err := strconv.Atoi(r.PathValue("version"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "version not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
 	}
 	v, err := models.GetRuleVersion(c.db, rule.ID, ver)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "version not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
 	}
 	content, err := modules.ParseRuleContent([]byte(v.Content))
@@ -179,7 +179,7 @@ func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
 	from, err1 := strconv.Atoi(r.URL.Query().Get("from"))
 	to, err2 := strconv.Atoi(r.URL.Query().Get("to"))
 	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, "from and to are required")
+		writeError(w, http.StatusBadRequest, modules.M("rule.diff_from_to"))
 		return
 	}
 	text := func(ver int) (string, error) {
@@ -195,12 +195,12 @@ func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := text(from)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "version not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
 	}
 	b, err := text(to)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "version not found")
+		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "lines": modules.DiffLines(a, b)})
@@ -213,14 +213,14 @@ func (c *core) templateContent(name string) (*modules.RuleContent, error) {
 	}
 	t, err := models.GetTemplateByName(c.db, name)
 	if err != nil {
-		return nil, fmt.Errorf("template %q not found", name)
+		return nil, modules.M("rule.template_not_found_named", "name", strconv.Quote(name))
 	}
 	return modules.ParseRuleContent([]byte(t.Content))
 }
 
 func (c *core) mergeTemplates(names []string, choices map[string]string) (*modules.RuleContent, []modules.MergeConflict, error) {
 	if len(names) == 0 {
-		return nil, nil, errors.New("select at least one template")
+		return nil, nil, modules.M("rule.select_template")
 	}
 	var items []modules.NamedContent
 	for _, n := range names {
@@ -240,12 +240,12 @@ func (c *core) handleMergePreview(w http.ResponseWriter, r *http.Request) {
 		Choices   map[string]string `json:"choices"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	merged, conflicts, err := c.mergeTemplates(in.Templates, in.Choices)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"content": merged, "conflicts": nonNil(conflicts)})
@@ -256,7 +256,7 @@ func (c *core) handleValidateRule(w http.ResponseWriter, r *http.Request) {
 		Content json.RawMessage `json:"content"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	content, err := modules.ParseRuleContent(in.Content)
@@ -276,12 +276,12 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		Content     json.RawMessage   `json:"content"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	if !ruleNameRe.MatchString(in.Name) {
-		writeError(w, http.StatusBadRequest, "rule name must be 1-100 characters")
+		writeError(w, http.StatusBadRequest, modules.M("rule.name_invalid"))
 		return
 	}
 	var content *modules.RuleContent
@@ -290,7 +290,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	case len(in.Templates) > 0:
 		merged, conflicts, err := c.mergeTemplates(in.Templates, in.Choices)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 		if len(conflicts) > 0 {
@@ -298,7 +298,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 			for _, cf := range conflicts {
 				fields = append(fields, cf.Field)
 			}
-			writeError(w, http.StatusBadRequest, "choose the template for: "+strings.Join(fields, ", "))
+			writeError(w, http.StatusBadRequest, modules.M("rule.choose_template", "fields", fields))
 			return
 		}
 		content = merged
@@ -306,7 +306,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 		content = parsed
@@ -315,7 +315,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		content = emptyContent()
 	}
 	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, strings.Join(errs, "; "))
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
 		return
 	}
 	p := principalFrom(r)
@@ -328,7 +328,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	rule := &models.Rule{Name: in.Name, Description: strings.TrimSpace(in.Description), CreatedBy: p.operator()}
 	if err := models.InsertRule(tx, rule); err != nil {
 		if isUniqueErr(err) {
-			writeError(w, http.StatusConflict, "a rule with this name already exists")
+			writeError(w, http.StatusConflict, modules.M("rule.name_taken"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -362,16 +362,16 @@ func (c *core) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 		Comment     string          `json:"comment"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	content, err := modules.ParseRuleContent(in.Content)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, strings.Join(errs, "; "))
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
 		return
 	}
 	desc := rule.Description
@@ -423,18 +423,18 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 		AgentIDs []int64 `json:"agent_ids"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Version == 0 {
 		in.Version = rule.LatestVersion
 	}
 	if _, err := models.GetRuleVersion(c.db, rule.ID, in.Version); err != nil {
-		writeError(w, http.StatusBadRequest, "version not found")
+		writeError(w, http.StatusBadRequest, modules.M("rule.version_not_found"))
 		return
 	}
 	if len(in.AgentIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "select at least one agent")
+		writeError(w, http.StatusBadRequest, modules.M("rule.select_agent"))
 		return
 	}
 	// An agent given more than once is applied and counted once.
@@ -452,7 +452,7 @@ func (c *core) handleApplyRule(w http.ResponseWriter, r *http.Request) {
 	for _, id := range in.AgentIDs {
 		a, err := models.GetAgent(c.db, id)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "agent "+itoa64(id)+" not found")
+			writeError(w, http.StatusBadRequest, modules.M("agent.id_not_found", "id", id))
 			return
 		}
 		names = append(names, c.agentDisplayName(a))
@@ -475,11 +475,11 @@ func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
 		AgentIDs []int64 `json:"agent_ids"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if len(in.AgentIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "select at least one agent")
+		writeError(w, http.StatusBadRequest, modules.M("rule.select_agent"))
 		return
 	}
 	seen := map[int64]bool{}
@@ -491,7 +491,7 @@ func (c *core) handleUnassignRule(w http.ResponseWriter, r *http.Request) {
 		seen[id] = true
 		a, err := models.GetAgent(c.db, id)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "agent "+itoa64(id)+" not found")
+			writeError(w, http.StatusBadRequest, modules.M("agent.id_not_found", "id", id))
 			return
 		}
 		agents = append(agents, a)
@@ -527,7 +527,7 @@ func (c *core) handleRuleToTemplate(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Version == 0 {
@@ -535,7 +535,7 @@ func (c *core) handleRuleToTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := models.GetRuleVersion(c.db, rule.ID, in.Version)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "version not found")
+		writeError(w, http.StatusBadRequest, modules.M("rule.version_not_found"))
 		return
 	}
 	content, err := modules.ParseRuleContent([]byte(v.Content))
@@ -557,12 +557,12 @@ func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		writeError(w, http.StatusConflict, "the rule is applied to an agent and cannot be deleted")
+		writeError(w, http.StatusConflict, modules.M("rule.in_use"))
 		return
 	}
 	if err := models.DeleteRule(c.db, rule.ID); err != nil {
 		if strings.Contains(err.Error(), "FOREIGN KEY") {
-			writeError(w, http.StatusConflict, "the rule is applied to an agent and cannot be deleted")
+			writeError(w, http.StatusConflict, modules.M("rule.in_use"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -607,7 +607,7 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := models.GetTemplateByName(c.db, name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "template not found")
+		writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 		return
 	}
 	content, err := modules.ParseRuleContent([]byte(t.Content))
@@ -621,22 +621,22 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc string, content *modules.RuleContent, origin string) {
 	name = strings.TrimSpace(name)
 	if !tokenNameRe.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "template name must be 1-64 characters of A-Z a-z 0-9 . _ -")
+		writeError(w, http.StatusBadRequest, modules.M("template.name_invalid"))
 		return
 	}
 	if _, ok := modules.FindBuiltinTemplate(name); ok {
-		writeError(w, http.StatusConflict, "the name of a built-in template cannot be used")
+		writeError(w, http.StatusConflict, modules.M("template.builtin_name"))
 		return
 	}
 	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, strings.Join(errs, "; "))
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
 		return
 	}
 	p := principalFrom(r)
 	t := &models.Template{Name: name, Description: strings.TrimSpace(desc), Content: content.JSON(), CreatedBy: p.operator()}
 	if err := models.InsertTemplate(c.db, t); err != nil {
 		if isUniqueErr(err) {
-			writeError(w, http.StatusConflict, "a template with this name already exists")
+			writeError(w, http.StatusConflict, modules.M("template.name_taken"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -658,7 +658,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		} `json:"from_rule"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	var content *modules.RuleContent
@@ -667,7 +667,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	case in.FromBuiltin != "":
 		t, ok := modules.FindBuiltinTemplate(in.FromBuiltin)
 		if !ok {
-			writeError(w, http.StatusBadRequest, "built-in template not found")
+			writeError(w, http.StatusBadRequest, modules.M("template.builtin_not_found"))
 			return
 		}
 		content = &t.Content
@@ -681,7 +681,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 		v, err := models.GetRuleVersion(c.db, in.FromRule.RuleID, in.FromRule.Version)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "rule version not found")
+			writeError(w, http.StatusBadRequest, modules.M("rule.rule_version_not_found"))
 			return
 		}
 		parsed, err := modules.ParseRuleContent([]byte(v.Content))
@@ -694,7 +694,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 		content = parsed
@@ -707,7 +707,7 @@ func (c *core) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if _, ok := modules.FindBuiltinTemplate(name); ok {
-		writeError(w, http.StatusForbidden, "built-in templates cannot be changed")
+		writeError(w, http.StatusForbidden, modules.M("template.builtin_readonly"))
 		return
 	}
 	var in struct {
@@ -715,16 +715,16 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		Content     json.RawMessage `json:"content"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	content, err := modules.ParseRuleContent(in.Content)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	if errs := content.Validate(); len(errs) > 0 {
-		writeError(w, http.StatusBadRequest, strings.Join(errs, "; "))
+		writeError(w, http.StatusBadRequest, modules.M("common.problems", "problems", rawMsgs(errs)))
 		return
 	}
 	var desc string
@@ -735,7 +735,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		cur, err := models.GetTemplateByName(c.db, name)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusNotFound, "template not found")
+				writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 				return
 			}
 			c.internalError(w, r, err)
@@ -745,7 +745,7 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := models.UpdateTemplate(c.db, name, desc, content.JSON()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "template not found")
+			writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 			return
 		}
 		c.internalError(w, r, err)
@@ -758,12 +758,12 @@ func (c *core) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 func (c *core) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if _, ok := modules.FindBuiltinTemplate(name); ok {
-		writeError(w, http.StatusForbidden, "built-in templates cannot be deleted")
+		writeError(w, http.StatusForbidden, modules.M("template.builtin_undeletable"))
 		return
 	}
 	if err := models.DeleteTemplate(c.db, name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "template not found")
+			writeError(w, http.StatusNotFound, modules.M("template.not_found"))
 			return
 		}
 		c.internalError(w, r, err)

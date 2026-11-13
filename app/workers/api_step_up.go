@@ -18,9 +18,9 @@ import (
 // code could be delivered.
 
 // Answers of the re-authentication.
-const (
-	stepUpRequired    = "re-authentication required: request a verification code by mail and enter it to change command sets"
-	stepUpCodeExpired = "the verification code has expired or was entered wrongly too often; request a new code"
+var (
+	stepUpRequired    = modules.M("auth.step_up_required")
+	stepUpCodeExpired = modules.M("auth.step_up_code_expired")
 )
 
 // stepUpValid reports whether the principal may make a change that needs
@@ -40,7 +40,7 @@ func (c *core) stepUpValid(p *principal, now int64) bool {
 func (c *core) requireCommandStepUp(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !c.stepUpValid(principalFrom(r), time.Now().Unix()) {
-			writeJSON(w, http.StatusPreconditionRequired, map[string]any{"error": stepUpRequired, "step_up_required": true})
+			writeJSON(w, http.StatusPreconditionRequired, map[string]any{"error": stepUpRequired.Text(), "error_i18n": stepUpRequired, "step_up_required": true})
 			return
 		}
 		h(w, r)
@@ -92,7 +92,7 @@ func (c *core) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 		Code string `json:"code"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -134,7 +134,7 @@ func (c *core) handleStepUpVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// The session may have ended meanwhile (logout, a password change).
 	if err := models.SetSessionStepUp(c.db, p.SessionID, now); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusUnauthorized, "login required")
+		writeError(w, http.StatusUnauthorized, modules.M("auth.login_required"))
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)

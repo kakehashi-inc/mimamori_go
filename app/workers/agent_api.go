@@ -49,7 +49,7 @@ func (c *core) handleAgentSync(w http.ResponseWriter, r *http.Request) {
 	}
 	var req modules.SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeError(w, http.StatusBadRequest, modules.M("common.invalid_request"))
 		return
 	}
 	resp, err := c.centralSync(agent, tok, &req)
@@ -68,7 +68,7 @@ func (c *core) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	}
 	var req modules.ReportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeError(w, http.StatusBadRequest, modules.M("common.invalid_request"))
 		return
 	}
 	if err := c.centralReport(agent, &req); err != nil {
@@ -80,7 +80,7 @@ func (c *core) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 
 func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errAgentAuth) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, http.StatusUnauthorized, modules.M("auth.unauthorized"))
 		return
 	}
 	c.internalError(w, r, err)
