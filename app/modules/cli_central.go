@@ -54,11 +54,12 @@ func openCentralDBLocal() (*sql.DB, error) {
 	return db, nil
 }
 
-// withLocalTx runs fn in one transaction of the central database: its
-// changes are saved only when fn succeeds. Errors are returned as they are
-// (as before the transaction, a failing statement ends the command with its
-// own text).
-func withLocalTx(db *sql.DB, fn func(tx *sql.Tx) error) error {
+// withLocalTx runs fn in one transaction of a database of this host (the
+// central database for the central's commands, the local database of an
+// agent): its changes are saved only when fn succeeds. Errors are returned
+// as they are (as before the transaction, a failing statement ends the
+// command with its own text).
+func withLocalTx(db *sql.DB, fn func(tx models.Writer) error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -72,7 +73,7 @@ func withLocalTx(db *sql.DB, fn func(tx *sql.Tx) error) error {
 
 // insertLocalHistory records the history row of a command on the central
 // host; its failure undoes the change it records.
-func insertLocalHistory(tx *sql.Tx, h *models.HistoryItem) error {
+func insertLocalHistory(tx models.Writer, h *models.HistoryItem) error {
 	if err := models.InsertHistory(tx, h); err != nil {
 		return NewExitErrorf(ExitConfig, "history: %v (nothing was changed)", err)
 	}
@@ -137,7 +138,7 @@ func (c *CentralInitAdminCmd) Run() error {
 	}
 	a := &models.Account{Email: email, DisplayName: display, Role: models.RoleAdmin, Language: c.Language, PasswordHash: hash}
 	// The account and its history row are written together or not at all.
-	err = withLocalTx(db, func(tx *sql.Tx) error {
+	err = withLocalTx(db, func(tx models.Writer) error {
 		// Checked again under the write lock: another command may have
 		// created an administrator while the password was typed.
 		if n, err := models.CountAdmins(tx); err != nil {
@@ -191,7 +192,7 @@ func (c *CentralResetPasswordCmd) Run() error {
 	}
 	// The new password, the enabling, the revocation and the history row
 	// are written together or not at all.
-	err = withLocalTx(db, func(tx *sql.Tx) error {
+	err = withLocalTx(db, func(tx models.Writer) error {
 		if err := models.UpdateAccountPassword(tx, a.ID, hash); err != nil {
 			return err
 		}

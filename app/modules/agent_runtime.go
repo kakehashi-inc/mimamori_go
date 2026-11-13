@@ -301,7 +301,7 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 	if !changed {
 		return
 	}
-	if err := cfg.Save(rt.DB); err != nil {
+	if err := withLocalTx(rt.DB, cfg.Save); err != nil {
 		// Keep using the old token; the central hands out the same new value
 		// again on the next connection.
 		rt.logf("failed to save configuration (token renewal or CA update postponed): %v", err)

@@ -161,7 +161,7 @@ func AgentInit(o AgentInitOptions) error {
 	// 5. save the configuration; a rule stored by the previous
 	// initialization is cleared (the next sync applies the assigned rule or
 	// removes the audit rules)
-	err = cfg.Save(db)
+	err = withLocalTx(db, cfg.Save)
 	if err == nil {
 		err = resetStoredRule(db)
 	}
@@ -347,7 +347,7 @@ func AgentSetCentral(dataDir, host string, port int) error {
 		return NewExitErrorf(code, "cannot use %s: %v (nothing was changed)", cfg.CentralAddress(), err)
 	}
 	cfg.applySyncResponse(resp)
-	if err := cfg.Save(db); err != nil {
+	if err := withLocalTx(db, cfg.Save); err != nil {
 		return NewExitErrorf(ExitFileIO, "local database: %v", err)
 	}
 	fmt.Printf("Central changed from %s to %s.\n", prev, cfg.CentralAddress())

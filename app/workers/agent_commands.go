@@ -78,7 +78,7 @@ func validResultKind(k string) bool {
 // first; results are stored once per (run, position) and a run is closed
 // once. Runs of sets the database does not have (a recreated database) are
 // skipped.
-func (c *core) storeCommandRuns(tx *sql.Tx, agent *models.Agent, runs []modules.CommandRunReport, now int64) error {
+func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []modules.CommandRunReport, now int64) error {
 	for i := range runs {
 		rep := &runs[i]
 		if rep.RunUID == "" || len(rep.RunUID) > 128 {
@@ -165,7 +165,7 @@ type endedRequest struct {
 
 // storeCommandAcks records the agent's answers to delivered run requests.
 // It returns the requests that ended without a run (for the history).
-func storeCommandAcks(tx *sql.Tx, acks []modules.CommandRequestAck, now int64) ([]endedRequest, error) {
+func storeCommandAcks(tx models.Writer, acks []modules.CommandRequestAck, now int64) ([]endedRequest, error) {
 	var ended []endedRequest
 	for _, a := range acks {
 		var err error

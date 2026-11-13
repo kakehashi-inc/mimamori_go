@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bufio"
+	"database/sql"
 	"net"
 	"net/smtp"
 	"os"
@@ -69,16 +70,37 @@ func TestAcquireLockWaitsForStatusCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	fd := int(f.Fd())
+	if err := syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		f.Close()
 		t.Fatal(err)
 	}
-	time.AfterFunc(150*time.Millisecond, func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) })
+	// The timer's flow unlocks through the descriptor, so the file is closed
+	// only after that flow has ended.
+	released := make(chan struct{})
+	time.AfterFunc(150*time.Millisecond, func() {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
+		close(released)
+	})
+	defer func() {
+		<-released
+		f.Close()
+	}()
 	l, err := AcquireLock(path)
 	if err != nil {
 		t.Fatalf("lock not taken after the shared lock was released: %v", err)
 	}
 	l.Release()
+}
+
+// applyConfig applies configuration changes in one transaction, as the
+// commands and the settings screen do.
+func applyConfig(db *sql.DB, set map[string]string, unset []string) (changed []string, err error) {
+	err = withLocalTx(db, func(tx models.Writer) error {
+		changed, err = ApplyCentralConfigChanges(tx, set, unset)
+		return err
+	})
+	return changed, err
 }
 
 // TestCentralConfigValidation checks the checks made when items are saved.
@@ -109,7 +131,7 @@ func TestCentralConfigValidation(t *testing.T) {
 	}
 	for name, values := range bad {
 		for _, v := range values {
-			if _, err := ApplyCentralConfigChanges(db, map[string]string{name: v}, nil); err == nil {
+			if _, err := applyConfig(db, map[string]string{name: v}, nil); err == nil {
 				t.Errorf("%s = %q accepted", name, v)
 			}
 		}
@@ -124,7 +146,7 @@ func TestCentralConfigValidation(t *testing.T) {
 		"server_names":   "2001:DB8::1, ::ffff:192.0.2.10,Central.Example.com",
 	}
 	for name, v := range good {
-		if _, err := ApplyCentralConfigChanges(db, map[string]string{name: v}, nil); err != nil {
+		if _, err := applyConfig(db, map[string]string{name: v}, nil); err != nil {
 			t.Errorf("%s = %q rejected: %v", name, v, err)
 		}
 	}
@@ -155,16 +177,16 @@ func TestCentralConfigRepairable(t *testing.T) {
 	if _, err := LoadCentralConfig(db); err == nil {
 		t.Fatal("invalid stored values loaded")
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"workers": "65"}, nil); err == nil {
+	if _, err := applyConfig(db, map[string]string{"workers": "65"}, nil); err == nil {
 		t.Fatal("a change adding a problem was accepted")
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"retention_days": "365"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"retention_days": "365"}, nil); err != nil {
 		t.Fatalf("correction rejected: %v", err)
 	}
-	if _, err := ApplyCentralConfigChanges(db, nil, []string{"server_names"}); err != nil {
+	if _, err := applyConfig(db, nil, []string{"server_names"}); err != nil {
 		t.Fatalf("unset rejected: %v", err)
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"web_listen": "127.0.0.1:19102"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19102"}, nil); err != nil {
 		t.Fatalf("correction rejected: %v", err)
 	}
 	if _, err := LoadCentralConfig(db); err != nil {
@@ -305,10 +327,10 @@ func TestRemovedConfigItemIgnored(t *testing.T) {
 	if _, stored, err := CentralConfigState(db); err != nil || stored["smtp.to"] {
 		t.Fatalf("state: %v %v", stored, err)
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"retention_days": "30"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"retention_days": "30"}, nil); err != nil {
 		t.Fatalf("change with a stored smtp.to: %v", err)
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"smtp.to": "a@example.com"}, nil); err == nil {
+	if _, err := applyConfig(db, map[string]string{"smtp.to": "a@example.com"}, nil); err == nil {
 		t.Fatal("smtp.to accepted")
 	}
 	if _, err := FindConfigField("smtp.to"); err == nil {
@@ -328,7 +350,7 @@ func TestRunningConfigStatus(t *testing.T) {
 	if LoadRunningConfig(db) != nil {
 		t.Fatal("record without a start")
 	}
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "workers": "2"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "workers": "2"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	started, err := LoadCentralConfig(db)
@@ -339,7 +361,7 @@ func TestRunningConfigStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A change saved while running waits for a restart.
-	if _, err := ApplyCentralConfigChanges(db, map[string]string{"web_listen": "127.0.0.1:19612", "workers": "3"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19612", "workers": "3"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := LoadCentralConfig(db)

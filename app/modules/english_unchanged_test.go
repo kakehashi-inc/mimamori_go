@@ -571,7 +571,7 @@ func TestEnglishUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = ApplyCentralConfigChanges(db, ch.set, ch.unset)
+		_, err = applyConfig(db, ch.set, ch.unset)
 		one(fmt.Sprintf("config_change/%d", i), err)
 		switch err.(type) {
 		case Msg, Problems:

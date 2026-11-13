@@ -64,6 +64,21 @@ func (c *core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// applyConfigChanges checks and saves the changes in one transaction of the
+// central database. It returns the names of the changed items.
+func (c *core) applyConfigChanges(set map[string]string, unset []string) ([]string, error) {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	changed, err := modules.ApplyCentralConfigChanges(tx, set, unset)
+	if err != nil {
+		return nil, err
+	}
+	return changed, tx.Commit()
+}
+
 // handleUpdateConfig sets and unsets items together. Items that apply while
 // running take effect at once; the others when the central restarts.
 func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +87,7 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	changed, err := modules.ApplyCentralConfigChanges(c.db, in.Set, in.Unset)
+	changed, err := c.applyConfigChanges(in.Set, in.Unset)
 	switch e := err.(type) {
 	case nil:
 	case modules.Problems:

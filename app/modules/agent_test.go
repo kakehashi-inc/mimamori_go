@@ -285,7 +285,7 @@ func TestAgentSetCentralKeepsPort(t *testing.T) {
 	}
 	// The stored host does not answer; the stored port is the fake central's.
 	cfg := &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: port, Token: "tok", CAPEMs: []string{ca.CertPEM}}
-	if err := cfg.Save(db); err != nil {
+	if err := withLocalTx(db, cfg.Save); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()

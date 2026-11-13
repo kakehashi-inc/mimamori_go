@@ -1,7 +1,6 @@
 package modules
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -476,30 +475,19 @@ func CentralConfigState(db models.Reader) (*CentralConfig, map[string]bool, erro
 	return c, stored, nil
 }
 
-// ApplyCentralConfigChanges sets and unsets items in one transaction after
-// checking the resulting configuration as a whole. It returns the names of
-// the items whose stored value changed. A refused change is answered with a
-// Msg or Problems error; any other error is a failure of the database.
-func ApplyCentralConfigChanges(db *sql.DB, set map[string]string, unset []string) ([]string, error) {
-	return ApplyCentralConfigChangesRecorded(db, set, unset, nil)
-}
-
-// ApplyCentralConfigChangesRecorded is ApplyCentralConfigChanges with a
-// record function that, when an item changed, is called in the same
-// transaction (with the changed names) to write the history: the change is
-// saved only when record succeeds, and record's error is returned as it is.
-func ApplyCentralConfigChangesRecorded(db *sql.DB, set map[string]string, unset []string, record func(tx *sql.Tx, changed []string) error) ([]string, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	// A write statement first takes the database's write lock, so that no
-	// other change is saved between the read below and the write: the check
-	// is made against the values that are really stored.
-	if _, err := tx.Exec(`UPDATE settings SET value = value WHERE 0`); err != nil {
-		return nil, err
-	}
+// ApplyCentralConfigChanges sets and unsets items inside the write
+// transaction tx after checking the resulting configuration as a whole. The
+// transaction holds the database's write lock from its begin, so no other
+// change is saved between the read and the write: the check is made against
+// the values that are really stored. It returns the names of the items
+// whose stored value changed. A refused change is answered with a Msg or
+// Problems error; any other error is a failure of the database.
+//
+// The caller begins the transaction and ends it: the changes are saved when
+// it commits, and it rolls back when an error is returned. A history row
+// the caller writes in the same transaction is saved with the change or not
+// at all.
+func ApplyCentralConfigChanges(tx models.Writer, set map[string]string, unset []string) ([]string, error) {
 	cur, stored, err := storedCentralConfig(tx)
 	if err != nil {
 		return nil, err
@@ -578,12 +566,7 @@ func ApplyCentralConfigChangesRecorded(db *sql.DB, set map[string]string, unset 
 			changed = append(changed, f.Name)
 		}
 	}
-	if record != nil && len(changed) > 0 {
-		if err := record(tx, changed); err != nil {
-			return nil, err
-		}
-	}
-	return changed, tx.Commit()
+	return changed, nil
 }
 
 // KeepRestartItems copies the items that take effect only at start from

@@ -1,7 +1,6 @@
 package modules
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,18 +70,14 @@ func LoadAgentConfig(db models.Reader) (*AgentConfig, error) {
 	return c, nil
 }
 
-// Save writes the configuration in one transaction, so a crash never leaves
-// a partly updated configuration.
-func (c *AgentConfig) Save(db *sql.DB) error {
+// Save writes the configuration inside the write transaction tx: it is
+// saved as a whole when the caller commits, so a crash never leaves a
+// partly updated configuration.
+func (c *AgentConfig) Save(tx models.Writer) error {
 	cas, err := json.Marshal(c.CAPEMs)
 	if err != nil {
 		return err
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 	for _, kv := range [][2]string{
 		{agentCfgID, c.AgentID},
 		{agentCfgCentralHost, c.CentralHost},
@@ -97,7 +92,7 @@ func (c *AgentConfig) Save(db *sql.DB) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // MergeCAs adds new CA certificates and drops expired ones. It returns true
