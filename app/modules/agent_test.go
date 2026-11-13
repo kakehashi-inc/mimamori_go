@@ -168,7 +168,7 @@ func TestInitConnectErrors(t *testing.T) {
 func openAgentDB(t *testing.T) (*AgentRuntime, func()) {
 	t.Helper()
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestAgentSetCentralKeepsPort(t *testing.T) {
 	host, port := fakeCentral(t, ca, []string{ca.CertPEM}, http.StatusOK)
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
-	db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+	db, err := OpenSQLitePool(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestAgentSetCentralKeepsPort(t *testing.T) {
 	db.Close()
 	load := func() *AgentConfig {
 		t.Helper()
-		db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+		db, err := OpenSQLitePool(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
 		if err != nil {
 			t.Fatal(err)
 		}

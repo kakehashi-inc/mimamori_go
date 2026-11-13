@@ -92,7 +92,7 @@ func wantOtherBuild(t *testing.T, err error, path string) {
 func TestMigrationFingerprint(t *testing.T) {
 	first, both := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
 	path := filepath.Join(t.TempDir(), "x.db")
-	db, err := openSQLite(path, first)
+	db, err := openSQLitePool(path, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestMigrationFingerprint(t *testing.T) {
 	}
 	db.Close()
 	before := dbState(t, path)
-	db, err = openSQLite(path, first)
+	db, err = openSQLitePool(path, first)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestMigrationFingerprint(t *testing.T) {
 	if after := dbState(t, path); after != before {
 		t.Fatalf("reopening changed the database:\n%s\n%s", before, after)
 	}
-	db, err = openSQLite(path, both)
+	db, err = openSQLitePool(path, both)
 	if err != nil {
 		t.Fatalf("added migration: %v", err)
 	}
@@ -126,13 +126,13 @@ func TestMigrationFingerprint(t *testing.T) {
 		t.Fatalf("fingerprint after the added migration: %d (before %d)", fp2, fp1)
 	}
 	db.Close()
-	if db, err = openSQLite(path, both); err != nil {
+	if db, err = openSQLitePool(path, both); err != nil {
 		t.Fatalf("reopen after the added migration: %v", err)
 	}
 	db.Close()
 	// A build without the added migration refuses this database.
 	before = dbState(t, path)
-	_, err = openSQLite(path, first)
+	_, err = openSQLitePool(path, first)
 	wantOtherBuild(t, err, path)
 	if after := dbState(t, path); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
@@ -159,7 +159,7 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 	first, _ := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT);")
 	edited, _ := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b TEXT);")
 	path := filepath.Join(t.TempDir(), "x.db")
-	db, err := openSQLite(path, first)
+	db, err := openSQLitePool(path, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 	}
 	db.Close()
 	before := dbState(t, path)
-	_, err = openSQLite(path, edited)
+	_, err = openSQLitePool(path, edited)
 	wantOtherBuild(t, err, path)
 	if after := dbState(t, path); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
@@ -184,7 +184,7 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 	}
 	raw.Close()
 	before = dbState(t, path)
-	_, err = openSQLite(path, first)
+	_, err = openSQLitePool(path, first)
 	wantOtherBuild(t, err, path)
 	if after := dbState(t, path); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
@@ -204,7 +204,7 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 	}
 	raw.Close()
 	before = dbState(t, other)
-	_, err = openSQLite(other, first)
+	_, err = openSQLitePool(other, first)
 	wantOtherBuild(t, err, other)
 	if after := dbState(t, other); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
@@ -215,7 +215,7 @@ func TestMigrationFingerprintRefused(t *testing.T) {
 func TestMigrationFingerprintEdited(t *testing.T) {
 	first, _ := testMigrations("CREATE TABLE t (id INTEGER PRIMARY KEY);")
 	path := filepath.Join(t.TempDir(), "x.db")
-	db, err := openSQLite(path, first)
+	db, err := openSQLitePool(path, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestMigrationFingerprintEdited(t *testing.T) {
 	}
 	db.Close()
 	before := dbState(t, path)
-	_, err = openSQLite(path, first)
+	_, err = openSQLitePool(path, first)
 	wantOtherBuild(t, err, path)
 	if after := dbState(t, path); after != before {
 		t.Fatalf("the refused open changed the database:\n%s\n%s", before, after)
@@ -240,7 +240,7 @@ func TestMigrationFingerprintPartial(t *testing.T) {
 	broken := fstest.MapFS{"0001_init.sql": first["0001_init.sql"],
 		"0002_added.sql": &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE t (id INTEGER);\n")}}
 	path := filepath.Join(t.TempDir(), "x.db")
-	if _, err := openSQLite(path, broken); err == nil || IsOtherBuildDB(err) {
+	if _, err := openSQLitePool(path, broken); err == nil || IsOtherBuildDB(err) {
 		t.Fatalf("want the failure of the second migration, got %v", err)
 	}
 	want, err := migrationFingerprint(first, sourcesOf(t, first))
@@ -250,7 +250,7 @@ func TestMigrationFingerprintPartial(t *testing.T) {
 	if state := dbState(t, path); !strings.HasPrefix(state, "user_version "+strconv.FormatInt(want, 10)+"\n") {
 		t.Fatalf("state after the failed migration:\n%s", state)
 	}
-	db, err := openSQLite(path, both)
+	db, err := openSQLitePool(path, both)
 	if err != nil {
 		t.Fatalf("open with the corrected migration: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestOpenSQLiteConcurrent(t *testing.T) {
 	}
 	opened := make(chan error, 1)
 	go func() {
-		db, err := openSQLite(path, first)
+		db, err := openSQLitePool(path, first)
 		if err == nil {
 			db.Close()
 		}
@@ -293,7 +293,7 @@ func TestOpenSQLiteConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			db, err := openSQLite(path, first)
+			db, err := openSQLitePool(path, first)
 			if err == nil {
 				db.Close()
 			}
@@ -317,7 +317,7 @@ func TestOpenSQLiteSchemas(t *testing.T) {
 	for _, schema := range []string{SchemaCentral, SchemaAgentDB, SchemaAgentLocal} {
 		path := filepath.Join(dir, schema+".db")
 		for i := 0; i < 2; i++ {
-			db, err := OpenSQLite(path, schema)
+			db, err := OpenSQLitePool(path, schema)
 			if err != nil {
 				t.Fatalf("%s open %d: %v", schema, i+1, err)
 			}
@@ -354,7 +354,7 @@ func TestCLIChangeNeedsHistory(t *testing.T) {
 
 	refuseHistory := func(t *testing.T, dir string) {
 		t.Helper()
-		db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+		db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,7 +365,7 @@ func TestCLIChangeNeedsHistory(t *testing.T) {
 	}
 	snapshot := func(t *testing.T, dir string) string {
 		t.Helper()
-		db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+		db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -422,7 +422,7 @@ func TestCLIChangeNeedsHistory(t *testing.T) {
 		if err := (&CentralConfigSetCmd{Name: "server_names", Value: "a.example.com"}).Run(); err != nil {
 			t.Fatal(err)
 		}
-		db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+		db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -449,7 +449,7 @@ func TestCLIChangeNeedsHistory(t *testing.T) {
 		dir := t.TempDir()
 		SetDataDir(dir)
 		path := filepath.Join(dir, CentralDBFileName)
-		db, err := OpenSQLite(path, SchemaCentral)
+		db, err := OpenSQLitePool(path, SchemaCentral)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -96,7 +96,7 @@ func AgentInit(o AgentInitOptions) error {
 	agentID := ""
 	var created []string
 	if _, err := os.Stat(dbPath); err == nil {
-		db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+		db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
 		if err != nil {
 			return DBOpenFailed(err, ExitFileIO, "local database")
 		}
@@ -142,7 +142,7 @@ func AgentInit(o AgentInitOptions) error {
 			}
 		}
 	}
-	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
 	if err != nil {
 		removeCreated(created)
 		return DBOpenFailed(err, ExitFileIO, "local database")
@@ -309,7 +309,7 @@ func AgentSetCentral(dataDir, host string, port int) error {
 		return NewExitError(ExitConfig, "the agent is running; stop it before changing the central host")
 	}
 	defer lock.Release()
-	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
 	if err != nil {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	}
@@ -369,7 +369,7 @@ func AgentStart(dataDir string) error {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := OpenSQLite(dbPath, SchemaAgentLocal)
+	db, err := OpenSQLitePool(dbPath, SchemaAgentLocal)
 	if err != nil {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	}

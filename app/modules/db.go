@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -32,30 +33,94 @@ const (
 // that any path names exactly that file.
 var sqliteURIPath = strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23")
 
-// OpenSQLite opens (creating when missing) the SQLite database at path and
-// applies the migrations of schema. Transactions take the write lock when
-// they begin (_txlock=immediate) and wait for it (busy_timeout), so a
-// transaction that reads and then writes never fails because another one
-// wrote in between. A new file gets its mode from the umask
-// (the -wal and -shm files take the mode of the database file); the mode of
-// an existing file is not changed.
+// writeDSN names the database at dbPath for a connection that reads and
+// writes. Its transactions take the write lock when they begin
+// (_txlock=immediate), so a transaction that reads and then writes never
+// fails because another one wrote in between. lockWaitMS is how long SQLite
+// waits for a lock that another process holds (busy_timeout).
+func writeDSN(dbPath string, lockWaitMS int) string {
+	return fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)",
+		sqliteURIPath.Replace(dbPath), lockWaitMS)
+}
+
+// readDSN names the database at dbPath for a read-only connection
+// (mode=ro): SQLite opens the file read-only and refuses every write through
+// the connection. The journal mode is not set here: the file is already in
+// WAL mode when a read connection is opened (the write connection of the
+// handle set it), and the driver fails the open of a read-only connection
+// that asks for WAL on a file that is not.
+func readDSN(dbPath string, lockWaitMS int) string {
+	return fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=temp_store(MEMORY)",
+		sqliteURIPath.Replace(dbPath), lockWaitMS)
+}
+
+// schemaMigrations returns the migration files of schema.
+func schemaMigrations(schema string) (fs.FS, error) {
+	if MigrationsFS == nil {
+		return nil, fmt.Errorf("migrations filesystem not initialized")
+	}
+	return fs.Sub(MigrationsFS, "app/migrations/"+schema)
+}
+
+// openOptions are the values of an open that only tests set differently.
+type openOptions struct {
+	lockWaitMS int // SQLite's wait for a lock of another process
+	readConns  int // read connections that can be open at the same time
+}
+
+// defaultOpenOptions returns the values every open outside tests uses. A
+// file gets as many read connections as there are processors (at least
+// ReadConnsMin): reading is bounded by the processors, and more connections
+// than that only take processor time from each other and from the writer.
+func defaultOpenOptions() openOptions {
+	return openOptions{lockWaitMS: DBLockWaitMS, readConns: max(ReadConnsMin, runtime.GOMAXPROCS(0))}
+}
+
+// OpenSQLite opens (creating when missing) the SQLite database at path,
+// applies the migrations of schema and returns the handle through which
+// this process reads and writes the file (see DB). A new file gets its mode
+// from the umask (the -wal and -shm files take the mode of the database
+// file); the mode of an existing file is not changed.
+//
+// A file has one handle per process: opening a path whose handle is still
+// open fails, because a second handle would be a second write connection
+// and the two would wait on SQLite's lock inside the process.
 //
 // A database that was not created by the migrations of this build (see
 // migrate) is refused with the message "common.db_other_build" and is not
 // changed; IsOtherBuildDB recognizes that error.
-func OpenSQLite(path, schema string) (*sql.DB, error) {
-	if MigrationsFS == nil {
-		return nil, fmt.Errorf("migrations filesystem not initialized")
-	}
-	sub, err := fs.Sub(MigrationsFS, "app/migrations/"+schema)
+func OpenSQLite(path, schema string) (*DB, error) {
+	sub, err := schemaMigrations(schema)
 	if err != nil {
 		return nil, err
 	}
-	return openSQLite(path, sub)
+	return openDB(path, sub, defaultOpenOptions(), true)
 }
 
-// openSQLite opens the database at dbPath with the migrations in fsys.
-func openSQLite(dbPath string, fsys fs.FS) (*sql.DB, error) {
+// openSQLite opens the database at dbPath with the migrations in fsys. It
+// does not refuse a path that already has a handle: tests open one file
+// from several flows with it, the way several processes would.
+func openSQLite(dbPath string, fsys fs.FS) (*DB, error) {
+	return openDB(dbPath, fsys, defaultOpenOptions(), false)
+}
+
+// openDB opens the handle of the database at dbPath: the write connection
+// first, through which the database is checked and migrated, then the read
+// side. With single it refuses a path that has an open handle in this
+// process. When it fails, everything it opened is closed.
+func openDB(dbPath string, fsys fs.FS, o openOptions, single bool) (_ *DB, err error) {
+	d := &DB{path: dbPath}
+	d.refuseInsideWrite(nestedOpen)
+	if single {
+		if err := d.register(); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				d.unregister()
+			}
+		}()
+	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, err
 	}
@@ -71,8 +136,69 @@ func openSQLite(dbPath string, fsys fs.FS) (*sql.DB, error) {
 		return nil, err
 	}
 	defer unlock()
-	dsn := "file:" + sqliteURIPath.Replace(dbPath) + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
-	db, err := sql.Open("sqlite", dsn)
+	// database/sql only keeps the one write connection (and opens it again
+	// should the driver ever report it broken); whose turn it is, the
+	// handle decides (DB.Write).
+	if d.w, err = sql.Open("sqlite", writeDSN(dbPath, o.lockWaitMS)); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			d.w.Close()
+		}
+	}()
+	d.w.SetMaxOpenConns(1)
+	d.w.SetMaxIdleConns(1)
+	if err := d.w.Ping(); err != nil {
+		return nil, err
+	}
+	if err := migrate(d.w, dbPath, fsys); err != nil {
+		if IsOtherBuildDB(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("migrate %s: %w", dbPath, err)
+	}
+	if d.r, err = sql.Open("sqlite", readDSN(dbPath, o.lockWaitMS)); err != nil {
+		return nil, err
+	}
+	d.r.SetMaxOpenConns(o.readConns)
+	d.r.SetMaxIdleConns(o.readConns)
+	// The first read connection is opened now, so that a file that cannot
+	// be opened read-only fails here and not at the first read.
+	if err := d.r.Ping(); err != nil {
+		d.r.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// OpenSQLitePool opens the database as OpenSQLite does, but returns a pool
+// of connections that all read and write, without the handle. It is what
+// OpenSQLite was before the handle and exists only for the callers that do
+// not use the handle yet.
+func OpenSQLitePool(path, schema string) (*sql.DB, error) {
+	sub, err := schemaMigrations(schema)
+	if err != nil {
+		return nil, err
+	}
+	return openSQLitePool(path, sub)
+}
+
+// openSQLitePool opens the pooled database at dbPath with the migrations in
+// fsys.
+func openSQLitePool(dbPath string, fsys fs.FS) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		return nil, err
+	}
+	// The same locks as in openDB.
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
+	unlock, err := lockDir(filepath.Dir(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	db, err := sql.Open("sqlite", writeDSN(dbPath, DBLockWaitMS))
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +232,7 @@ func otherBuildDB(dbPath string) error {
 }
 
 // migrateMu serializes the check and migration of the databases opened by
-// this process (see openSQLite).
+// this process (see openDB).
 var migrateMu sync.Mutex
 
 // goose's table of applied migrations (its default name).
@@ -127,7 +253,7 @@ const gooseVersionTable = "goose_db_version"
 //     applied migration this build does not have is refused (otherBuildDB)
 //     before anything in it is written.
 //
-// The caller holds the locks that keep other opens out (see openSQLite).
+// The caller holds the locks that keep other opens out (see openDB).
 func migrate(db *sql.DB, dbPath string, fsys fs.FS) error {
 	p, err := goose.NewProvider(goose.DialectSQLite3, db, fsys)
 	if err != nil {

@@ -23,7 +23,7 @@ func TestOpenSQLitePathCharacters(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			parent := t.TempDir()
 			path := filepath.Join(parent, name, "central.db")
-			db, err := OpenSQLite(path, SchemaCentral)
+			db, err := OpenSQLitePool(path, SchemaCentral)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestOpenSQLitePathCharacters(t *testing.T) {
 func TestOpenSQLiteKeepsExistingMode(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	path := filepath.Join(t.TempDir(), "central.db")
-	db, err := OpenSQLite(path, SchemaCentral)
+	db, err := OpenSQLitePool(path, SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestOpenSQLiteKeepsExistingMode(t *testing.T) {
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	db, err = OpenSQLite(path, SchemaCentral)
+	db, err = OpenSQLitePool(path, SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func applyConfig(db *sql.DB, set map[string]string, unset []string) (changed []s
 // TestCentralConfigValidation checks the checks made when items are saved.
 func TestCentralConfigValidation(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestCentralConfigValidation(t *testing.T) {
 // still be corrected one item at a time.
 func TestCentralConfigRepairable(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestSendMailLoginWithoutEncryption(t *testing.T) {
 // any unknown name.
 func TestRemovedConfigItemIgnored(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestRemovedConfigItemIgnored(t *testing.T) {
 // text central status prints from it.
 func TestRunningConfigStatus(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "central.db"), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}

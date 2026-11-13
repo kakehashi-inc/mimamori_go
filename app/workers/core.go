@@ -114,7 +114,7 @@ func (c *core) targetDB(a *models.Agent) (*sql.DB, error) {
 		}
 		a.DBFile = file
 	}
-	db, err := modules.OpenSQLite(modules.TargetDBPath(c.dataDir, file), modules.SchemaAgentDB)
+	db, err := modules.OpenSQLitePool(modules.TargetDBPath(c.dataDir, file), modules.SchemaAgentDB)
 	if err != nil {
 		// A database of another build is logged here once, also for the
 		// callers that only skip the target; a request answers 500.

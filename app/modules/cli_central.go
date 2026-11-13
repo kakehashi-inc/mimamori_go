@@ -47,7 +47,7 @@ func openCentralDBLocal() (*sql.DB, error) {
 	if err := EnsureDataDir(dir); err != nil {
 		return nil, NewExitErrorf(ExitFileIO, "data directory %s: %v", dir, err)
 	}
-	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 	if err != nil {
 		return nil, DBOpenFailed(err, ExitConfig, "database")
 	}

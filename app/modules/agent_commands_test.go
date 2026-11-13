@@ -49,7 +49,7 @@ func (f *cmdTransport) Report(r *ReportRequest) error {
 func newCommandRuntime(t *testing.T, tr AgentTransport) *AgentRuntime {
 	t.Helper()
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}

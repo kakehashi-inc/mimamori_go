@@ -65,6 +65,26 @@ const (
 	DefaultOutboxMaxDetection = 10000
 )
 
+// --- Databases ---
+
+const (
+	// DBLockWaitMS is how long SQLite waits (busy_timeout, in milliseconds)
+	// for a lock that another process holds on a database file: a command
+	// that writes next to the running central or agent. Inside one process
+	// no write waits on SQLite's lock (see DB).
+	DBLockWaitMS = 10000
+	// ReadConnsMin is the smallest number of read connections a database
+	// file can have open at the same time (the number is the count of
+	// processors when that is larger). With fewer than four processors
+	// other reads still go on while one waits for the disk.
+	ReadConnsMin = 4
+	// TargetReadConnsKept is the number of idle read connections the
+	// central keeps open for each per-agent database: there are hundreds of
+	// them and each is read about once per check interval. Every other
+	// database keeps all its read connections.
+	TargetReadConnsKept = 1
+)
+
 // --- Secrets ---
 
 const (

@@ -84,7 +84,7 @@ func TestCLIHistoryEntriesCoded(t *testing.T) {
 	if err := (&CentralConfigUnsetCmd{Name: "server_names"}).Run(); err != nil {
 		t.Fatal(err)
 	}
-	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	db, err := OpenSQLitePool(filepath.Join(dir, CentralDBFileName), SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}

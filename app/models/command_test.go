@@ -15,7 +15,7 @@ import (
 func openDB(t *testing.T, schema string) *sql.DB {
 	t.Helper()
 	modules.MigrationsFS = os.DirFS("../..")
-	db, err := modules.OpenSQLite(filepath.Join(t.TempDir(), schema+".db"), schema)
+	db, err := modules.OpenSQLitePool(filepath.Join(t.TempDir(), schema+".db"), schema)
 	if err != nil {
 		t.Fatal(err)
 	}

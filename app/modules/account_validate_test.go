@@ -191,7 +191,7 @@ func TestTwoStepTrustDaysConfig(t *testing.T) {
 
 func TestRevokeAccountAuth(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(t.TempDir()+"/central.db", SchemaCentral)
+	db, err := OpenSQLitePool(t.TempDir()+"/central.db", SchemaCentral)
 	if err != nil {
 		t.Fatal(err)
 	}

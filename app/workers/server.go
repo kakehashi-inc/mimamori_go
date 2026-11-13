@@ -35,7 +35,7 @@ func startCentral() error {
 		return modules.NewExitError(modules.ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := modules.OpenSQLite(filepath.Join(dataDir, modules.CentralDBFileName), modules.SchemaCentral)
+	db, err := modules.OpenSQLitePool(filepath.Join(dataDir, modules.CentralDBFileName), modules.SchemaCentral)
 	if err != nil {
 		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
 	}

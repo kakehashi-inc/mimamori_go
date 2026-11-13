@@ -238,7 +238,7 @@ func (f *fakeTransport) Report(r *ReportRequest) error {
 func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
-	db, err := OpenSQLite(filepath.Join(dir, "agent.db"), SchemaAgentLocal)
+	db, err := OpenSQLitePool(filepath.Join(dir, "agent.db"), SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
 		t.Run(schema, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), schema+".db")
 			MigrationsFS = repo
-			db, err := OpenSQLite(path, schema)
+			db, err := OpenSQLitePool(path, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -330,7 +330,7 @@ func TestMigrationsUpgradeExistingDatabase(t *testing.T) {
 					"-- +goose Down\n-- +goose StatementBegin\nDROP TABLE upgrade_check;\n-- +goose StatementEnd\n")}
 			MigrationsFS = next
 			defer func() { MigrationsFS = repo }()
-			db, err = OpenSQLite(path, schema)
+			db, err = OpenSQLitePool(path, schema)
 			if err != nil {
 				t.Fatal(err)
 			}

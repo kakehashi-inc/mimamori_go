@@ -36,7 +36,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	modules.MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
 	modules.SetDataDir(dir)
-	db, err := modules.OpenSQLite(filepath.Join(dir, modules.CentralDBFileName), modules.SchemaCentral)
+	db, err := modules.OpenSQLitePool(filepath.Join(dir, modules.CentralDBFileName), modules.SchemaCentral)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

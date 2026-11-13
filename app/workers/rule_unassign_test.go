@@ -112,7 +112,7 @@ func TestDisabledBuiltinWithoutRecord(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the built-in agent's database must not be created")
 	}
-	db, err := modules.OpenSQLite(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
+	db, err := modules.OpenSQLitePool(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,14 +123,14 @@ func TestDisabledBuiltinWithoutRecord(t *testing.T) {
 	}
 	// With a record the removal is attempted (here it fails, so the record
 	// stays for the next start).
-	db, _ = modules.OpenSQLite(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
+	db, _ = modules.OpenSQLitePool(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	_ = models.SetLocalState(db, "rule", `{"id":1,"version":1}`)
 	db.Close()
 	e.c.clearDisabledBuiltin(b)
 	if _, err := os.Stat(calls); err != nil {
 		t.Fatal("with a record the audit rules are removed")
 	}
-	db, _ = modules.OpenSQLite(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
+	db, _ = modules.OpenSQLitePool(filepath.Join(e.c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	defer db.Close()
 	if models.GetLocalState(db, "rule") == "" {
 		t.Fatal("the record must stay after a failed removal")

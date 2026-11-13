@@ -11,7 +11,7 @@ import (
 
 func TestCommandSetRowsRoundTrip(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
-	db, err := OpenSQLite(filepath.Join(t.TempDir(), "target.db"), SchemaAgentDB)
+	db, err := OpenSQLitePool(filepath.Join(t.TempDir(), "target.db"), SchemaAgentDB)
 	if err != nil {
 		t.Fatal(err)
 	}

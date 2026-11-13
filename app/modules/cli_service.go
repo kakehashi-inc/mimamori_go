@@ -70,7 +70,7 @@ func (c *CentralStatusCmd) Run() error {
 	fmt.Printf("%-16s %s\n", "data dir:", dir)
 	dbPath := filepath.Join(dir, CentralDBFileName)
 	if _, err := os.Stat(dbPath); err == nil {
-		if db, err := OpenSQLite(dbPath, SchemaCentral); IsOtherBuildDB(err) {
+		if db, err := OpenSQLitePool(dbPath, SchemaCentral); IsOtherBuildDB(err) {
 			return DBOpenFailed(err, ExitConfig, "database")
 		} else if err == nil {
 			cfg, cfgErr := LoadCentralConfig(db)
@@ -149,7 +149,7 @@ func (c *AgentStatusCmd) Run() error {
 	dbPath := filepath.Join(dir, AgentLocalDBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
 		fmt.Printf("%-16s not initialized (run agent init)\n", "configuration:")
-	} else if db, err := OpenSQLite(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
+	} else if db, err := OpenSQLitePool(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
 		return DBOpenFailed(err, ExitConfig, "local database")
 	} else if err != nil {
 		fmt.Printf("%-16s %v\n", "local database:", err)

@@ -9,6 +9,7 @@ linters:
       # their error and checking it would hide the original error.
       exclude-functions:
         - (*database/sql.DB).Close
+        - (*mimamori/app/modules.DB).Close
         - (*database/sql.Rows).Close
         - (*database/sql.Tx).Rollback
         - (*os.File).Close
