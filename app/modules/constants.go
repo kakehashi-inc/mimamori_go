@@ -261,10 +261,10 @@ const (
 	MaxDisplayValueBytes = 1 << 20
 	// CommandPatternTimeout bounds the matching of one pattern against the
 	// output of one command.
-	CommandPatternTimeout = 2 * time.Second
+	CommandPatternTimeout = 60 * time.Second
 	// CommandKillGrace is the time between SIGTERM and SIGKILL when a
 	// command passes its time limit or the agent stops.
-	CommandKillGrace = 10 * time.Second
+	CommandKillGrace = 60 * time.Second
 	// CommandRequestExpiry is how long a manual run request waits for
 	// delivery before it expires.
 	CommandRequestExpiry = 24 * time.Hour

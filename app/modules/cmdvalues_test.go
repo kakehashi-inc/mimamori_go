@@ -383,3 +383,11 @@ func TestCommandPatternKeepsValuesWithoutNumbers(t *testing.T) {
 		}
 	}
 }
+
+// TestCommandTimeLimits pins the two time limits of command execution: the
+// matching of one pattern and the grace between SIGTERM and SIGKILL.
+func TestCommandTimeLimits(t *testing.T) {
+	if CommandPatternTimeout != 60*time.Second || CommandKillGrace != 60*time.Second {
+		t.Fatalf("pattern %v, grace %v", CommandPatternTimeout, CommandKillGrace)
+	}
+}
