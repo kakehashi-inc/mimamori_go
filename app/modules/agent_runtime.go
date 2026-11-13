@@ -797,6 +797,13 @@ func (rt *AgentRuntime) incompleteScans() []IncompleteScan {
 	return out
 }
 
+// ctimeMargin is how many seconds before the start of a check the since
+// times of the file scans end. The kernel stamps a ctime from its coarse
+// clock, which lags time.Now by up to one tick: a file changed a few
+// milliseconds after a check started in a new second can carry a ctime of
+// the second before. One second would therefore miss it; two cover the lag.
+const ctimeMargin = 2
+
 // scanFiles runs the file scans of one check. Each walk visits at most the
 // entry limit; a walk that reaches it continues at the same place in the
 // next check, and starts at the beginning again once it reached the end
@@ -890,14 +897,14 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 						}
 					}
 				} else {
-					// From the second before the start of the previous full
-					// pass: a root made in that same second after the pass had
-					// walked past its place has files of that second (as the
-					// since times of the executed-file scan, which end one
-					// second before the check).
+					// From ctimeMargin seconds before the start of the previous
+					// full pass: a root made in that same second after the pass
+					// had walked past its place has files of that second, or of
+					// the second before (as the since times of the
+					// executed-file scan).
 					rootFrom := lastFull
 					if rootFrom > 0 {
-						rootFrom--
+						rootFrom -= ctimeMargin
 					}
 					for _, r := range wr.AllowedRoots {
 						if !known[r] {
@@ -980,10 +987,11 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 			if err != nil {
 				rt.logf("executed-file scan failed: %v", err)
 			} else {
-				// The walked part is scanned up to the second before the cycle
-				// start: files whose status changed at or after it are picked
-				// up again next time (duplicates are filtered by the findings).
-				segs = markScanned(segs, eResume, stop, now-1)
+				// The walked part is scanned up to ctimeMargin seconds before
+				// the cycle start: files whose status changed at or after it
+				// are picked up again next time (duplicates are filtered by
+				// the findings).
+				segs = markScanned(segs, eResume, stop, now-ctimeMargin)
 				// A root walked to its end in this check needs no own since
 				// time any more.
 				for r := range rootSince {

@@ -225,7 +225,7 @@ func TestExecScanContinues(t *testing.T) {
 	}
 	var segs []sinceSegment
 	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateExecSince)), &segs)
-	if len(segs) != 2 || segs[0].Since != t0+9 || segs[1].From != stop1 || segs[1].Since != t0-1 {
+	if len(segs) != 2 || segs[0].Since != t0+10-ctimeMargin || segs[1].From != stop1 || segs[1].Since != t0-ctimeMargin {
 		t.Fatalf("since times after the first part: %+v", segs)
 	}
 	if sc := rt.incompleteScans(); len(sc) != 1 || sc[0].Kind != ScanKindExecFiles || sc[0].ResumeAt != stop1 || sc[0].StartedAt != t0+10 {
@@ -293,5 +293,71 @@ func TestNewRootKeepsSinceUntilWalked(t *testing.T) {
 	_ = json.Unmarshal([]byte(models.GetLocalState(rt.DB.Read(), stateRootSince)), &rs)
 	if len(rs) != 0 {
 		t.Fatalf("own since times left: %v", rs)
+	}
+}
+
+// ctimeSec returns the second of the ctime of p.
+func ctimeSec(t *testing.T, p string) int64 {
+	t.Helper()
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return statT(info).Ctim.Sec
+}
+
+// The kernel stamps a ctime from a clock that lags time.Now by a few
+// milliseconds, so a file changed right after a check started in a new
+// second can carry a ctime of the second before the check. Such a file is
+// reported by the next check, both in a root known before and in a root
+// that the next full pass finds. The files are made before the first check
+// (outside the scanned tree) and moved in with their directory, which keeps
+// their ctime; the first check then claims to start just after the second
+// of their ctime, as a check would that started right before they were made.
+func TestScanFindsFileWithLaggingCtime(t *testing.T) {
+	rt, done := openAgentDB(t)
+	defer done()
+	base := t.TempDir()
+	outside := t.TempDir()
+	mkFile(t, filepath.Join(base, "a/storage/old.php"), 0o644)
+	var late, evil string
+	var sec int64
+	for try := 0; ; try++ {
+		dir := filepath.Join(outside, fmt.Sprint(try))
+		late = filepath.Join(dir, "sub/late.php")
+		evil = filepath.Join(dir, "n/storage/evil.php")
+		mkFile(t, late, 0o644)
+		mkFile(t, evil, 0o644)
+		if sec = ctimeSec(t, late); sec == ctimeSec(t, evil) {
+			break
+		}
+		if try == 5 {
+			t.Fatal("the two files never got the same ctime second")
+		}
+	}
+	c := &RuleContent{Writable: WritableSpec{Base: base, AllowedPaths: []string{"storage"}}, ScanIntervalSec: 1,
+		ExecFiles: ExecFilesSpec{Extensions: []string{".php"}, OtherCategory: CategoryAlert}}
+	res := &ResolvedRule{Content: c}
+	// The first check (a full pass) starts 1 ms into the next second.
+	if out := rt.scanFiles(c, res, time.Unix(sec+1, int64(time.Millisecond))); len(out) != 1 {
+		t.Fatalf("first scan: %+v", out)
+	}
+	if err := os.Rename(filepath.Dir(late), filepath.Join(base, "a/storage/sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Dir(filepath.Dir(evil)), filepath.Join(base, "n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ctimeSec(t, filepath.Join(base, "a/storage/sub/late.php")); got != sec {
+		t.Skipf("this file system changes the ctime of files in a moved directory (%d, %d)", got, sec)
+	}
+	var reported []string
+	for _, d := range rt.scanFiles(c, res, time.Unix(sec+3, 0)) {
+		reported = append(reported, d.Target)
+	}
+	sort.Strings(reported)
+	want := []string{filepath.Join(base, "a/storage/sub/late.php"), filepath.Join(base, "n/storage/evil.php")}
+	if fmt.Sprint(reported) != fmt.Sprint(want) {
+		t.Fatalf("reported %v, want %v", reported, want)
 	}
 }
