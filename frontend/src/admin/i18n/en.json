@@ -568,5 +568,227 @@
             "commandsRun": "Commands run",
             "commandsCount": "{{done}} of {{total}}"
         }
+    },
+    "srv": {
+        "account": {
+            "last_admin_delete": "the last enabled administrator cannot be deleted",
+            "last_admin_disable": "the last enabled administrator cannot be disabled",
+            "last_admin_role": "the last enabled administrator cannot be changed to viewer",
+            "not_found": "account not found",
+            "notify_invalid": "notify must be true or false",
+            "role_invalid": "role must be admin or viewer"
+        },
+        "agent": {
+            "id_not_found": "agent {{id}} not found"
+        },
+        "auth": {
+            "step_up_code_expired": "the verification code has expired or was entered wrongly too often; request a new code",
+            "step_up_required": "re-authentication required: request a verification code by mail and enter it to change command sets"
+        },
+        "command": {
+            "import_conflicts": "these names are already used in the monitored target or repeated in the import: {{names}}",
+            "import_item_not_found": "command set {{set}} not found in the source",
+            "import_select": "items: choose at least one command set to import",
+            "import_source_not_found": "source_agent_id: monitored target not found",
+            "invalid_set": "invalid command set: {{problems}}",
+            "name_taken": "name: another command set of this monitored target has this name",
+            "request_not_discardable": "only a run request that was not yet delivered to the agent can be discarded",
+            "request_not_found": "run request not found",
+            "request_pending": "this command set already has a run request that has not been answered",
+            "spec": {
+                "at_format_local": "{{value}} is not a date and time such as 2026-12-01 03:00",
+                "at_format_offset": "{{value}} is not a date and time with a UTC offset such as 2026-12-01T03:00:00+09:00",
+                "at_past": "must be in the future",
+                "at_required": "a date and time is required",
+                "code_b_greater": "must be greater than a",
+                "code_b_unused": "is used only by the kind range",
+                "code_kind": "must be single, range, min or max",
+                "code_range": "must be between 0 and {{max}}",
+                "codes_overlap": "the success codes ({{success}}) and the failure codes ({{failure}}) must not overlap",
+                "command_line_nul": "must not contain a NUL byte",
+                "commands_required": "at least one command is required",
+                "control": "must not contain control characters",
+                "decode": "invalid command set: {{detail}}",
+                "every_choices": "must be one of {{choices}}",
+                "joiner": "must be comma or newline",
+                "max_bytes": "must be at most {{max}} bytes",
+                "max_chars": "must be at most {{max}} characters",
+                "minute_range": "must be between 0 and 59",
+                "minute_required": "a minute from 0 to 59 is required",
+                "not_object": "invalid command set: the definition must be a JSON object",
+                "on_problems": "must be stop, continue_on_failure or continue_always",
+                "one_object": "invalid command set: only one JSON object is allowed",
+                "os_user_dash": "must not start with \"-\"",
+                "os_user_space": "must not contain white space or control characters",
+                "patterns_run_only": "are used only when purpose is collect_output",
+                "purpose": "must be collect_output or run_only",
+                "range_1": "must be between 1 and {{max}}",
+                "required": "is required",
+                "run_mode": "must be manual or schedule",
+                "schedule_kind": "must be once, weekly, daily, every_hours, every_minutes or hourly_at",
+                "schedule_null": "must be null when run_mode is manual",
+                "schedule_required": "is required when run_mode is schedule",
+                "text_control": "must not contain control characters other than line breaks and tabs",
+                "time_of_day": "must be a time of day from 00:00 to 23:59",
+                "weekday_invalid": "{{value}} is not one of {{choices}}",
+                "weekdays_required": "at least one weekday is required",
+                "work_dir_absolute": "must be an absolute path",
+                "work_dir_clean": "must be a clean path (no empty, . or .. parts and no trailing slash)",
+                "work_dir_nul": "must not contain NUL or line breaks",
+                "wrong_type": "invalid command set: {{field}} must be {{expected}}, not {{found}}"
+            }
+        },
+        "config": {
+            "check_interval_min": "default_check_interval_sec must be {{min}} or more",
+            "control_chars": "{{name}} must not contain control characters",
+            "int_max": "{{name}} must be {{max}} or less",
+            "listen_invalid": "{{field}}: {{detail}}",
+            "listen_ip": "{{field}}: the address must be an IP address",
+            "listen_port": "{{field}}: the port must be 1-65535",
+            "listen_same": "web_listen and agent_listen must differ",
+            "not_bool": "{{name}} must be true or false",
+            "not_positive_int": "{{name}} must be a positive integer",
+            "renew_before": "token_renew_before_days must be less than token_valid_days",
+            "server_name_invalid": "server_names: {{value}} is not a host name or IP address",
+            "set_and_unset": "{{name}} is both set and unset",
+            "smtp_from": "smtp.from must be one mail address",
+            "smtp_host": "smtp.host must be a host name or IP address",
+            "smtp_security": "smtp.security must be starttls, tls or none",
+            "unknown_item": "unknown configuration item {{name}} (items: {{items}})",
+            "value_required": "a value is required for {{name}}"
+        },
+        "history": {
+            "action": {
+                "account": {
+                    "created": "created",
+                    "deleted": "deleted",
+                    "disabled": "disabled",
+                    "display_name_changed": "display name changed",
+                    "email_changed": "e-mail address changed",
+                    "email_code_failed": "e-mail change code not sent",
+                    "enabled": "enabled",
+                    "login": "login",
+                    "login_code_failed": "login code not sent",
+                    "login_locked": "login locked",
+                    "notify_changed": "notification changed",
+                    "password_changed": "password changed",
+                    "password_reset": "password reset",
+                    "role_changed": "role changed",
+                    "step_up_code_failed": "re-authentication code not sent"
+                },
+                "command": {
+                    "created": "created",
+                    "deleted": "deleted",
+                    "imported": "imported",
+                    "request_discarded": "request discarded",
+                    "request_expired": "request ended without a run",
+                    "run_requested": "run requested",
+                    "updated": "updated"
+                },
+                "config": {
+                    "set": "set",
+                    "unset": "reset to default",
+                    "updated": "updated"
+                }
+            },
+            "detail": {
+                "account_created": "role {{role}}, language {{language}}",
+                "admin_recovered_cli": "administrator recovered on the central host",
+                "change": "{{from}} -> {{to}}",
+                "change_own": "{{from}} -> {{to}} (own change)",
+                "command_copied": "copied from {{source}}",
+                "command_renamed": "renamed from {{name}}",
+                "command_request": "request {{request}}",
+                "command_request_discarded_with": "request {{request}} discarded",
+                "command_set": "set {{set}}",
+                "command_set_rev": "set {{set}} revision {{revision}}",
+                "config_default": "{{name}} = (default)",
+                "config_restored": "default restored",
+                "config_secret": "{{name}} changed",
+                "config_value": "{{name}} = {{value}}",
+                "email_changed_admin": "{{from}} -> {{to}} (changed by an administrator)",
+                "email_code_failed": "the code for the change to {{email}} could not be sent: {{cause}}",
+                "first_admin_cli": "first administrator created on the central host",
+                "login": "from {{host}}; {{how}}",
+                "login_code_failed": "the login code for a login from {{host}} could not be sent: {{cause}}",
+                "login_how": {
+                    "code": "code verified",
+                    "code_trust": "code verified, browser trusted",
+                    "smtp_off": "two-step verification skipped (SMTP not configured)",
+                    "trusted": "verified browser"
+                },
+                "login_locked": "too many failed logins from {{host}}",
+                "notify_off": "notification mails off",
+                "notify_on": "notification mails on",
+                "own_password_changed": "own password changed",
+                "password_reset_admin": "password reset by an administrator",
+                "request_ended": "request {{request}} ended without a run: {{why}}",
+                "request_ended_why": {
+                    "expired": "it reached the agent after its expiry",
+                    "unknown_set": "the agent does not hold this command set"
+                },
+                "request_not_delivered": "request {{request}} was not delivered to the agent within {{expiry}}",
+                "step_up_code_failed": "the re-authentication code for a request from {{host}} could not be sent: {{cause}}"
+            },
+            "target": {
+                "command_set_fallback": "set {{set}}"
+            }
+        },
+        "loc": {
+            "command": "command {{n}}",
+            "item": "item {{n}}",
+            "pattern": "pattern {{n}}"
+        },
+        "pattern": {
+            "ambiguous_name": "group numbers are ambiguous because the name {{name}} is used for more than one group",
+            "backref_digits": "{{ref}}: write references to groups with at most two digits and octal escapes with three octal digits",
+            "backref_open": "{{ref}} refers to group {{n}}, which is still open at that point",
+            "backref_undefined": "{{ref}} refers to group {{n}}, which is not defined before it",
+            "balancing": "balancing groups such as {{form}} are not supported",
+            "comment_backslash": "a # comment that ends with a backslash is not supported",
+            "comment_group_backslash": "a comment (?#...) that ends with a backslash is not supported",
+            "cond_missing": "(?({{n}})...) refers to group {{n}}, which does not exist",
+            "empty": "must not be empty",
+            "empty_group": "the empty group (?) is not supported",
+            "named_group_required": "must have at least one named group such as (?P<name>...) or (?<name>...)",
+            "named_ref_open": "(?P={{name}}) refers to a group that is still open at that point",
+            "named_ref_undefined": "(?P={{name}}) refers to a group name that is not defined before it",
+            "numbered_group": "numbered groups such as (?<1>...) are not supported; give the group a name",
+            "numbering": "the groups of this pattern cannot be numbered in the order of their opening parentheses; simplify the pattern",
+            "option_n": "the option n (explicit capture) is not supported",
+            "quote": "\\{{char}} is not supported (quoting with \\Q...\\E); escape each special character with a backslash instead",
+            "syntax": "invalid regular expression: {{detail}}"
+        },
+        "rule": {
+            "choose_template": "choose the template for: {{fields}}",
+            "in_use": "the rule is applied to an agent and cannot be deleted",
+            "name_invalid": "rule name must be 1-100 characters",
+            "name_taken": "a rule with this name already exists",
+            "rule_version_not_found": "rule version not found",
+            "select_agent": "select at least one agent",
+            "select_template": "select at least one template",
+            "template_not_found_named": "template {{name}} not found"
+        },
+        "suppression": {
+            "condition_required": "at least one condition is required",
+            "field_control": "{{field}} must not contain control characters",
+            "field_too_long_bytes": "{{field}} is longer than {{max}} bytes",
+            "field_too_long_chars": "{{field}} is longer than {{max}} characters",
+            "not_found": "suppression not found",
+            "type_invalid": "unknown detection type"
+        },
+        "template": {
+            "builtin_name": "the name of a built-in template cannot be used",
+            "builtin_not_found": "built-in template not found",
+            "builtin_readonly": "built-in templates cannot be changed",
+            "builtin_undeletable": "built-in templates cannot be deleted",
+            "name_invalid": "template name must be 1-64 characters of A-Z a-z 0-9 . _ -",
+            "name_taken": "a template with this name already exists"
+        },
+        "token": {
+            "name_invalid": "token name must be 1-64 characters of A-Z a-z 0-9 . _ -",
+            "name_taken": "a token with this name already exists",
+            "valid_days_range": "valid_days must be between {{min}} and {{max}}"
+        }
     }
 }

@@ -589,5 +589,245 @@
         "notExecutedCount": "Commands not executed: {{count}}",
         "stillRunning": "This run has not finished yet. Reload to see the commands that ended since.",
         "noCommands": "No command has ended yet."
+    },
+    "srv": {
+        "account": {
+            "current_password_wrong": "the current password is wrong",
+            "display_name_control": "the display name must not contain control characters",
+            "display_name_required": "a display name is required",
+            "display_name_too_long": "the display name must be at most {{max}} characters",
+            "email_chars": "the e-mail address must not contain spaces, control characters or \" < > ,",
+            "email_duplicate": "an account with this e-mail address already exists",
+            "email_invalid": "the e-mail address is not valid",
+            "email_required": "an e-mail address is required",
+            "email_too_long": "the e-mail address must be at most {{max}} characters",
+            "email_unchanged": "the e-mail address is unchanged",
+            "language_invalid": "language must be auto, en or ja",
+            "password_too_long": "password is too long",
+            "password_too_short": "password must be at least {{min}} characters"
+        },
+        "agent": {
+            "not_found": "agent not found"
+        },
+        "apply": {
+            "and_more": "and {{count}} more",
+            "applied": "applied ({{count}} audit rules)",
+            "applied_with_warnings": "applied with {{count}} warning(s)",
+            "builtin_disabled": "the built-in agent is disabled; its audit rules were removed",
+            "cleared_by_init": "the stored rule was cleared by agent init; the next sync decides",
+            "failed_file_unknown": "applying audit rules failed and the previous state was restored except {{file}}, which could not be read before the change ({{detail}}): {{cause}}",
+            "failed_partly_restored": "applying audit rules failed and the previous state could not be restored completely ({{count}} steps failed; check the loaded rules with auditctl -l): {{cause}}",
+            "failed_restored": "applying audit rules failed and the previous state was restored: {{cause}}",
+            "global_settings": "global settings not effective (failure {{failure}}, backlog_wait_time {{wait}})",
+            "globals_record_failed": "recording the global audit settings before the change failed: {{cause}}",
+            "globals_restore_failed": "the rules were removed, but setting the global audit settings back (backlog_limit {{limit}}, backlog_wait_time {{wait}}, failure {{failure}}) failed: {{cause}}",
+            "immutable": "audit rules are immutable (enabled 2); reboot is required to change them",
+            "never_reload_failed": "loading the suppression rule of {{dir}} again ({{line}}) failed: {{cause}}",
+            "never_rule_loaded": "the rule suppressing all syscall auditing is still loaded",
+            "none_remove_failed": "no rule is assigned, but removing the audit rules failed: {{cause}}",
+            "none_removed": "no rule is assigned; the audit rules were removed",
+            "own_rule_left": "a rule with key {{key}} is still loaded: {{line}}",
+            "rule_count": "expected {{expected}} loaded rules with key {{key}}, found {{found}}",
+            "rules_file_dir": "{{file}} is a directory",
+            "validation_failed": "validation failed: {{problems}}",
+            "warn_dir_missing": "directory {{value}} does not exist",
+            "warn_exe_missing": "executable {{value}} does not exist",
+            "warn_rules_dir_missing": "{{dir}} does not exist; the rules are not kept for the next boot (the agent applies them again when it starts)",
+            "warn_scan_base_missing": "scan origin {{value}} does not exist",
+            "warn_user_missing": "OS user {{value}} does not exist"
+        },
+        "auditd": {
+            "command_failed": "auditctl {{args}}: {{cause}}",
+            "disabled": "auditing is disabled (auditctl -s reports enabled 0)",
+            "list_failed": "auditctl -l failed: {{cause}}",
+            "not_running": "auditd is not running",
+            "status_failed": "auditctl -s failed: {{cause}}",
+            "tool_missing": "audit tool {{tool}} is not available: {{cause}}"
+        },
+        "auth": {
+            "code_mail_failed": "the verification code could not be sent; contact an administrator",
+            "email_code_expired": "the verification code has expired or was entered wrongly too often; request the change again",
+            "invalid_code": "invalid code",
+            "locked": "login is temporarily locked after repeated failures",
+            "login_code_expired": "the verification code has expired; log in again",
+            "login_failed": "invalid e-mail address or password",
+            "login_required": "login required",
+            "missing_header": "missing request header",
+            "unauthorized": "unauthorized"
+        },
+        "builtin": {
+            "auditd_unusable": "auditd is not usable: {{cause}}",
+            "local_db": "local database: {{cause}}",
+            "stopped": "stopped"
+        },
+        "command": {
+            "run_not_found": "run not found",
+            "set_not_found": "command set not found"
+        },
+        "common": {
+            "body_refused": "request body not read: a body this large needs an authenticated request",
+            "busy": "busy",
+            "header_too_large": "request header too large",
+            "internal_error": "internal error",
+            "invalid_body": "invalid request body: {{detail}}",
+            "invalid_body_trailing": "invalid request body: unexpected data after the JSON value",
+            "length_required": "length required",
+            "lines": "{{lines}}",
+            "problems": "{{problems}}",
+            "query_agent_id": "invalid agent_id {{value}}: not an integer",
+            "query_bad_time": "invalid {{name}} {{value}}: use RFC3339 or YYYY-MM-DD[THH:MM[:SS]]",
+            "query_not_bool": "invalid {{name}} {{value}}: use true or false",
+            "query_not_integer": "invalid {{name}} {{value}}: not an integer"
+        },
+        "detection": {
+            "not_found": "detection not found"
+        },
+        "history": {
+            "action": {
+                "certificate": {
+                    "ca_created": "CA created",
+                    "ca_discarded": "CA discarded",
+                    "ca_next_created": "next CA created",
+                    "ca_switched": "switched to the new CA",
+                    "server_cert_issued": "server certificate issued"
+                },
+                "detection": {
+                    "acknowledged": "acknowledged",
+                    "dropped": "dropped by the agent"
+                },
+                "rejected": {
+                    "expired_token": "expired token",
+                    "instance_id_mismatch": "instance ID mismatch",
+                    "invalid_token": "invalid token",
+                    "missing_instance_id": "missing instance ID",
+                    "missing_token": "missing token",
+                    "revoked_token": "revoked token"
+                },
+                "rule": {
+                    "applied": "applied",
+                    "apply_result_error": "apply result: error",
+                    "apply_result_none": "apply result: not applied",
+                    "apply_result_ok": "apply result: applied",
+                    "apply_result_pending": "apply result: pending",
+                    "apply_result_warning": "apply result: warnings",
+                    "created": "created",
+                    "deleted": "deleted",
+                    "saved": "saved",
+                    "unassigned": "unassigned"
+                },
+                "suppression": {
+                    "created": "created",
+                    "deleted": "deleted"
+                },
+                "template": {
+                    "created": "created",
+                    "deleted": "deleted",
+                    "updated": "updated"
+                },
+                "token": {
+                    "bound": "bound",
+                    "expired": "expired",
+                    "issued": "issued",
+                    "reissued": "reissued",
+                    "renewal_issued": "renewal issued",
+                    "renewed": "renewed",
+                    "revoked": "revoked",
+                    "unbound": "unbound"
+                }
+            },
+            "detail": {
+                "acknowledged": "{{count}} detection(s)",
+                "apply_result": "{{rule}} version {{version}}: {{result}}",
+                "ca_created": "private CA created",
+                "ca_discarded": "expired CA removed",
+                "ca_next_created": "new CA created; distributing to agents; server certificate switches after {{at}}",
+                "ca_switched": "server certificate now signed by the new CA",
+                "dropped": "the agent dropped {{count}} detection(s) at its storage limit",
+                "rule_applied": "version {{version}} to {{agents}}",
+                "rule_fallback": "rule {{id}}",
+                "rule_saved": "version {{version}}: {{comment}}",
+                "rule_unassigned": "version {{version}} from {{agent}}",
+                "server_cert_names": "names: {{names}}",
+                "suppression_created": "{{cond}}; {{count}} open detection(s) now suppressed",
+                "suppression_deleted": "{{cond}}; {{count}} detection(s) no longer suppressed",
+                "template_created": "created",
+                "template_from_builtin": "from built-in template {{name}}",
+                "template_from_rule_id": "from rule {{id}} version {{version}}",
+                "template_from_rule_name": "from rule {{rule}} version {{version}}",
+                "token_bound": "bound to agent instance {{instance}}",
+                "token_expired": "the token expired; connections with it are refused",
+                "token_issued": "expires {{expires}}",
+                "token_issued_rule": "expires {{expires}}; rule id {{rule}} version {{version}}",
+                "token_reissued": "previous values invalidated; expires {{expires}}",
+                "token_renewal_issued": "new token value handed to the agent; expires {{expires}}",
+                "token_renewed": "agent switched to the renewed token; the previous value is no longer accepted",
+                "token_unbound": "binding to the agent instance removed (was {{instance}})"
+            }
+        },
+        "json": {
+            "kind": {
+                "array": "an array",
+                "bool": "true or false",
+                "integer": "an integer",
+                "number": "a number",
+                "object": "an object",
+                "string": "a string",
+                "the_content": "the content",
+                "valid": "a valid value"
+            }
+        },
+        "loc": {
+            "entry": "{{name}} {{value}}",
+            "field": "{{name}}"
+        },
+        "rule": {
+            "content": {
+                "base_root": "/ is not allowed",
+                "category_invalid": "must be alert, normal or empty",
+                "decode": "invalid rule content: {{detail}}",
+                "extension_invalid": "invalid extension {{value}}",
+                "legit_category": "category must be alert or normal",
+                "legit_extension_required": "at least one extension is required",
+                "not_object": "invalid rule content: the content must be a JSON object",
+                "path_char": "{{path}} contains a forbidden character",
+                "path_dot": "{{path}} must not contain dot segments",
+                "path_not_absolute": "{{path}} is not an absolute path",
+                "path_not_clean": "{{path}} is not a clean path",
+                "path_too_long": "{{path}} is too long",
+                "range": "must be between {{min}} and {{max}}",
+                "relpath_empty": "empty path",
+                "relpath_invalid": "{{path}} must be directory names separated by slashes, without dot segments",
+                "too_many": "at most {{max}} entries",
+                "user_invalid": "invalid user name {{value}}",
+                "wrong_type": "invalid rule content: {{field}} must be {{expected}}, not {{found}}"
+            },
+            "diff_from_to": "from and to are required",
+            "not_found": "rule not found",
+            "version": {
+                "created": "created",
+                "created_empty": "created empty",
+                "from_templates": "expanded from templates: {{names}}"
+            },
+            "version_not_found": "version not found"
+        },
+        "sep": {
+            "lines": "\n",
+            "list": ", ",
+            "problems": "; "
+        },
+        "template": {
+            "builtin": {
+                "apache": "Apache HTTP Server users (apache, www-data) and read monitoring of its configuration",
+                "base": "Common categories and intervals, read monitoring of /etc/ssh and /home, scan origin /opt and executable file extensions",
+                "ffmpeg": "Network monitoring of ffmpeg and ffprobe under /opt/ffmpeg",
+                "laravel": "Laravel writable paths (storage, bootstrap/cache) and the places where PHP files are created legitimately",
+                "nginx": "nginx users (nginx, www-data) and read monitoring of its configuration",
+                "php-fpm": "Read monitoring of the PHP-FPM configuration. Add the pool users of each site to the expanded rule"
+            },
+            "not_found": "template not found"
+        },
+        "token": {
+            "not_found": "token not found"
+        }
     }
 }
