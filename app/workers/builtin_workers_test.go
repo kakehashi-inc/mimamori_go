@@ -44,7 +44,7 @@ func builtinWorkersStored(t *testing.T, dir string) string {
 // one changes nothing of the other.
 func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	fakeAuditTools(t)
 	dir := e.c.dataDir
 
@@ -59,7 +59,7 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	e.c.cfg.Store(&cfg)
 	centralWorkers := func() string {
 		var v string
-		_ = e.c.db.QueryRow(`SELECT value FROM settings WHERE key = 'config.workers'`).Scan(&v)
+		_ = e.c.db.Read().QueryRow(`SELECT value FROM settings WHERE key = 'config.workers'`).Scan(&v)
 		return v
 	}
 	before := centralWorkers()
@@ -78,7 +78,7 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for reported == 0 && time.Now().Before(deadline) {
 		if tdb, err := e.c.targetDB(b); err == nil {
-			if rep, err := models.LatestHostReport(tdb); err == nil {
+			if rep, err := models.LatestHostReport(tdb.Read()); err == nil {
 				var hi modules.HostInfo
 				if json.Unmarshal([]byte(rep.HostInfo), &hi) == nil {
 					reported = hi.Workers

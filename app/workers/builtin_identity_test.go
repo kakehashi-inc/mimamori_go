@@ -37,7 +37,7 @@ func (r *recordingTransport) Report(req *modules.ReportRequest) error {
 // central takes both.
 func TestBuiltinAgentSendsIdentityAndRunning(t *testing.T) {
 	e := newTestEnv(t)
-	b, _ := models.GetBuiltinAgent(e.c.db)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	db, err := modules.OpenSQLite(filepath.Join(t.TempDir(), modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	if err != nil {
 		t.Fatal(err)
