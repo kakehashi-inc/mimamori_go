@@ -193,8 +193,11 @@ func TestClientSilentHandshakeCut(t *testing.T) {
 	start := time.Now()
 	_, _, err := testClient(ln, cc).Do("GET", "/agent/v1/ca", nil)
 	within(t, "handshake cut", time.Since(start), clientIdle-200*time.Millisecond, clientIdle+800*time.Millisecond)
-	if !IsSilenceCut(err) {
-		t.Fatalf("want a silence cut, got %v", err)
+	// The request was never sent: the caller reports that the central cannot
+	// be reached, not that it may still carry out the request.
+	var ne net.Error
+	if err == nil || !errors.As(err, &ne) || !ne.Timeout() || IsSilenceCut(err) {
+		t.Fatalf("want a timeout before the request was sent, got %v", err)
 	}
 }
 
@@ -239,13 +242,21 @@ func TestSilenceMessages(t *testing.T) {
 		t.Fatalf("message: %q", ee.Message)
 	}
 
+	// A connect that never completes sent nothing: no "may still carry out".
+	dialCut := &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	if err := cl.callError(dialCut); !errors.As(err, &ee) || ee.Code != ExitExec || ee.Message != "dial tcp: i/o timeout" {
+		t.Fatalf("connect cut: %v", err)
+	}
+
 	var logged strings.Builder
 	rt := &AgentRuntime{Logger: log.New(&logged, "", 0)}
-	cut := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	cut := &sentError{&net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}}
 	rt.logConnectionError("report", cut)
 	rt.logConnectionError("sync", cut)
+	rt.logConnectionError("sync", dialCut)
 	if logged.String() != "report: the central sent nothing for 60 seconds: read tcp: i/o timeout\n"+
-		"sync: the central sent nothing for 60 seconds: read tcp: i/o timeout\n" {
+		"sync: the central sent nothing for 60 seconds: read tcp: i/o timeout\n"+
+		"sync: cannot reach the central: dial tcp: i/o timeout\n" {
 		t.Fatalf("log: %q", logged.String())
 	}
 }

@@ -63,12 +63,23 @@ func NewHTTPSClient(host string, port int, tlsCfg *tls.Config) (*HTTPSClient, er
 	return &HTTPSClient{Address: net.JoinHostPort(host, strconv.Itoa(port)), TLS: tlsCfg, Headers: map[string]string{}}, nil
 }
 
-// IsSilenceCut reports whether err is the idle limit of the connection: the
-// server sent nothing, or took nothing of the request, for IdleTimeout (the
-// client sets no other deadline).
+// sentError marks an error of Do that happened after the whole request was
+// written: the server may have received the request and may carry it out.
+type sentError struct{ err error }
+
+func (e *sentError) Error() string { return e.err.Error() }
+func (e *sentError) Unwrap() error { return e.err }
+
+// IsSilenceCut reports whether err is the idle limit of the connection after
+// the whole request was sent: the server sent nothing of its answer for
+// IdleTimeout (the client sets no other deadline). A cut while connecting,
+// during the TLS handshake or while the request was being written is not one:
+// the server cannot have received the request, so the caller reports that it
+// cannot reach the server.
 func IsSilenceCut(err error) bool {
+	var se *sentError
 	var ne net.Error
-	return errors.As(err, &ne) && ne.Timeout()
+	return errors.As(err, &se) && errors.As(se.err, &ne) && ne.Timeout()
 }
 
 // Do sends one request and returns the status and body.
@@ -116,12 +127,12 @@ func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) 
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, &sentError{err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxRequestBody))
 	if err != nil {
-		return resp.StatusCode, nil, err
+		return resp.StatusCode, nil, &sentError{err}
 	}
 	return resp.StatusCode, data, nil
 }
