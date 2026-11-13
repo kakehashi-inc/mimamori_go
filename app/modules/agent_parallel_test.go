@@ -22,10 +22,11 @@ type parTransport struct {
 	mu   sync.Mutex
 	resp SyncResponse
 	// syncs records each sync: whether it ran inside the wait loop of a
-	// running command, the number of flows at that moment and the sets that
-	// ran.
-	syncs       []syncSeen
-	reports     []*ReportRequest
+	// running command, the flow it ran on and the sets that ran.
+	syncs   []syncSeen
+	reports []*ReportRequest
+	// reportFlows holds the flow (goroutine number) of each report attempt.
+	reportFlows []uint64
 	attempts    []time.Time
 	failReports bool
 	onSync      func(n int)
@@ -37,7 +38,7 @@ type parTransport struct {
 
 type syncSeen struct {
 	inWaitLoop bool
-	goroutines int
+	goroutine  uint64
 	running    int
 }
 
@@ -50,7 +51,7 @@ func (f *parTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 			break
 		}
 	}
-	seen := syncSeen{inWaitLoop: inWaitLoop(), goroutines: runtime.NumGoroutine()}
+	seen := syncSeen{inWaitLoop: inWaitLoop(), goroutine: goroutineNumber()}
 	if f.db != nil {
 		runs, _ := models.ListUnfinishedCommandExecutions(f.db.Read())
 		seen.running = len(runs)
@@ -76,6 +77,7 @@ func (f *parTransport) Report(r *ReportRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attempts = append(f.attempts, time.Now())
+	f.reportFlows = append(f.reportFlows, goroutineNumber())
 	if f.failReports {
 		return os.ErrDeadlineExceeded
 	}

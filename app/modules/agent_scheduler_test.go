@@ -3,7 +3,7 @@ package modules
 import (
 	"bytes"
 	"log"
-	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,14 +22,24 @@ func TestSchedulerOneWorkerAsToday(t *testing.T) {
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5"))
 	tr.resp.CommandRequests = manualRequests(1, 1)
 	stop := stopWhenRunsFinished(t, rt.DB, 1)
-	// Settle the flows of the test and the database before counting.
-	time.Sleep(50 * time.Millisecond)
-	before := runtime.NumGoroutine()
+	// Every sync and every report runs on the flow that called Run.
+	here := goroutineNumber()
 	rt.Run(stop)
+	tr.mu.Lock()
+	reportFlows := slices.Clone(tr.reportFlows)
+	tr.mu.Unlock()
+	if len(reportFlows) == 0 {
+		t.Fatal("no report was sent")
+	}
+	for i, g := range reportFlows {
+		if g != here {
+			t.Fatalf("report %d ran on flow %d, Run was called on %d: a flow was started", i+1, g, here)
+		}
+	}
 	during := 0
 	for i, s := range tr.seen() {
-		if s.goroutines != before {
-			t.Fatalf("step %d: %d flows, %d before Run: a flow was started", i+1, s.goroutines, before)
+		if s.goroutine != here {
+			t.Fatalf("step %d ran on flow %d, Run was called on %d: a flow was started", i+1, s.goroutine, here)
 		}
 		if s.running > 0 {
 			if !s.inWaitLoop {
