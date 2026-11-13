@@ -141,6 +141,31 @@ func managementPeer(r *http.Request) bool {
 	return isLocalPeer(r.RemoteAddr, local)
 }
 
+// isLocalPeer reports whether a connection comes from this host: its source
+// address (never a forwarding header) is a loopback address, or equals the
+// local address the connection was accepted on (a connection from this host
+// to one of its own addresses). local is the local address of the accepted
+// connection (nil when unknown: then only loopback counts).
+func isLocalPeer(remoteAddr string, local net.Addr) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	zone := ""
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host, zone = host[:i], host[i+1:] // the zone of a link-local address
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	ta, ok := local.(*net.TCPAddr)
+	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip) && (zone == "" || ta.Zone == "" || zone == ta.Zone)
+}
+
 // cliCredential reports whether a request carries the CLI secret.
 func (c *core) cliCredential(r *http.Request) bool {
 	v := bearer(r)

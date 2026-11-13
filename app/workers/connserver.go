@@ -5,16 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -280,17 +277,7 @@ var (
 	badRequestResponse     = []byte("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
 	headTooLargeResponse   = errorResponse(http.StatusRequestHeaderFieldsTooLarge, modules.M("common.header_too_large"))
 	lengthRequiredResponse = errorResponse(http.StatusLengthRequired, modules.M("common.length_required"))
-	internalErrorBody      = errorBodyBytes(modules.M("common.internal_error"))
 )
-
-// errorBodyBytes returns the JSON body of an error answer (see errorBody).
-func errorBodyBytes(m modules.Msg) []byte {
-	b, err := json.Marshal(errorBody(m))
-	if err != nil {
-		panic(err) // a message of strings and numbers always encodes
-	}
-	return b
-}
 
 func errorResponse(status int, m modules.Msg) []byte {
 	body := errorBodyBytes(m)
@@ -1231,10 +1218,6 @@ func (s *connServer) jobFor(c *conn) job {
 	return job{conn: c, req: req, handler: c.spec.handler}
 }
 
-// errBodyRefused is what the body of a request reads whose large body was
-// not read because the request is not authenticated for its route.
-var errBodyRefused = errors.New("request body not read: a body this large needs an authenticated request")
-
 // requestFor returns the parsed request head with what the handlers learn
 // about the connection (no body).
 func (s *connServer) requestFor(c *conn) *http.Request {
@@ -1749,104 +1732,6 @@ func (s *connServer) serve(h http.Handler, req *http.Request) []byte {
 	var out bytes.Buffer
 	_ = resp.Write(&out)
 	return out.Bytes()
-}
-
-// errReader returns its error on every read.
-type errReader struct{ err error }
-
-func (e errReader) Read([]byte) (int, error) { return 0, e.err }
-
-// listenTCP opens a listening socket for "IP:port". The socket is created
-// with system calls (instead of net.Listen) so that nothing is read from
-// /proc; the address must be an IP address.
-func listenTCP(addr string) (*net.TCPListener, error) {
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 0 || port > 65535 {
-		return nil, fmt.Errorf("%s: invalid port", addr)
-	}
-	ip := net.ParseIP(host)
-	if host == "" {
-		ip = net.IPv4zero
-	}
-	if ip == nil {
-		return nil, fmt.Errorf("%s: the listen address must be an IP address", addr)
-	}
-	var fd int
-	if ip4 := ip.To4(); ip4 != nil {
-		fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
-		if err != nil {
-			return nil, err
-		}
-		sa := &syscall.SockaddrInet4{Port: port}
-		copy(sa.Addr[:], ip4)
-		err = bindListen(fd, sa)
-	} else {
-		fd, err = syscall.Socket(syscall.AF_INET6, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
-		if err != nil {
-			return nil, err
-		}
-		sa := &syscall.SockaddrInet6{Port: port}
-		copy(sa.Addr[:], ip.To16())
-		err = bindListen(fd, sa)
-	}
-	if err != nil {
-		_ = syscall.Close(fd)
-		return nil, fmt.Errorf("listen %s: %w", addr, err)
-	}
-	f := os.NewFile(uintptr(fd), "listener "+addr)
-	ln, err := net.FileListener(f)
-	_ = f.Close() // FileListener keeps its own copy of the descriptor
-	if err != nil {
-		return nil, err
-	}
-	tl, ok := ln.(*net.TCPListener)
-	if !ok {
-		_ = ln.Close()
-		return nil, fmt.Errorf("%s: not a TCP listener", addr)
-	}
-	return tl, nil
-}
-
-func bindListen(fd int, sa syscall.Sockaddr) error {
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
-		return err
-	}
-	if err := syscall.Bind(fd, sa); err != nil {
-		return err
-	}
-	return syscall.Listen(fd, listenBacklog)
-}
-
-// listenBacklog is the queue length of pending connections.
-const listenBacklog = 512
-
-// isLocalPeer reports whether a connection comes from this host: its source
-// address (never a forwarding header) is a loopback address, or equals the
-// local address the connection was accepted on (a connection from this host
-// to one of its own addresses). local is the local address of the accepted
-// connection (nil when unknown: then only loopback counts).
-func isLocalPeer(remoteAddr string, local net.Addr) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return false
-	}
-	zone := ""
-	if i := strings.IndexByte(host, '%'); i >= 0 {
-		host, zone = host[:i], host[i+1:] // the zone of a link-local address
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() {
-		return true
-	}
-	ta, ok := local.(*net.TCPAddr)
-	return ok && ta != nil && !ta.IP.IsUnspecified() && ta.IP.Equal(ip) && (zone == "" || ta.Zone == "" || zone == ta.Zone)
 }
 
 // hostAddrs caches the addresses of this host's interfaces. They come from
