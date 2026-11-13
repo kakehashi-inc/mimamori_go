@@ -43,7 +43,7 @@ func (c *core) sessionPrincipal(r *http.Request) (*principal, *models.Session) {
 		return nil, nil
 	}
 	if a == nil || a.Disabled {
-		_ = models.DeleteSession(c.pool, s.ID)
+		_ = c.db.Write(func(tx models.Writer) error { return models.DeleteSession(tx, s.ID) })
 		return nil, nil
 	}
 	return &principal{AccountID: a.ID, Email: a.Email, DisplayName: a.DisplayName, Role: a.Role, Language: a.Language, SessionID: s.ID, StepUpAt: s.StepUpAt}, s
@@ -57,11 +57,11 @@ func (c *core) findSession(r *http.Request) (*models.Session, *models.Account) {
 	if err != nil || !strings.HasPrefix(ck.Value, modules.SessionPrefix) {
 		return nil, nil
 	}
-	s, err := models.GetSession(c.pool, modules.HashSecret(ck.Value))
+	s, err := models.GetSession(c.db.Read(), modules.HashSecret(ck.Value))
 	if err != nil || s.ExpiresAt < time.Now().Unix() {
 		return nil, nil
 	}
-	a, err := models.GetAccount(c.pool, s.AccountID)
+	a, err := models.GetAccount(c.db.Read(), s.AccountID)
 	if err != nil {
 		return s, nil
 	}
@@ -105,7 +105,7 @@ func (c *core) sessionAuth(admin, viewer http.Handler) http.Handler {
 			if s.Remember {
 				expires = s.ExpiresAt
 			}
-			_ = models.TouchSession(c.pool, s.ID, now, expires)
+			_ = c.db.Write(func(tx models.Writer) error { return models.TouchSession(tx, s.ID, now, expires) })
 		}
 		next := viewer
 		if p.isAdmin() {
@@ -172,20 +172,6 @@ func requireAny(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// invalidateAccount ends every session of an account (a role change).
-func (c *core) invalidateAccount(id int64) {
-	_ = models.DeleteAccountSessions(c.pool, id, "")
-}
-
-// revokeAccountAuth ends the sessions (all but keepSession), the browser
-// verifications and the pending codes of an account (a password or e-mail
-// address change, disabling).
-func (c *core) revokeAccountAuth(id int64, keepSession string) {
-	if err := modules.RevokeAccountAuth(c.pool, id, keepSession); err != nil {
-		c.logger.Printf("revoke account %d: %v", id, err)
-	}
-}
-
 // cliOperator is the name recorded in the history for CLI operations.
 const cliOperator = "cli"
 
@@ -197,7 +183,10 @@ var errAgentAuth = errors.New("unauthorized")
 // Every failure is answered without details and recorded in the history.
 func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent, error) {
 	reject := func(reason, target string) (*models.Token, *models.Agent, error) {
-		if err := models.RecordRejected(c.pool, remoteHost(r.RemoteAddr), reason, target, 600); err != nil {
+		err := c.db.Write(func(tx models.Writer) error {
+			return models.RecordRejected(tx, remoteHost(r.RemoteAddr), reason, target, 600)
+		})
+		if err != nil {
 			c.logger.Printf("history: %v", err)
 		}
 		return nil, nil, errAgentAuth
@@ -212,24 +201,21 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 	h := modules.HashSecret(v)
 	now := time.Now().Unix()
 	instance := strings.TrimSpace(r.Header.Get(modules.HeaderInstanceID))
+	// The token row is read, checked and its use recorded in one write
+	// transaction, so the checks are made on the row as it is when it is
+	// written: another request of the same agent, or a revoke, reissue or
+	// unbind by an administrator, comes before or after it as a whole.
 	var t *models.Token
-	var usedPending, bound bool
-	// The token row can change between reading and writing it (another
-	// request of the same agent, or an administrator). The checks are then
-	// made again on the new row, so every request gets the answer that fits
-	// the row as it is.
-	for attempt := 1; ; attempt++ {
+	var reason string
+	err := c.db.Write(func(tx models.Writer) error {
 		var err error
-		t, err = models.FindTokenByHash(c.pool, h)
-		if errors.Is(err, sql.ErrNoRows) {
-			return reject("invalid token", "")
-		}
+		t, err = models.FindTokenByHash(tx, h)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
-		var reason string
+		var usedPending bool
 		if reason, usedPending = tokenProblem(t, h, instance, now); reason != "" {
-			return reject(reason, t.Name)
+			return nil
 		}
 		prev := *t
 		if usedPending {
@@ -238,7 +224,7 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 			t.PendingHash, t.PendingExpiresAt = "", 0
 			t.RenewedAt = now
 		}
-		bound = t.InstanceID == ""
+		bound := t.InstanceID == ""
 		if bound {
 			t.InstanceID, t.BoundAt = instance, now
 		}
@@ -246,27 +232,34 @@ func (c *core) authenticateAgent(r *http.Request) (*models.Token, *models.Agent,
 			t.UsedAt = now
 		}
 		t.LastSeenAt = now
-		// Only the columns changed here are written, and only while the token
-		// is unchanged since it was read: a concurrent revoke, reissue or
-		// unbind wins.
-		err = models.RecordTokenUse(c.pool, t, &prev)
-		if err == nil {
-			break
+		// Only the columns changed here are written, and only while the
+		// token is as it was read (which inside this transaction it is).
+		if err := models.RecordTokenUse(tx, t, &prev); err != nil {
+			return err
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, err
+		if usedPending {
+			if err := models.InsertHistory(tx, c.historyRow(nil, models.HistToken, "renewed", modules.Raw(t.Name), modules.M("history.detail.token_renewed"))); err != nil {
+				return err
+			}
 		}
-		if attempt >= 3 {
-			return reject("invalid token", t.Name)
+		if bound {
+			if err := models.InsertHistory(tx, c.historyRow(nil, models.HistToken, "bound", modules.Raw(t.Name), modules.M("history.detail.token_bound", "instance", instance))); err != nil {
+				return err
+			}
 		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows) && t == nil:
+		return reject("invalid token", "")
+	case errors.Is(err, sql.ErrNoRows):
+		return reject("invalid token", t.Name)
+	case err != nil:
+		return nil, nil, err
+	case reason != "":
+		return reject(reason, t.Name)
 	}
-	if usedPending {
-		c.history(nil, models.HistToken, "renewed", t.Name, modules.M("history.detail.token_renewed"))
-	}
-	if bound {
-		c.history(nil, models.HistToken, "bound", t.Name, modules.M("history.detail.token_bound", "instance", instance))
-	}
-	a, err := models.GetAgentByToken(c.pool, t.ID)
+	a, err := models.GetAgentByToken(c.db.Read(), t.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -358,7 +351,7 @@ func (c *core) agentTokenValid(r *http.Request) bool {
 		return false
 	}
 	h := modules.HashSecret(v)
-	t, err := models.FindTokenByHash(c.pool, h)
+	t, err := models.FindTokenByHash(c.db.Read(), h)
 	if err != nil {
 		return false
 	}

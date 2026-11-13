@@ -314,15 +314,21 @@ func historyParts(parts []modules.Msg) modules.Msg {
 
 // historyMsg records an operation whose target is a coded message too.
 func (c *core) historyMsg(p *principal, category, action string, target, detail modules.Msg) {
+	if err := models.InsertHistory(c.pool, c.historyRow(p, category, action, target, detail)); err != nil {
+		c.logger.Printf("history: %v", err)
+	}
+}
+
+// historyRow builds the history row of an operation without writing it: a
+// write transaction inserts it with models.InsertHistory, so that the row
+// is written together with the change it records or not at all.
+func (c *core) historyRow(p *principal, category, action string, target, detail modules.Msg) *models.HistoryItem {
 	name := "system"
 	if p != nil {
 		name = p.operator()
 	}
-	h := &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target.Text(), Detail: detail.Text(),
+	return &models.HistoryItem{AccountName: name, Category: category, Action: action, Target: target.Text(), Detail: detail.Text(),
 		I18n: modules.HistoryTextsJSON(target, detail)}
-	if err := models.InsertHistory(c.pool, h); err != nil {
-		c.logger.Printf("history: %v", err)
-	}
 }
 
 // Settings keys (internal state in the settings table).
@@ -518,6 +524,33 @@ func queryInt(r *http.Request, name string, def, min, max int) (int, error) {
 
 func isUniqueErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// refusal is what a Write callback returns when it decides that the
+// request is answered with an error: the transaction is rolled back and the
+// handler answers status with msg after the Write (failed does it), never
+// from inside the callback.
+type refusal struct {
+	status int
+	msg    modules.Msg
+}
+
+func (e *refusal) Error() string { return e.msg.Text() }
+
+// failed answers the error of a Write and reports whether there was one: a
+// refusal with its status and message, any other error as an internal
+// error.
+func (c *core) failed(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	var ref *refusal
+	if errors.As(err, &ref) {
+		writeError(w, ref.status, ref.msg)
+	} else {
+		c.internalError(w, r, err)
+	}
+	return true
 }
 
 // internalError logs err and answers 500 without details.
