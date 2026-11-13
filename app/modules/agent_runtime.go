@@ -344,9 +344,9 @@ func ruleKey(r *RuleAssignment) string {
 func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	now := time.Now().Unix()
 	result := &ApplyResult{RuleID: ra.ID, Version: ra.Version, At: now, Status: "ok"}
-	if errs := ra.Content.Validate(); len(errs) > 0 {
+	if ps := ra.Content.Problems(); len(ps) > 0 {
 		result.Status = "error"
-		result.Message = "validation failed: " + joinMax(errs, 5)
+		result.setMessage(M("apply.validation_failed", "problems", firstProblems(ps, 5)))
 		rt.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d rejected: %s", ra.Name, ra.Version, result.Message)
@@ -357,19 +357,19 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	applyWarnings, err := ApplyAuditRules(lines, func(g AuditGlobals) error { return recordAuditGlobals(rt.DB, g) })
 	if err != nil {
 		result.Status = "error"
-		result.Message = err.Error()
+		result.setMessage(AsMsg(err))
 		rt.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d not applied: %v", ra.Name, ra.Version, err)
 		return
 	}
 	rt.failedRule = ""
-	result.Warnings = append(res.Warnings, applyWarnings...)
+	result.setWarnings(append(res.Warnings, applyWarnings...))
 	if len(result.Warnings) > 0 {
 		result.Status = "warning"
-		result.Message = fmt.Sprintf("applied with %d warning(s)", len(result.Warnings))
+		result.setMessage(M("apply.applied_with_warnings", "count", len(result.Warnings)))
 	} else {
-		result.Message = fmt.Sprintf("applied (%d audit rules)", len(lines))
+		result.setMessage(M("apply.applied", "count", len(lines)))
 	}
 	rt.noteScanConfig(ra.Content.Writable.Base + "|" + fmt.Sprint(ra.Content.Writable.AllowedPaths))
 	b, _ := json.Marshal(ra)
@@ -411,10 +411,11 @@ func (rt *AgentRuntime) removeRule() {
 	}
 	now := time.Now().Unix()
 	if err := remove(restore); err != nil {
-		msg := "no rule is assigned, but removing the audit rules failed: " + err.Error()
-		if rt.lastApply == nil || rt.lastApply.Status != "error" || rt.lastApply.Message != msg {
-			rt.setApply(&ApplyResult{Status: "error", Message: msg, At: now})
-			rt.logf("%s", msg)
+		failed := &ApplyResult{Status: "error", At: now}
+		failed.setMessage(M("apply.none_remove_failed", "cause", AsMsg(err)))
+		if rt.lastApply == nil || rt.lastApply.Status != "error" || rt.lastApply.Message != failed.Message {
+			rt.setApply(failed)
+			rt.logf("%s", failed.Message)
 		}
 		return
 	}
@@ -422,7 +423,8 @@ func (rt *AgentRuntime) removeRule() {
 		rt.logf("failed to clear the stored rule: %v", err)
 	}
 	rt.rule, rt.lastOK, rt.failedRule = nil, nil, ""
-	rt.lastApply = &ApplyResult{Status: ApplyStatusNone, Message: "no rule is assigned; the audit rules were removed", At: now}
+	rt.lastApply = &ApplyResult{Status: ApplyStatusNone, At: now}
+	rt.lastApply.setMessage(M("apply.none_removed"))
 	rt.logf("no rule is assigned: the audit rules with key %s and %s were removed%s", AuditKey, AuditRulesFile, restoredNote(restore))
 }
 
@@ -511,7 +513,9 @@ func resetStoredRule(db *sql.DB) error {
 	if !holdsRule(rule, apply) {
 		return nil
 	}
-	b, err := json.Marshal(&ApplyResult{Status: "pending", Message: "the stored rule was cleared by agent init; the next sync decides", At: time.Now().Unix()})
+	pending := &ApplyResult{Status: "pending", At: time.Now().Unix()}
+	pending.setMessage(M("apply.cleared_by_init"))
+	b, err := json.Marshal(pending)
 	if err != nil {
 		return err
 	}
@@ -521,16 +525,16 @@ func resetStoredRule(db *sql.DB) error {
 	return models.SetLocalState(db, stateApply, string(b))
 }
 
-func joinMax(s []string, n int) string {
-	if len(s) > n {
-		s = append(s[:n:n], fmt.Sprintf("and %d more", len(s)-n))
-	}
-	out := ""
-	for i, v := range s {
-		if i > 0 {
-			out += "; "
+// firstProblems returns at most n problems followed by "and N more" when
+// there are more (a list of messages: joined with "; " in English).
+func firstProblems(ps []Problem, n int) []any {
+	out := make([]any, 0, min(len(ps), n)+1)
+	for i, p := range ps {
+		if i == n {
+			out = append(out, M("apply.and_more", "count", len(ps)-n))
+			break
 		}
-		out += v
+		out = append(out, p)
 	}
 	return out
 }

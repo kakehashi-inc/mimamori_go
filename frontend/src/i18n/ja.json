@@ -667,6 +667,7 @@
         "common": {
             "body_refused": "この大きさの本文は、認証済みのリクエストでなければ受け付けません。",
             "busy": "サーバーが混雑しています。しばらくしてから再度お試しください。",
+            "command_not_in_path": "コマンド {{name}} が PATH の中に見つかりません。",
             "header_too_large": "リクエストのヘッダーが大きすぎます。",
             "internal_error": "内部エラーが発生しました。",
             "invalid_body": "リクエストの本文が正しくありません: {{detail}}",

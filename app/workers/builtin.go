@@ -62,9 +62,10 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 	if !removed {
 		return
 	}
-	msg := "the built-in agent is disabled; its audit rules were removed"
+	m := modules.M("apply.builtin_disabled")
+	msg := m.Text()
 	c.logger.Printf("%s (key %s, %s)", msg, modules.AuditKey, modules.AuditRulesFile)
-	if err := models.SetAgentApplyNone(c.db, agent.ID, msg, time.Now().Unix()); err != nil {
+	if err := models.SetAgentApplyNone(c.db, agent.ID, msg, applyI18nText(&m, nil), time.Now().Unix()); err != nil {
 		c.logger.Printf("built-in agent: %v", err)
 	}
 	c.history(nil, models.HistRule, "apply_result_"+modules.ApplyStatusNone, c.agentDisplayName(agent), msg)
@@ -79,23 +80,23 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	none := func() {}
 	if !*c.conf().BuiltinAgent {
 		// Nothing to report: disabling it is the administrator's choice.
-		c.setBuiltinStatus(false, "")
+		c.setBuiltinStatus(false, modules.Msg{})
 		c.clearDisabledBuiltin(agent)
 		return none
 	}
 	if err := modules.CheckAuditd(); err != nil {
-		c.setBuiltinStatus(false, "auditd is not usable: "+err.Error())
+		c.setBuiltinStatus(false, modules.M("builtin.auditd_unusable", "cause", modules.AsMsg(err)))
 		return none
 	}
 	db, err := modules.OpenSQLite(filepath.Join(c.dataDir, modules.BuiltinAgentLocalDBName), modules.SchemaAgentLocal)
 	if err != nil {
-		c.setBuiltinStatus(false, "local database: "+err.Error())
+		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
 		return none
 	}
 	logger := log.New(c.logger.Writer(), "[builtin-agent] ", log.LstdFlags)
 	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: c, agentID: agent.ID}, logger)
 	done := make(chan struct{})
-	c.setBuiltinStatus(true, "")
+	c.setBuiltinStatus(true, modules.Msg{})
 	go func() {
 		defer close(done)
 		defer db.Close()
@@ -123,7 +124,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 			}
 		}
 		rt.Run(wait, stopping)
-		c.setBuiltinStatus(false, "stopped")
+		c.setBuiltinStatus(false, modules.M("builtin.stopped"))
 	}()
 	return func() { <-done }
 }

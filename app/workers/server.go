@@ -125,7 +125,7 @@ func startCentral() error {
 	builtinEnabled := *c.conf().BuiltinAgent
 	builtinRunning, msg := c.builtinStatus()
 	if builtinEnabled && !builtinRunning {
-		logger.Printf("built-in agent is not running: %s", msg)
+		logger.Printf("built-in agent is not running: %s", msg.Text())
 	}
 	srv.run(stopping, tick)
 	if builtinRunning {

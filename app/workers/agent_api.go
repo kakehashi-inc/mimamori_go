@@ -327,6 +327,14 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
 		w, _ := json.Marshal(nonNil(ap.Warnings))
 		f.ApplyWarnings = string(w)
+		// The coded texts are checked against the English the agent sent;
+		// the stored message is the English cut at 2000 bytes, and the
+		// screen shows the coded one only while both agree.
+		i18n := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
+			i18n.MessageI18n = nil
+		}
+		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
 		switch ap.Status {
 		case "ok", "warning":
 			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version

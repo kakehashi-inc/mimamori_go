@@ -24,7 +24,7 @@
 - 要求・応答は JSON（`Content-Type: application/json`）。ブラウザ用と管理用の API では、日時は RFC3339（UTC）の文字列、未設定は `null` です。型で `string` と宣言した日時は、通常は `null` になりません（`null` になり得る項目は型に `| null` を付けています）。エージェント用の API（14 章）では、日時は Unix 秒（整数）です。
 - 要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。
 - ブラウザ用と管理用の API は、要求の JSON に未知のフィールドがあると 400 を返します。エージェント用の API は未知のフィールドを無視します。
-- エラー時は 4xx/5xx と `{"error": "<message>", "error_i18n": {"code": "<コード>", "params": {...}}}` を返します。`error` は英語の文（CLI が表示する文）、`error_i18n` は同じ内容をコードとパラメーターで表したものです。ブラウザはコードで表示の言語の文にし、知らないコードでは `error` を表示します。コードを持たない文（ほかのプログラムやライブラリの文）は `{"code": "", "params": {"text": "<文>"}}` で、そのまま表示します。以下では `error_i18n` を省略して `error` だけを示します。
+- エラー時は 4xx/5xx と `{"error": "<message>", "error_i18n": {"code": "<コード>", "params": {...}}}` を返します。`error` は英語の文（CLI が表示する文）、`error_i18n` は同じ内容をコードとパラメーターで表したもの（以下、この形を型 `Msg` と呼びます。英文の隣に置く `<フィールド>_i18n` はすべてこの形か、下の `Problem`）です。ブラウザはコードで表示の言語の文にし、知らないコードでは `error` を表示します。コードを持たない文（ほかのプログラムやライブラリの文）は `{"code": "", "params": {"text": "<文>"}}` で、そのまま表示します。以下では `error_i18n` を省略して `error` だけを示します。
   - 検証の問題の一覧を返す応答（監視ルールとテンプレートの内容の検証、コマンドセットの検証・作成・変更・インポート、システム設定の変更）は、英語の文の一覧 `errors` の隣に、同じ順で問題をコードで表した `errors_i18n` を返します。1 件の問題（型 `Problem`）は `{"where": [<位置>, ...], "code": "<コード>", "params": {...}}` で、位置（`loc.command` のコマンドの番号、`loc.pattern` の正規表現の番号、`loc.item` のインポートの項目の番号、`loc.field` の項目名など）と本文を順に `: ` でつなぐと `errors` の文になります（例 `command 2: timeout_sec: must be between 1 and 86400`）。項目名（`timeout_sec`、`read.dirs` など）は値で、翻訳しません。問題の一覧を持つエラーの `error_i18n` は、`params` にこの問題の一覧を持ちます。
   - 400: 入力の誤り、401: 未認証、403: CSRF のヘッダーが無い、または組み込みのテンプレートの変更、404: 存在しない、409: 状態の衝突（重複、適用中の監視ルールの削除など）、410: 確認コードの期限切れなど（2 章）、423: ログインの一時停止、428: 再認証が必要（コマンドセットの変更。2 章）、500: 内部エラー（`internal error`）、503: 混雑、または確認コードのメールを送れない（2 章）。
   - 503 を返すのはブラウザ用の待ち受けだけです。エージェントおよび管理用の待ち受け（HTTPS）では、混雑すると応答を返さずに接続を切ります。TLS のハンドシェイクでは、クライアントの次の応答をハンドシェイクの開始から 2 秒まで待ちますが、ほかの接続のハンドシェイクが順番を待っているときは 0.4 秒で接続を切ります（正しいクライアントの応答はこの時間内に届きます）。要求を待ち行列の時間内に送り終えない接続（何も送らない、ヘッダーの途中で止まる、64 KiB 以下の本文を送り終えない。64 KiB を超える本文はヘッダーから 60 秒以内）も、同じように拒否します（[システム仕様.md](システム仕様.md) の 4.2）。開いている接続の上限（256）に処理を待つ要求で達しているときは、新しい接続を拒否せず、空きができるまで OS の待ち行列で待たせます（待ち行列の時間は受け付けたときから数えます）。
@@ -136,7 +136,7 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 interface Overview {
   version: string;
   central_hostname: string;
-  builtin_agent: { enabled: boolean; running: boolean; message: string };   // enabled は起動時の設定 builtin_agent。停止中の理由を message に入れる（設定で無効にしている場合は空）
+  builtin_agent: { enabled: boolean; running: boolean; message: string; message_i18n: Msg | null };   // enabled は起動時の設定 builtin_agent。停止中の理由を message に入れる（設定で無効にしている場合は空）。message_i18n は同じ理由のメッセージ（message が空なら null）
   agents: number; unacked_alerts: number;
 }
 ```
@@ -165,7 +165,7 @@ interface AgentSummary {
     latest_version: number;          // 保存済みの最新の版
     outdated: boolean;               // assigned_version != latest_version
   } | null;
-  apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[] };
+  apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[]; message_i18n?: Msg; warnings_i18n?: Msg[] };
   unacked_alerts: number;
   auditd: AuditdStatus | null;
   ca_up_to_date: boolean;            // 最新の独自CAを受け取っているか（一度も同期していないエージェントは true）
@@ -191,7 +191,7 @@ interface HostInfo {
   directories: { path: string; owner: string; group: string; mode: string; depth: number }[];
   directories_truncated: boolean;
   rule: { id: number; version: number } | null;
-  last_apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[] };
+  last_apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[]; message_i18n?: Msg; warnings_i18n?: Msg[] };
   trusted_cas: { fingerprint: string; not_after: string }[];
   incomplete_scans: {                // 項目数の上限に達し、続きを次の確認に回しているファイルの走査（無ければ空）
     kind: 'writable' | 'exec_files'; // 書き込み可能な状態の走査 / 実行されるファイルの走査
@@ -202,6 +202,7 @@ interface HostInfo {
 }
 ```
 
+- `apply`（と `host_info.last_apply`）の `message_i18n` と `warnings_i18n` は、`message` と `warnings` をメッセージ（1.2 章の `error_i18n` と同じ形 `Msg`。`warnings_i18n` は `warnings` と同じ順）で表したもので、画面の言語で表示するために使います。エージェントが送ったメッセージのうち、英語にすると `message` / `warnings` と一致するものだけを返します（一致しない注意はその英文をそのまま表示する `{"code": "", "params": {"text": ...}}` にします）。メッセージを送らない古いエージェントの結果、2000 バイトで切り詰めた `message` では省略します。
 - `apply.status` の `none` は、監視ルールが適用されていない状態です。監視ルールの割り当てを外すと（6 章の `POST /rules/unassign`）、エージェントがルールを削除したと報告するまで `pending`、報告の後は `none` になります（`rule` は null、`apply.version` は null。適用も失敗も報告していなかったエージェントはすぐに `none`）。無効にした内蔵エージェントのルールをセントラルが削除した場合も `none` です。
 
 ## 4.1 コマンドセット
@@ -278,6 +279,7 @@ interface CommandSet extends CommandSetSpec {
   last_run: CommandRun | null;        // 最後に終わった実行
   running: boolean;                   // 実行中の実行がある
   agent_problems: string[];           // エージェントがこのセットを受け取らなかった理由（現在の定義について報告されたもの）
+  agent_problems_i18n: Problem[];     // 同じ理由を同じ順に問題（1.2 章）で表したもの。コードを送らない古いエージェントの理由は {"code": "", "params": {"text": <文>}}
 }
 interface CommandSetList {
   agent_id: number; agent_name: string;
@@ -414,9 +416,10 @@ interface RuleSummary {
 }
 interface RuleDetail extends RuleSummary {
   content: RuleContent;
-  versions: { version: number; created_at: string; created_by: string; comment: string }[];
+  versions: { version: number; created_at: string; created_by: string; comment: string; comment_i18n?: Msg }[];
 }
-interface RuleVersion { rule_id: number; version: number; content: RuleContent; created_at: string; created_by: string; comment: string }
+interface RuleVersion { rule_id: number; version: number; content: RuleContent; created_at: string; created_by: string; comment: string; comment_i18n?: Msg }
+// comment_i18n: プログラムが書いた版 1 のコメント（created / created empty / expanded from templates: ...）のメッセージ。人が書いたコメントでは省略
 interface DiffLine { op: ' ' | '+' | '-'; text: string }
 interface MergePreview {
   content: RuleContent;                            // 衝突の無い項目をまとめた内容（衝突項目は最初のテンプレートの値）
@@ -459,7 +462,10 @@ interface RuleCreate {
 | DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403） |
 
 ```ts
-interface TemplateSummary { name: string; builtin: boolean; description: string; updated_at: string | null }
+interface TemplateSummary {
+  name: string; builtin: boolean; description: string; updated_at: string | null;
+  description_i18n?: Msg;   // 組み込みテンプレートの説明のメッセージ（コード template.builtin.<名前>）。管理者が作ったテンプレートでは省略
+}
 interface TemplateDetail extends TemplateSummary { content: RuleContent }
 ```
 
@@ -634,6 +640,8 @@ interface ApplyResult {
   rule_id: number; version: number;   // 適用した監視ルールとその版
   at: number;                         // 適用した日時（Unix 秒）
   warnings: string[];
+  message_i18n?: Msg;                 // message のメッセージ（1.2 章の形。原因は params.cause に入れ子にする）
+  warnings_i18n?: Msg[];              // warnings のメッセージ（同じ順）
 }
 interface SyncRequest {
   agent_version: string;
@@ -680,7 +688,7 @@ interface ReportRequest {
   dropped: number;                     // 保存量の上限で捨て、まだ報告していない検知の件数
   command_runs?: CommandRunReport[];   // コマンドセットの実行（開始、コマンドごと、終了のたびに送る）
   command_request_acks?: { request_id: number; status: 'started' | 'expired' | 'unknown_set'; run_uid?: string; at: number }[];
-  command_apply?: { signature: string; at: number; problems: { set_id: number; set_name: string; problems: string[] }[] };   // 配信された定義の受け取り結果
+  command_apply?: { signature: string; at: number; problems: { set_id: number; set_name: string; problems: string[]; problems_i18n?: Problem[] }[] };   // 配信された定義の受け取り結果（problems_i18n は problems と同じ順の問題。1.2 章）
 }
 interface CommandRunReport {
   run_uid: string;                     // エージェントが作る実行の一意な ID（128 バイトまで）
@@ -703,6 +711,7 @@ interface CommandRunReport {
 ```
 
 - `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
+- `*_i18n` のフィールド（`message_i18n`、`warnings_i18n`、`problems_i18n`）は省略できます。古いエージェントは送らず、古いセントラルは無視します。セントラルは、英語にすると英文と一致するものだけを保存し、1 件の JSON が 16 KiB を超えるものは保存しません。
 - `apply.status` が `none` の報告は、適用中の監視ルールを無し（`reported_version` も無し）として記録します。`error` の報告は、それまでに報告された適用中の監視ルールを変えません。
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
 - コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。`request_id` のある実行を作ると、その指示を `done` にします。

@@ -83,8 +83,8 @@ func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []Com
 	now := rt.now().Unix()
 	for i := range defs.Sets {
 		d := defs.Sets[i]
-		if errs := d.Validate(0); len(errs) > 0 {
-			problems = append(problems, CommandApplyProblem{SetID: d.ID, SetName: d.Name, Problems: errs})
+		if ps := d.Problems(0); len(ps) > 0 {
+			problems = append(problems, CommandApplyProblem{SetID: d.ID, SetName: d.Name, Problems: ProblemTexts(ps), ProblemsI18n: ps})
 			continue
 		}
 		valid[d.ID] = &d
@@ -122,7 +122,7 @@ func (rt *AgentRuntime) storeCommandDefinitions(defs *CommandDefinitions) {
 	}
 	problems := rt.acceptCommandDefinitions(defs)
 	for _, p := range problems {
-		rt.logf("command set %q is not run: %s", p.SetName, joinMax(p.Problems, 5))
+		rt.logf("command set %q is not run: %s", p.SetName, M("common.problems", "problems", firstProblems(p.ProblemsI18n, 5)).Text())
 	}
 	rt.logf("command set definitions received: %d set(s)", len(defs.Sets))
 	rt.queueCommandReport(&ReportRequest{CommandApply: &CommandApplyResult{

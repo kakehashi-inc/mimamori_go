@@ -327,7 +327,7 @@ func TestOverviewBuiltinDisabled(t *testing.T) {
 	}
 
 	// Enabled and running (auditd usable): no banner.
-	e.c.setBuiltinStatus(true, "")
+	e.c.setBuiltinStatus(true, modules.Msg{})
 	if o := get(); !o.BuiltinAgent.Enabled || !o.BuiltinAgent.Running || o.BuiltinAgent.Message != "" {
 		t.Fatalf("running built-in agent: %+v", o.BuiltinAgent)
 	}

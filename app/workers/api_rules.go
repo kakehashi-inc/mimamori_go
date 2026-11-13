@@ -40,10 +40,11 @@ type ruleSummaryJSON struct {
 }
 
 type ruleVersionMetaJSON struct {
-	Version   int     `json:"version"`
-	CreatedAt *string `json:"created_at"`
-	CreatedBy string  `json:"created_by"`
-	Comment   string  `json:"comment"`
+	Version     int          `json:"version"`
+	CreatedAt   *string      `json:"created_at"`
+	CreatedBy   string       `json:"created_by"`
+	Comment     string       `json:"comment"`
+	CommentI18n *modules.Msg `json:"comment_i18n,omitempty"`
 }
 
 type ruleDetailJSON struct {
@@ -53,12 +54,27 @@ type ruleDetailJSON struct {
 }
 
 type ruleVersionJSON struct {
-	RuleID    int64                `json:"rule_id"`
-	Version   int                  `json:"version"`
-	Content   *modules.RuleContent `json:"content"`
-	CreatedAt *string              `json:"created_at"`
-	CreatedBy string               `json:"created_by"`
-	Comment   string               `json:"comment"`
+	RuleID      int64                `json:"rule_id"`
+	Version     int                  `json:"version"`
+	Content     *modules.RuleContent `json:"content"`
+	CreatedAt   *string              `json:"created_at"`
+	CreatedBy   string               `json:"created_by"`
+	Comment     string               `json:"comment"`
+	CommentI18n *modules.Msg         `json:"comment_i18n,omitempty"`
+}
+
+// versionCommentI18n returns the coded comment of a version that the
+// program wrote (nil for a comment written by a person, and when the stored
+// one does not match the English comment).
+func versionCommentI18n(v *models.RuleVersion) *modules.Msg {
+	if v.CommentI18n == "" {
+		return nil
+	}
+	var m modules.Msg
+	if json.Unmarshal([]byte(v.CommentI18n), &m) != nil || m.Text() != v.Comment {
+		return nil
+	}
+	return &m
 }
 
 func (c *core) ruleSummary(r *models.Rule, agents []*models.Agent) ruleSummaryJSON {
@@ -114,7 +130,8 @@ func (c *core) ruleDetail(rule *models.Rule, show func(string) string) (*ruleDet
 		return nil, err
 	}
 	for _, v := range versions {
-		out.Versions = append(out.Versions, ruleVersionMetaJSON{Version: v.Version, CreatedAt: ts(v.CreatedAt), CreatedBy: show(v.CreatedBy), Comment: v.Comment})
+		out.Versions = append(out.Versions, ruleVersionMetaJSON{Version: v.Version, CreatedAt: ts(v.CreatedAt), CreatedBy: show(v.CreatedBy), Comment: v.Comment,
+			CommentI18n: versionCommentI18n(v)})
 		if v.Version == rule.LatestVersion {
 			content, err := modules.ParseRuleContent([]byte(v.Content))
 			if err != nil {
@@ -168,7 +185,8 @@ func (c *core) handleGetRuleVersion(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ruleVersionJSON{RuleID: rule.ID, Version: v.Version, Content: content, CreatedAt: ts(v.CreatedAt), CreatedBy: c.operatorShown(r)(v.CreatedBy), Comment: v.Comment})
+	writeJSON(w, http.StatusOK, ruleVersionJSON{RuleID: rule.ID, Version: v.Version, Content: content, CreatedAt: ts(v.CreatedAt), CreatedBy: c.operatorShown(r)(v.CreatedBy), Comment: v.Comment,
+		CommentI18n: versionCommentI18n(v)})
 }
 
 func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +303,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var content *modules.RuleContent
-	comment := "created empty"
+	comment := modules.M("rule.version.created_empty")
 	switch {
 	case len(in.Templates) > 0:
 		merged, conflicts, err := c.mergeTemplates(in.Templates, in.Choices)
@@ -302,7 +320,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content = merged
-		comment = "expanded from templates: " + strings.Join(in.Templates, ", ")
+		comment = modules.M("rule.version.from_templates", "names", in.Templates)
 	case len(in.Content) > 0:
 		parsed, err := modules.ParseRuleContent(in.Content)
 		if err != nil {
@@ -310,7 +328,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content = parsed
-		comment = "created"
+		comment = modules.M("rule.version.created")
 	default:
 		content = emptyContent()
 	}
@@ -334,7 +352,9 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: 1, Content: content.JSON(), Comment: comment, CreatedBy: p.operator()}); err != nil {
+	commentI18n, _ := json.Marshal(comment)
+	if err := models.InsertRuleVersion(tx, &models.RuleVersion{RuleID: rule.ID, Version: 1, Content: content.JSON(), Comment: comment.Text(),
+		CommentI18n: string(commentI18n), CreatedBy: p.operator()}); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -342,7 +362,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	c.history(p, models.HistRule, "created", rule.Name, comment)
+	c.history(p, models.HistRule, "created", rule.Name, comment.Text())
 	out, err := c.ruleDetail(rule, c.operatorShown(r))
 	if err != nil {
 		c.internalError(w, r, err)
@@ -575,17 +595,25 @@ func (c *core) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 // --- templates ---
 
 type templateJSON struct {
-	Name        string               `json:"name"`
-	Builtin     bool                 `json:"builtin"`
-	Description string               `json:"description"`
-	UpdatedAt   *string              `json:"updated_at"`
-	Content     *modules.RuleContent `json:"content,omitempty"`
+	Name            string               `json:"name"`
+	Builtin         bool                 `json:"builtin"`
+	Description     string               `json:"description"`
+	DescriptionI18n *modules.Msg         `json:"description_i18n,omitempty"`
+	UpdatedAt       *string              `json:"updated_at"`
+	Content         *modules.RuleContent `json:"content,omitempty"`
+}
+
+// builtinDescriptionI18n returns the coded description of a built-in
+// template (its code is "template.builtin." and the name).
+func builtinDescriptionI18n(t *modules.BuiltinTemplate) *modules.Msg {
+	m := modules.M("template.builtin." + t.Name)
+	return &m
 }
 
 func (c *core) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	out := []templateJSON{}
 	for _, t := range modules.BuiltinTemplates() {
-		out = append(out, templateJSON{Name: t.Name, Builtin: true, Description: t.Description})
+		out = append(out, templateJSON{Name: t.Name, Builtin: true, Description: t.Description, DescriptionI18n: builtinDescriptionI18n(&t)})
 	}
 	list, err := models.ListTemplates(c.db)
 	if err != nil {
@@ -602,7 +630,8 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if t, ok := modules.FindBuiltinTemplate(name); ok {
 		content := t.Content
-		writeJSON(w, http.StatusOK, templateJSON{Name: t.Name, Builtin: true, Description: t.Description, Content: &content})
+		writeJSON(w, http.StatusOK, templateJSON{Name: t.Name, Builtin: true, Description: t.Description, DescriptionI18n: builtinDescriptionI18n(t),
+			Content: &content})
 		return
 	}
 	t, err := models.GetTemplateByName(c.db, name)

@@ -12,14 +12,36 @@ package modules
 // to it.
 const HeaderInstanceID = "X-Mimamori-Instance-Id"
 
-// ApplyResult is the outcome of applying a rule on an agent.
+// ApplyResult is the outcome of applying a rule on an agent. Message and
+// Warnings are the English texts; MessageI18n and WarningsI18n are the same
+// texts as messages (in the order of Warnings), for the screens. Both coded
+// fields are optional: an agent of an older build sends only the English,
+// and a central of an older build ignores them.
 type ApplyResult struct {
-	Status   string   `json:"status"` // none, ok, warning, error
-	Message  string   `json:"message"`
-	RuleID   int64    `json:"rule_id"`
-	Version  int      `json:"version"`
-	At       int64    `json:"at"`
-	Warnings []string `json:"warnings"`
+	Status       string   `json:"status"` // none, ok, warning, error
+	Message      string   `json:"message"`
+	RuleID       int64    `json:"rule_id"`
+	Version      int      `json:"version"`
+	At           int64    `json:"at"`
+	Warnings     []string `json:"warnings"`
+	MessageI18n  *Msg     `json:"message_i18n,omitempty"`
+	WarningsI18n []Msg    `json:"warnings_i18n,omitempty"`
+}
+
+// setMessage sets the message in English and as a message.
+func (r *ApplyResult) setMessage(m Msg) {
+	r.Message, r.MessageI18n = m.Text(), &m
+}
+
+// setWarnings sets the warnings in English and as messages.
+func (r *ApplyResult) setWarnings(ws []Msg) {
+	r.Warnings, r.WarningsI18n = nil, nil
+	for _, w := range ws {
+		r.Warnings = append(r.Warnings, w.Text())
+	}
+	if len(ws) > 0 {
+		r.WarningsI18n = ws
+	}
 }
 
 // SyncRequest is sent at the start of every cycle.
@@ -179,10 +201,14 @@ type CommandResultReport struct {
 }
 
 // CommandApplyProblem names a delivered set the agent did not accept.
+// Problems are the English texts; ProblemsI18n are the same problems with
+// their codes in the same order (optional: an agent of an older build sends
+// only the English).
 type CommandApplyProblem struct {
-	SetID    int64    `json:"set_id"`
-	SetName  string   `json:"set_name"`
-	Problems []string `json:"problems"`
+	SetID        int64     `json:"set_id"`
+	SetName      string    `json:"set_name"`
+	Problems     []string  `json:"problems"`
+	ProblemsI18n []Problem `json:"problems_i18n,omitempty"`
 }
 
 // CommandApplyResult reports the definitions the agent stored (Signature)

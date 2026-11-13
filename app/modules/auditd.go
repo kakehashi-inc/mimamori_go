@@ -71,21 +71,21 @@ func ReadAuditdStatus() (*AuditdStatus, error) {
 func CheckAuditd() error {
 	for _, tool := range []string{"auditctl", "ausearch"} {
 		if _, err := LookupCommand(tool); err != nil {
-			return fmt.Errorf("audit tool %s is not available: %w", tool, err)
+			return M("auditd.tool_missing", "tool", tool, "cause", AsMsg(err))
 		}
 	}
 	st, err := ReadAuditdStatus()
 	if err != nil {
-		return fmt.Errorf("auditctl -s failed: %w", err)
+		return M("auditd.status_failed", "cause", AsMsg(err))
 	}
 	if !st.Running {
-		return errors.New("auditd is not running")
+		return M("auditd.not_running")
 	}
 	if st.Enabled == 0 {
-		return errors.New("auditing is disabled (auditctl -s reports enabled 0)")
+		return M("auditd.disabled")
 	}
 	if _, err := RunSimple("auditctl", "-l"); err != nil {
-		return fmt.Errorf("auditctl -l failed: %w", err)
+		return M("auditd.list_failed", "cause", AsMsg(err))
 	}
 	return nil
 }
@@ -144,14 +144,15 @@ func isOwnRule(line string) bool {
 }
 
 // ResolvedRule is a rule content after resolving names to ids and dropping
-// missing elements.
+// missing elements. Warnings are the messages of the dropped elements
+// marked "warn".
 type ResolvedRule struct {
 	Content  *RuleContent
 	UIDs     []int
 	UserByID map[int]string
 	Dirs     []string
 	Exes     []string
-	Warnings []string
+	Warnings []Msg
 }
 
 // ResolveRule resolves users and checks directories and executables. Items
@@ -164,7 +165,7 @@ func ResolveRule(c *RuleContent) *ResolvedRule {
 		e, ok := byName[u.Value]
 		if !ok {
 			if u.IfMissing == IfMissingWarn {
-				r.Warnings = append(r.Warnings, fmt.Sprintf("OS user %q does not exist", u.Value))
+				r.Warnings = append(r.Warnings, M("apply.warn_user_missing", "value", strconv.Quote(u.Value)))
 			}
 			continue
 		}
@@ -175,7 +176,7 @@ func ResolveRule(c *RuleContent) *ResolvedRule {
 	for _, d := range c.Read.Dirs {
 		if fi, err := os.Stat(d.Value); err != nil || !fi.IsDir() {
 			if d.IfMissing == IfMissingWarn {
-				r.Warnings = append(r.Warnings, fmt.Sprintf("directory %q does not exist", d.Value))
+				r.Warnings = append(r.Warnings, M("apply.warn_dir_missing", "value", strconv.Quote(d.Value)))
 			}
 			continue
 		}
@@ -184,7 +185,7 @@ func ResolveRule(c *RuleContent) *ResolvedRule {
 	for _, e := range c.Network.Executables {
 		if fi, err := os.Stat(e.Value); err != nil || !fi.Mode().IsRegular() {
 			if e.IfMissing == IfMissingWarn {
-				r.Warnings = append(r.Warnings, fmt.Sprintf("executable %q does not exist", e.Value))
+				r.Warnings = append(r.Warnings, M("apply.warn_exe_missing", "value", strconv.Quote(e.Value)))
 			}
 			continue
 		}
@@ -192,7 +193,7 @@ func ResolveRule(c *RuleContent) *ResolvedRule {
 	}
 	if c.Writable.Base != "" {
 		if fi, err := os.Stat(c.Writable.Base); err != nil || !fi.IsDir() {
-			r.Warnings = append(r.Warnings, fmt.Sprintf("scan origin %q does not exist", c.Writable.Base))
+			r.Warnings = append(r.Warnings, M("apply.warn_scan_base_missing", "value", strconv.Quote(c.Writable.Base)))
 		}
 	}
 	return r
@@ -293,7 +294,7 @@ func setGlobals(g AuditGlobals) error {
 		{"--backlog_wait_time", strconv.FormatInt(g.BacklogWaitTime, 10)},
 	} {
 		if _, err := RunSimple("auditctl", args...); err != nil {
-			errs = append(errs, fmt.Errorf("auditctl %s: %w", strings.Join(args, " "), err))
+			errs = append(errs, M("auditd.command_failed", "args", strings.Join(args, " "), "cause", AsMsg(err)))
 		}
 	}
 	return errors.Join(errs...)
@@ -314,22 +315,24 @@ var auditRulesFile = AuditRulesFile
 
 // writeAuditRulesFile keeps the rules for the next boot in AuditRulesFile.
 // The directory is never created: without it nothing is kept (the agent
-// applies the rules again when it starts) and a warning is returned. An
-// existing file is overwritten in place; with no rules the file is removed.
-func writeAuditRulesFile(content []byte) (string, error) {
+// applies the rules again when it starts) and a warning is returned (nil
+// otherwise). An existing file is overwritten in place; with no rules the
+// file is removed.
+func writeAuditRulesFile(content []byte) (*Msg, error) {
 	if content == nil {
 		if fi, err := os.Lstat(auditRulesFile); err == nil && fi.IsDir() {
-			return "", fmt.Errorf("%s is a directory", auditRulesFile)
+			return nil, M("apply.rules_file_dir", "file", auditRulesFile)
 		}
 		if err := os.Remove(auditRulesFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
+			return nil, err
 		}
-		return "", nil
+		return nil, nil
 	}
 	if fi, err := os.Stat(filepath.Dir(auditRulesFile)); err != nil || !fi.IsDir() {
-		return fmt.Sprintf("%s does not exist; the rules are not kept for the next boot (the agent applies them again when it starts)", filepath.Dir(auditRulesFile)), nil
+		w := M("apply.warn_rules_dir_missing", "dir", filepath.Dir(auditRulesFile))
+		return &w, nil
 	}
-	return "", os.WriteFile(auditRulesFile, content, 0o600)
+	return nil, os.WriteFile(auditRulesFile, content, 0o600)
 }
 
 // neverCancelLine deletes the suppression rule (neverRuleLine).
@@ -402,7 +405,7 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 		return err
 	}
 	if st.Enabled == 2 {
-		return errors.New("audit rules are immutable (enabled 2); reboot is required to change them")
+		return M("apply.immutable")
 	}
 	if _, err := writeAuditRulesFile(nil); err != nil {
 		return err
@@ -417,7 +420,7 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 	neverLoaded := false
 	for _, l := range rules {
 		if isOwnRule(l) {
-			return fmt.Errorf("a rule with key %s is still loaded: %s", AuditKey, l)
+			return M("apply.own_rule_left", "key", AuditKey, "line", l)
 		}
 		if l == neverRuleLine {
 			neverLoaded = true
@@ -426,13 +429,13 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 	var errs []error
 	if !neverLoaded && neverRuleInRulesDir() {
 		if _, err := RunSimple("auditctl", strings.Fields(neverRuleLine)...); err != nil {
-			errs = append(errs, fmt.Errorf("loading the suppression rule of %s again (%s) failed: %w", filepath.Dir(auditRulesFile), neverRuleLine, err))
+			errs = append(errs, M("apply.never_reload_failed", "dir", filepath.Dir(auditRulesFile), "line", neverRuleLine, "cause", AsMsg(err)))
 		}
 	}
 	if restore != nil {
 		if err := setGlobals(*restore); err != nil {
-			errs = append(errs, fmt.Errorf("the rules were removed, but setting the global audit settings back (backlog_limit %d, backlog_wait_time %d, failure %d) failed: %w",
-				restore.BacklogLimit, restore.BacklogWaitTime, restore.Failure, err))
+			errs = append(errs, M("apply.globals_restore_failed", "limit", restore.BacklogLimit, "wait", restore.BacklogWaitTime,
+				"failure", restore.Failure, "cause", AsMsg(err)))
 		}
 	}
 	return errors.Join(errs...)
@@ -447,7 +450,10 @@ func RemoveAuditRules(restore *AuditGlobals) error {
 // rules file), record is called with the global settings before anything is
 // changed, so that RemoveAuditRules can set them back; when it fails nothing
 // is changed. record may be nil.
-func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string, error) {
+//
+// The errors this function makes itself are messages (Msg) with the cause
+// nested; errors of auditctl and the OS are data (AsMsg gives Raw).
+func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]Msg, error) {
 	before, err := ListAuditRules()
 	if err != nil {
 		return nil, err
@@ -457,7 +463,7 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string,
 		return nil, err
 	}
 	if prevStatus.Enabled == 2 {
-		return nil, errors.New("audit rules are immutable (enabled 2); reboot is required to change them")
+		return nil, M("apply.immutable")
 	}
 	var prevOwn []string
 	for _, l := range before {
@@ -468,14 +474,14 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string,
 	prevFile, prevFileErr := os.ReadFile(auditRulesFile)
 	if record != nil && len(prevOwn) == 0 && errors.Is(prevFileErr, os.ErrNotExist) {
 		if err := record(globalsOf(prevStatus)); err != nil {
-			return nil, fmt.Errorf("recording the global audit settings before the change failed: %w", err)
+			return nil, M("apply.globals_record_failed", "cause", AsMsg(err))
 		}
 	}
 	// fileWritten (the rules file was written) and neverRemoved (the
 	// suppression rule was deleted) tell the rollback what this run changed.
 	fileWritten, neverRemoved := false, false
 
-	rollback := func(cause error) ([]string, error) {
+	rollback := func(cause error) ([]Msg, error) {
 		// failed counts the steps of the restoration that did not succeed,
 		// so the message never claims more than what was restored.
 		failed := 0
@@ -506,12 +512,12 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string,
 		case fileWritten:
 			// The previous content is unknown, so nothing is deleted or
 			// written: the file keeps the new rules.
-			return nil, fmt.Errorf("applying audit rules failed and the previous state was restored except %s, which could not be read before the change (%v): %w", auditRulesFile, prevFileErr, cause)
+			return nil, M("apply.failed_file_unknown", "file", auditRulesFile, "detail", prevFileErr.Error(), "cause", AsMsg(cause))
 		}
 		if failed > 0 {
-			return nil, fmt.Errorf("applying audit rules failed and the previous state could not be restored completely (%d steps failed; check the loaded rules with auditctl -l): %w", failed, cause)
+			return nil, M("apply.failed_partly_restored", "count", failed, "cause", AsMsg(cause))
 		}
-		return nil, fmt.Errorf("applying audit rules failed and the previous state was restored: %w", cause)
+		return nil, M("apply.failed_restored", "cause", AsMsg(cause))
 	}
 
 	// Keep for the next boot (augenrules loads rules.d in name order, so
@@ -521,11 +527,11 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string,
 	// auditctl -R stops at the first failing line (augenrules puts the -e
 	// setting after it).
 	content := auditRulesFileContent(lines, neverRuleInRulesDir())
-	var warnings []string
+	var warnings []Msg
 	if w, err := writeAuditRulesFile(content); err != nil {
 		return rollback(err)
-	} else if w != "" {
-		warnings = append(warnings, w)
+	} else if w != nil {
+		warnings = append(warnings, *w)
 	} else {
 		fileWritten = true
 	}
@@ -564,18 +570,18 @@ func ApplyAuditRules(lines []string, record func(AuditGlobals) error) ([]string,
 			n++
 		}
 		if l == neverRuleLine {
-			return rollback(errors.New("the rule suppressing all syscall auditing is still loaded"))
+			return rollback(M("apply.never_rule_loaded"))
 		}
 	}
 	if n != len(lines) {
-		return rollback(fmt.Errorf("expected %d loaded rules with key %s, found %d", len(lines), AuditKey, n))
+		return rollback(M("apply.rule_count", "expected", len(lines), "key", AuditKey, "found", n))
 	}
 	stNow, err := ReadAuditdStatus()
 	if err != nil {
 		return rollback(err)
 	}
 	if stNow.Failure != 1 || stNow.BacklogWaitTime != 0 {
-		return rollback(fmt.Errorf("global settings not effective (failure %d, backlog_wait_time %d)", stNow.Failure, stNow.BacklogWaitTime))
+		return rollback(M("apply.global_settings", "failure", stNow.Failure, "wait", stNow.BacklogWaitTime))
 	}
 	return warnings, nil
 }

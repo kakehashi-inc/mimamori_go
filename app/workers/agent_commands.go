@@ -208,6 +208,7 @@ func (c *core) recordCommandApply(agent *models.Agent, ap *modules.CommandApplyR
 		for j, p := range ap.Problems[i].Problems {
 			ap.Problems[i].Problems[j] = truncate(p, 2000)
 		}
+		ap.Problems[i].ProblemsI18n = checkedProblemsI18n(ap.Problems[i].Problems, ap.Problems[i].ProblemsI18n)
 	}
 	if len(ap.Problems) > 1000 {
 		ap.Problems = ap.Problems[:1000]
@@ -223,10 +224,39 @@ func (c *core) recordCommandApply(agent *models.Agent, ap *modules.CommandApplyR
 	return nil
 }
 
+// checkedProblemsI18n returns the coded problems an agent reported for the
+// English problems (in their order): a coded problem whose English rendering
+// differs from the English one (an unknown code, a cut text) or whose JSON
+// is too large is replaced by the English as data. Nil when the agent sent
+// none or they do not line up (an agent of an older build sends none).
+func checkedProblemsI18n(texts []string, ps []modules.Problem) []modules.Problem {
+	if len(ps) == 0 || len(ps) < len(texts) {
+		return nil
+	}
+	out := make([]modules.Problem, len(texts))
+	for i, text := range texts {
+		p := ps[i]
+		if p.Text() != text || jsonSize(p) > maxApplyI18nBytes {
+			p = modules.Problem{Msg: modules.Raw(text)}
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// setProblems are the problems the agent reported for a set: the English
+// texts and the same problems with their codes in the same order.
+type setProblems struct {
+	texts []string
+	coded []modules.Problem
+}
+
 // agentCommandProblems returns the problems the agent reported for the
-// definitions it holds, by set ID (only when they are the current ones).
-func agentCommandProblems(agent *models.Agent) map[int64][]string {
-	out := map[int64][]string{}
+// definitions it holds, by set ID (only when they are the current ones). A
+// problem reported without its code (an agent of an older build) is coded
+// as its English text (data).
+func agentCommandProblems(agent *models.Agent) map[int64]*setProblems {
+	out := map[int64]*setProblems{}
 	if agent.CommandProblems == "" {
 		return out
 	}
@@ -235,7 +265,20 @@ func agentCommandProblems(agent *models.Agent) map[int64][]string {
 		return out
 	}
 	for _, p := range ap.Problems {
-		out[p.SetID] = append(out[p.SetID], p.Problems...)
+		sp := out[p.SetID]
+		if sp == nil {
+			sp = &setProblems{}
+			out[p.SetID] = sp
+		}
+		coded := checkedProblemsI18n(p.Problems, p.ProblemsI18n)
+		for i, text := range p.Problems {
+			sp.texts = append(sp.texts, text)
+			if coded != nil {
+				sp.coded = append(sp.coded, coded[i])
+			} else {
+				sp.coded = append(sp.coded, modules.Problem{Msg: modules.Raw(text)})
+			}
+		}
 	}
 	return out
 }

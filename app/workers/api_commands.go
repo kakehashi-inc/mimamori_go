@@ -133,6 +133,10 @@ type commandSetJSON struct {
 	LastRun         *commandRunJSON     `json:"last_run"`
 	Running         bool                `json:"running"`
 	AgentProblems   []string            `json:"agent_problems"`
+	// AgentProblemsI18n are the same problems with their codes, in the
+	// same order (a problem from an agent of an older build is its English
+	// text as data).
+	AgentProblemsI18n []modules.Problem `json:"agent_problems_i18n"`
 }
 
 type commandSetListJSON struct {
@@ -204,7 +208,7 @@ func (c *core) loadCommandSetRow(w http.ResponseWriter, r *http.Request, tdb *sq
 }
 
 // commandSetOut builds the administrator view of a set.
-func (c *core) commandSetOut(r *http.Request, a *models.Agent, tdb *sql.DB, row *models.CommandSet, problems map[int64][]string,
+func (c *core) commandSetOut(r *http.Request, a *models.Agent, tdb *sql.DB, row *models.CommandSet, problems map[int64]*setProblems,
 	latest map[int64]*models.CommandRun, running map[int64]bool) (*commandSetJSON, error) {
 	items, err := models.ListCommandItems(tdb, row.ID)
 	if err != nil {
@@ -213,9 +217,14 @@ func (c *core) commandSetOut(r *http.Request, a *models.Agent, tdb *sql.DB, row 
 	loc, zone := hostZone(a)
 	show := c.operatorShown(r)
 	def := modules.CommandSetFromRows(row, items)
+	sp := problems[row.ID]
+	if sp == nil {
+		sp = &setProblems{}
+	}
 	out := &commandSetJSON{CommandSetDef: *def, ScheduleSummary: modules.ScheduleSummary(def.Schedule, loc, zone),
 		ImportedFrom: row.ImportedFrom, CreatedAt: ts(row.CreatedAt), CreatedBy: show(row.CreatedBy), UpdatedAt: ts(row.UpdatedAt),
-		UpdatedBy: show(row.UpdatedBy), Running: running[row.ID], AgentProblems: nonNil(problems[row.ID])}
+		UpdatedBy: show(row.UpdatedBy), Running: running[row.ID], AgentProblems: nonNil(sp.texts),
+		AgentProblemsI18n: nonNil(sp.coded)}
 	if q, err := models.ActiveCommandRequest(tdb, row.ID); err != nil {
 		return nil, err
 	} else if q != nil {

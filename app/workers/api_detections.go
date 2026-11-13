@@ -619,7 +619,7 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": modules.AppVersion, "central_hostname": c.hostname,
-		"builtin_agent": map[string]any{"enabled": enabled, "running": running, "message": msg},
+		"builtin_agent": map[string]any{"enabled": enabled, "running": running, "message": msg.Text(), "message_i18n": msgOrNil(msg)},
 		"agents":        len(agents), "unacked_alerts": unacked,
 	})
 }

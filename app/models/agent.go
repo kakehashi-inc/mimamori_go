@@ -28,6 +28,7 @@ type Agent struct {
 	ApplyStatus         string
 	ApplyMessage        string
 	ApplyWarnings       string
+	ApplyI18n           string // JSON of the coded message and warnings ("" when the agent sent only English)
 	ApplyVersion        int
 	ApplyAt             int64
 	CAFingerprints      string
@@ -50,14 +51,14 @@ type Agent struct {
 }
 
 const agentCols = `id, kind, token_id, db_file, hostname, os_name, os_version, agent_version, assigned_rule_id, assigned_rule_version,
-	assigned_at, reported_rule_id, reported_rule_version, apply_status, apply_message, apply_warnings, apply_version, apply_at,
+	assigned_at, reported_rule_id, reported_rule_version, apply_status, apply_message, apply_warnings, apply_i18n, apply_version, apply_at,
 	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, command_problems, created_at`
 
 func scanAgent(s rowScanner) (*Agent, error) {
 	a := &Agent{}
 	if err := s.Scan(&a.ID, &a.Kind, &a.TokenID, &a.DBFile, &a.Hostname, &a.OSName, &a.OSVersion, &a.AgentVersion,
 		&a.AssignedRuleID, &a.AssignedRuleVersion, &a.AssignedAt, &a.ReportedRuleID, &a.ReportedRuleVersion, &a.ApplyStatus,
-		&a.ApplyMessage, &a.ApplyWarnings, &a.ApplyVersion, &a.ApplyAt, &a.CAFingerprints, &a.AuditdJSON, &a.LastSyncAt,
+		&a.ApplyMessage, &a.ApplyWarnings, &a.ApplyI18n, &a.ApplyVersion, &a.ApplyAt, &a.CAFingerprints, &a.AuditdJSON, &a.LastSyncAt,
 		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems, &a.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -123,10 +124,11 @@ func UnassignRule(db Execer, id int64) error {
 }
 
 // SetAgentApplyNone records that nothing is applied on the agent (the
-// central removed the audit rules of the disabled built-in agent).
-func SetAgentApplyNone(db Execer, id int64, message string, at int64) error {
-	return execOne(db, `UPDATE agents SET apply_status = 'none', apply_message = ?, apply_warnings = '[]', apply_version = 0, apply_at = ?,
-		reported_rule_id = 0, reported_rule_version = 0 WHERE id = ?`, message, at, id)
+// central removed the audit rules of the disabled built-in agent). i18n is
+// the JSON of the coded message (see Agent.ApplyI18n).
+func SetAgentApplyNone(db Execer, id int64, message, i18n string, at int64) error {
+	return execOne(db, `UPDATE agents SET apply_status = 'none', apply_message = ?, apply_warnings = '[]', apply_i18n = ?, apply_version = 0, apply_at = ?,
+		reported_rule_id = 0, reported_rule_version = 0 WHERE id = ?`, message, i18n, at, id)
 }
 
 // CountAgentsUsingRule counts agents a rule is assigned to.
@@ -148,7 +150,7 @@ type AgentReportFields struct {
 	Hostname, OSName, OSVersion, AgentVersion, AuditdJSON string
 	HostOSUser, TimeZone                                  string
 	UTCOffsetSec                                          int
-	ApplyStatus, ApplyMessage, ApplyWarnings              string
+	ApplyStatus, ApplyMessage, ApplyWarnings, ApplyI18n   string
 	ApplyVersion                                          int
 	ApplyAt                                               int64
 	ReportedRuleID                                        int64
@@ -168,9 +170,9 @@ func RecordAgentReport(db Execer, id int64, f AgentReportFields) error {
 		}
 	}
 	if f.HasApply {
-		if _, err := db.Exec(`UPDATE agents SET apply_status = ?, apply_message = ?, apply_warnings = ?, apply_version = ?, apply_at = ?,
+		if _, err := db.Exec(`UPDATE agents SET apply_status = ?, apply_message = ?, apply_warnings = ?, apply_i18n = ?, apply_version = ?, apply_at = ?,
 			reported_rule_id = ?, reported_rule_version = ? WHERE id = ?`,
-			f.ApplyStatus, f.ApplyMessage, f.ApplyWarnings, f.ApplyVersion, f.ApplyAt, f.ReportedRuleID, f.ReportedRuleVersion, id); err != nil {
+			f.ApplyStatus, f.ApplyMessage, f.ApplyWarnings, f.ApplyI18n, f.ApplyVersion, f.ApplyAt, f.ReportedRuleID, f.ReportedRuleVersion, id); err != nil {
 			return err
 		}
 	}

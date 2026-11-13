@@ -87,13 +87,14 @@ CREATE TABLE rules (
 
 -- +goose StatementBegin
 CREATE TABLE rule_versions (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    rule_id    INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
-    version    INTEGER NOT NULL,
-    content    TEXT    NOT NULL,
-    comment    TEXT    NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    created_by TEXT    NOT NULL DEFAULT '',
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id      INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    version      INTEGER NOT NULL,
+    content      TEXT    NOT NULL,
+    comment      TEXT    NOT NULL DEFAULT '',
+    comment_i18n TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    created_by   TEXT    NOT NULL DEFAULT '',
     UNIQUE (rule_id, version)
 );
 -- +goose StatementEnd
@@ -154,6 +155,7 @@ CREATE TABLE agents (
     apply_status          TEXT    NOT NULL DEFAULT 'none',
     apply_message         TEXT    NOT NULL DEFAULT '',
     apply_warnings        TEXT    NOT NULL DEFAULT '[]',
+    apply_i18n            TEXT    NOT NULL DEFAULT '',
     apply_version         INTEGER NOT NULL DEFAULT 0,
     apply_at              INTEGER NOT NULL DEFAULT 0,
     ca_fingerprints       TEXT    NOT NULL DEFAULT '[]',

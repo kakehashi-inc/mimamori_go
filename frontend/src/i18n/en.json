@@ -614,7 +614,7 @@
             "applied": "applied ({{count}} audit rules)",
             "applied_with_warnings": "applied with {{count}} warning(s)",
             "builtin_disabled": "the built-in agent is disabled; its audit rules were removed",
-            "cleared_by_init": "the stored rule was cleared by agent init; the next sync decides",
+            "cleared_by_init": "the stored rule was cleared when the agent was initialized again; the next sync decides",
             "failed_file_unknown": "applying audit rules failed and the previous state was restored except {{file}}, which could not be read before the change ({{detail}}): {{cause}}",
             "failed_partly_restored": "applying audit rules failed and the previous state could not be restored completely ({{count}} steps failed; check the loaded rules with auditctl -l): {{cause}}",
             "failed_restored": "applying audit rules failed and the previous state was restored: {{cause}}",
@@ -667,6 +667,7 @@
         "common": {
             "body_refused": "request body not read: a body this large needs an authenticated request",
             "busy": "busy",
+            "command_not_in_path": "command {{name}} not found in PATH",
             "header_too_large": "request header too large",
             "internal_error": "internal error",
             "invalid_body": "invalid request body: {{detail}}",

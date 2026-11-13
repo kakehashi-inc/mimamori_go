@@ -35,6 +35,59 @@ type applyJSON struct {
 	Version  *int     `json:"version"`
 	At       *string  `json:"at"`
 	Warnings []string `json:"warnings"`
+	applyI18nJSON
+}
+
+// applyI18nJSON are the coded texts of an application result: the message
+// and the warnings in the order of the English warnings. They are absent
+// when the agent sent only English (an older build); the screens then show
+// the English. The same shape is stored in agents.apply_i18n.
+type applyI18nJSON struct {
+	MessageI18n  *modules.Msg  `json:"message_i18n,omitempty"`
+	WarningsI18n []modules.Msg `json:"warnings_i18n,omitempty"`
+}
+
+// maxApplyI18nBytes bounds the JSON of one coded message an agent reports.
+const maxApplyI18nBytes = 16 << 10
+
+// checkedApplyI18n returns the coded texts an agent reported that match its
+// English texts: a message whose English rendering differs (an unknown code,
+// a mistake) or whose JSON is too large is dropped, and such a warning is
+// replaced by its English as data, so the screens never show a text other
+// than the English one in another language. Warnings that do not line up
+// with the English ones are dropped.
+func checkedApplyI18n(message string, warnings []string, m *modules.Msg, ws []modules.Msg) applyI18nJSON {
+	var out applyI18nJSON
+	if m != nil && m.Text() == message && jsonSize(m) <= maxApplyI18nBytes {
+		mm := *m
+		out.MessageI18n = &mm
+	}
+	if len(ws) > 0 && len(ws) == len(warnings) {
+		out.WarningsI18n = make([]modules.Msg, len(ws))
+		for i, w := range ws {
+			if w.Text() != warnings[i] || jsonSize(w) > maxApplyI18nBytes {
+				w = modules.Raw(warnings[i])
+			}
+			out.WarningsI18n[i] = w
+		}
+	}
+	return out
+}
+
+// applyI18nText returns the stored form of coded application texts (the
+// JSON of applyI18nJSON, "" when there are none).
+func applyI18nText(m *modules.Msg, ws []modules.Msg) string {
+	if m == nil && len(ws) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(applyI18nJSON{MessageI18n: m, WarningsI18n: ws})
+	return string(b)
+}
+
+// jsonSize returns the length of the JSON of v.
+func jsonSize(v any) int {
+	b, _ := json.Marshal(v)
+	return len(b)
 }
 
 type agentSummaryJSON struct {
@@ -101,7 +154,8 @@ func applyOut(ap *modules.ApplyResult) applyJSON {
 	if ap == nil {
 		return applyJSON{Status: "none", Warnings: []string{}}
 	}
-	out := applyJSON{Status: ap.Status, Message: ap.Message, At: ts(ap.At), Warnings: nonNil(ap.Warnings)}
+	out := applyJSON{Status: ap.Status, Message: ap.Message, At: ts(ap.At), Warnings: nonNil(ap.Warnings),
+		applyI18nJSON: checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)}
 	// A result without a rule (nothing applied) has no version.
 	if ap.Version > 0 {
 		v := ap.Version
@@ -168,6 +222,12 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 	_ = json.Unmarshal([]byte(a.ApplyWarnings), &s.Apply.Warnings)
 	if s.Apply.Warnings == nil {
 		s.Apply.Warnings = []string{}
+	}
+	if a.ApplyI18n != "" {
+		var stored applyI18nJSON
+		if json.Unmarshal([]byte(a.ApplyI18n), &stored) == nil {
+			s.Apply.applyI18nJSON = checkedApplyI18n(a.ApplyMessage, s.Apply.Warnings, stored.MessageI18n, stored.WarningsI18n)
+		}
 	}
 	if a.AuditdJSON != "" {
 		var st modules.AuditdStatus

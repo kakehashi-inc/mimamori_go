@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,7 +26,7 @@ type CommandResult struct {
 func LookupCommand(name string) (string, error) {
 	p, err := exec.LookPath(name)
 	if err != nil {
-		return "", fmt.Errorf("command %q not found in PATH", name)
+		return "", M("common.command_not_in_path", "name", strconv.Quote(name))
 	}
 	return p, nil
 }

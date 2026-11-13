@@ -56,7 +56,7 @@ type core struct {
 
 	builtinMu      sync.Mutex
 	builtinRunning bool
-	builtinMessage string
+	builtinMessage modules.Msg
 }
 
 func newCore(db *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
@@ -82,13 +82,15 @@ func (c *core) reloadConfig() {
 	c.cfg.Store(cfg)
 }
 
-func (c *core) setBuiltinStatus(running bool, msg string) {
+// setBuiltinStatus records whether the built-in agent runs and why not (an
+// empty Msg when there is nothing to say).
+func (c *core) setBuiltinStatus(running bool, msg modules.Msg) {
 	c.builtinMu.Lock()
 	c.builtinRunning, c.builtinMessage = running, msg
 	c.builtinMu.Unlock()
 }
 
-func (c *core) builtinStatus() (bool, string) {
+func (c *core) builtinStatus() (bool, modules.Msg) {
 	c.builtinMu.Lock()
 	defer c.builtinMu.Unlock()
 	return c.builtinRunning, c.builtinMessage
@@ -337,6 +339,15 @@ func errorBody(m modules.Msg) errorJSON {
 // writeError answers with the message: {"error": English, "error_i18n": m}.
 func writeError(w http.ResponseWriter, status int, m modules.Msg) {
 	writeJSON(w, status, errorBody(m))
+}
+
+// msgOrNil returns the message for an optional "<field>_i18n" answer field:
+// nil when its text is empty.
+func msgOrNil(m modules.Msg) *modules.Msg {
+	if m.Text() == "" {
+		return nil
+	}
+	return &m
 }
 
 // writeErr answers with the text of err (a validator's error, a request
