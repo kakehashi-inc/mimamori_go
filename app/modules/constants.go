@@ -156,6 +156,12 @@ const (
 	StopFlushTimeout = 5 * time.Second
 	// MaxPendingConns bounds the open connections of the central.
 	MaxPendingConns = 256
+	// MaxOpenConns bounds the open connections of both listeners together
+	// (lowered when the limit on open files is below 4 x MaxOpenConns): about
+	// 1200 browser connections of 200 people, one per agent for several
+	// hundred agents, and the CLI, rounded up. A connection beyond it waits
+	// in the kernel's backlog; nothing is refused.
+	MaxOpenConns = 4096
 	// PeriodicTick is the interval of the central periodic tasks.
 	PeriodicTick = 30 * time.Second
 	// LoginMaxFailures and LoginLockDuration implement the login lockout.
