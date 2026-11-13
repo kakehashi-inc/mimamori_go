@@ -98,6 +98,25 @@ export function newCommandDraft(): CommandDraft {
     };
 }
 
+/**
+ * Whether a command is still the empty one a form starts with: nothing was
+ * entered and no setting was changed.
+ */
+export function isBlankCommandDraft(c: CommandDraft): boolean {
+    return (
+        c.commandLine.trim() === '' &&
+        c.note === '' &&
+        c.patterns.length === 0 &&
+        c.onProblems === 'stop' &&
+        c.timeoutSec === String(DEFAULT_TIMEOUT_SEC) &&
+        c.lineLimit === String(DEFAULT_LINE_LIMIT) &&
+        c.success.kind === 'single' &&
+        c.success.a === '0' &&
+        c.failure.kind === 'min' &&
+        c.failure.a === '1'
+    );
+}
+
 function pad(n: number): string {
     return String(n).padStart(2, '0');
 }

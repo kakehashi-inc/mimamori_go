@@ -13,6 +13,7 @@ import {
     draftSchedule,
     EVERY_HOURS,
     EVERY_MINUTES,
+    isBlankCommandDraft,
     newCommandDraft,
     newKey,
     ON_PROBLEMS,
@@ -61,9 +62,12 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
     const [pasting, setPasting] = useState(false);
     // Key of the first pasted command, scrolled into view once it is rendered.
     const [revealKey, setRevealKey] = useState<number | null>(null);
+    // A command nobody filled in (the empty one a new set starts with) is not
+    // a registered command: pasted commands follow the registered ones.
+    const registered = draft.commands.filter(c => !isBlankCommandDraft(c));
     const addPasted = (lines: string[]) => {
         const added = lines.map(line => ({ ...newCommandDraft(), commandLine: line }));
-        set('commands', [...draft.commands, ...added]);
+        set('commands', [...registered, ...added]);
         setPasting(false);
         setRevealKey(added[0].key);
     };
@@ -223,11 +227,7 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
                 </div>
             </section>
             {pasting && (
-                <PasteCommandsDialog
-                    existing={draft.commands.length}
-                    onAdd={addPasted}
-                    onClose={() => setPasting(false)}
-                />
+                <PasteCommandsDialog existing={registered.length} onAdd={addPasted} onClose={() => setPasting(false)} />
             )}
         </div>
     );
