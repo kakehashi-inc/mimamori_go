@@ -356,8 +356,8 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	return nil
 }
 
-// AgentStart runs the agent in the calling flow until SIGINT or SIGTERM
-// closes its stop channel.
+// AgentStart runs the agent (the calling flow is its first worker) until
+// SIGINT or SIGTERM closes its stop channel.
 func AgentStart(dataDir string) error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if err := CheckAuditd(); err != nil {
@@ -386,9 +386,9 @@ func AgentStart(dataDir string) error {
 		return NewExitError(ExitConfig, err.Error())
 	}
 	rt := NewAgentRuntime(db, tr, logger)
-	rt.Config = cfg
+	rt.mon.config = cfg
 	// The transport uses the token and the CAs the runtime saved last.
-	rt.OnConfigSaved = func(c *AgentConfig) {
+	rt.mon.onConfigSaved = func(c *AgentConfig) {
 		tr.SetToken(c.Token)
 		tr.SetCAs(c.CAPEMs)
 	}

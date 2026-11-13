@@ -1,5 +1,10 @@
 package models
 
+import (
+	"database/sql"
+	"errors"
+)
+
 // OutboxItem is a row of the outbox table of the agent's local database: a
 // report not yet delivered to the central (JSON of modules.ReportRequest).
 // CommandBytes is the size of the payload when it carries command set runs
@@ -35,6 +40,21 @@ func ListOutbox(db Reader) ([]*OutboxItem, error) {
 		}
 		return o, nil
 	})
+}
+
+// GetOutbox returns a queued report as it is stored now (nil when it is no
+// longer queued).
+func GetOutbox(db Reader, id int64) (*OutboxItem, error) {
+	o := &OutboxItem{}
+	err := db.QueryRow(`SELECT id, created_at, payload, alert_count, normal_count, command_bytes FROM outbox WHERE id = ?`, id).
+		Scan(&o.ID, &o.CreatedAt, &o.Payload, &o.AlertCount, &o.NormalCount, &o.CommandBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
 }
 
 // UpdateOutbox rewrites a queued report (after dropping detections or

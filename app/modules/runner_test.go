@@ -156,7 +156,7 @@ func TestReportAfterStopWithoutHostInfo(t *testing.T) {
 	defer done()
 	_, calls := fakeAuditctl(t, "1", nil)
 	tr := &fakeTransport{}
-	rt.Transport = tr
+	rt.mon.transport = tr
 	rt.stop = closedChan()
 	det := DetectionReport{Type: TypeExec, Category: CategoryAlert, Exe: "/usr/bin/x", Count: 1, FirstAt: 1, LastAt: 1}
 	rt.report([]DetectionReport{det})

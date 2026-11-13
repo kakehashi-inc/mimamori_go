@@ -1,21 +1,19 @@
 package modules
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
-	"slices"
 	"time"
 
 	"mimamori/app/models"
 )
 
-// Command sets on the agent: storing the delivered definitions and run
-// requests, deciding when a set runs (manual requests first, then due
-// schedules by due time, one set at a time), running a set command by
-// command and queueing its results in the outbox. Everything runs in the
-// agent's single flow; while a command runs, its wait loop calls the
-// monitoring step when it is due.
+// Command sets on the agent: storing the delivered definitions, running a set
+// command by command and queueing its results in the outbox. The scheduler
+// (agent_scheduler.go) holds the definitions and the run requests and decides
+// when a set runs; each run belongs to the worker that runs it. While a
+// command runs, its wait loop runs the monitoring step when the scheduler
+// gives it to that worker.
 
 // commandJob is a set waiting to run.
 type commandJob struct {
@@ -46,19 +44,6 @@ func (rt *AgentRuntime) location() *time.Location {
 	return time.Local
 }
 
-// isStopping reports whether the stop channel given to Run was closed.
-func (rt *AgentRuntime) isStopping() bool {
-	return isClosed(rt.stop)
-}
-
-// commandSignature is the signature of the definitions the agent holds.
-func (rt *AgentRuntime) commandSignature() string {
-	if rt.cmdDefs == nil {
-		return ""
-	}
-	return rt.cmdDefs.Signature
-}
-
 // loadCommandDefinitions restores the stored definitions at start.
 func (rt *AgentRuntime) loadCommandDefinitions() {
 	v := models.GetLocalState(rt.DB.Read(), StateCommandDefinitions)
@@ -77,7 +62,8 @@ func (rt *AgentRuntime) loadCommandDefinitions() {
 // (a set that fails validation on the agent is not run and is reported), and
 // the schedule state of each scheduled set is armed when it is new or
 // changed. The schedule states are armed and the old ones removed in one
-// transaction (arming reads the stored state to decide).
+// transaction (arming reads the stored state to decide) before the
+// scheduler gets the definitions.
 func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []CommandApplyProblem {
 	problems := []CommandApplyProblem{}
 	valid := map[int64]*CommandSetDef{}
@@ -112,8 +98,7 @@ func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []Com
 	case err != nil:
 		rt.logf("removing old schedule states failed: %v", err)
 	}
-	rt.cmdDefs = defs
-	rt.cmdValid = valid
+	rt.sched.acceptDefinitions(defs, valid)
 	return problems
 }
 
@@ -146,110 +131,18 @@ func (rt *AgentRuntime) storeCommandDefinitions(defs *CommandDefinitions) {
 	}})
 }
 
-// receiveCommandRequests takes the manual run requests of a sync. A request
-// that arrives after its expiry is not run; one that was already run (it can
-// be delivered again until the central has the answer) is answered with its
-// run.
-func (rt *AgentRuntime) receiveCommandRequests(reqs []CommandRunRequest) {
-	now := rt.now().Unix()
-	var acks []CommandRequestAck
-	for _, r := range reqs {
-		if rt.cmdAcked[r.ID] || slices.ContainsFunc(rt.cmdRequests, func(q CommandRunRequest) bool { return q.ID == r.ID }) {
-			continue
-		}
-		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), r.ID); err == nil && e != nil {
-			acks = append(acks, CommandRequestAck{RequestID: r.ID, Status: RequestAckStarted, RunUID: e.RunUID, At: now})
-			continue
-		}
-		if r.ExpiresAt > 0 && now > r.ExpiresAt {
-			acks = append(acks, CommandRequestAck{RequestID: r.ID, Status: RequestAckExpired, At: now})
-			continue
-		}
-		rt.cmdRequests = append(rt.cmdRequests, r)
-	}
-	slices.SortStableFunc(rt.cmdRequests, func(a, b CommandRunRequest) int {
-		if c := cmp.Compare(a.RequestedAt, b.RequestedAt); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.ID, b.ID)
-	})
-	rt.queueAcks(acks)
-}
-
+// queueAcks queues answers to manual requests (the scheduler has entered
+// them as answered).
 func (rt *AgentRuntime) queueAcks(acks []CommandRequestAck) {
 	if len(acks) == 0 {
 		return
 	}
-	for _, a := range acks {
-		rt.cmdAcked[a.RequestID] = true
-	}
 	rt.queueCommandReport(&ReportRequest{CommandRequestAcks: acks})
 }
 
-// nextCommandJob returns the set to run now: the oldest manual request, else
-// the scheduled set whose due occurrence is the oldest. nil when nothing is
-// due.
-func (rt *AgentRuntime) nextCommandJob() *commandJob {
-	now := rt.now()
-	for len(rt.cmdRequests) > 0 {
-		r := rt.cmdRequests[0]
-		rt.cmdRequests = rt.cmdRequests[1:]
-		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), r.ID); err == nil && e != nil {
-			rt.queueAcks([]CommandRequestAck{{RequestID: r.ID, Status: RequestAckStarted, RunUID: e.RunUID, At: now.Unix()}})
-			continue
-		}
-		def := rt.cmdValid[r.SetID]
-		if def == nil {
-			rt.queueAcks([]CommandRequestAck{{RequestID: r.ID, Status: RequestAckUnknownSet, At: now.Unix()}})
-			continue
-		}
-		return &commandJob{def: def, trigger: TriggerManual, requestID: r.ID}
-	}
-	var best *commandJob
-	for _, id := range rt.scheduledSetIDs() {
-		def := rt.cmdValid[id]
-		st, err := models.GetCommandSchedule(rt.DB.Read(), id)
-		if err != nil || st == nil {
-			continue
-		}
-		due, ok := def.Schedule.DueToRun(now, time.Unix(st.ArmedAt, 0), time.Unix(st.LastDue, 0), rt.location())
-		if !ok {
-			continue
-		}
-		if best == nil || due.Unix() < best.scheduledFor {
-			best = &commandJob{def: def, trigger: TriggerSchedule, scheduledFor: due.Unix()}
-		}
-	}
-	return best
-}
-
-// scheduledSetIDs returns the valid scheduled sets in ID order.
-func (rt *AgentRuntime) scheduledSetIDs() []int64 {
-	var ids []int64
-	for id, d := range rt.cmdValid {
-		if d.RunMode == RunModeSchedule && d.Schedule != nil {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-// nextScheduleDue returns the next due time of any scheduled set after now.
-func (rt *AgentRuntime) nextScheduleDue() (time.Time, bool) {
-	now := rt.now()
-	var next time.Time
-	for _, id := range rt.scheduledSetIDs() {
-		if t, ok := rt.cmdValid[id].Schedule.NextDue(now, rt.location()); ok && (next.IsZero() || t.Before(next)) {
-			next = t
-		}
-	}
-	return next, !next.IsZero()
-}
-
-// runCommandJob runs a set to its end with the definition of the job. It
-// returns false when the run could not be started. Each record of the run is
-// its own transaction: the commands run between them.
+// runCommandJob runs a set to its end with the definition of the job, on the
+// calling worker. It returns false when the run could not be started. Each
+// record of the run is its own transaction: the commands run between them.
 func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	def := job.def
 	now := rt.now().Unix()
@@ -289,12 +182,11 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	start := &ReportRequest{CommandRuns: []CommandRunReport{base}}
 	if job.requestID > 0 {
 		start.CommandRequestAcks = []CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: uid, At: now}}
-		rt.cmdAcked[job.requestID] = true
 	}
 	rt.queueCommandReport(start)
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
-	hooks := CommandExecHooks{MonitorDue: rt.monitorDue, Monitor: rt.monitorStep, Stop: rt.stop, Logf: rt.logf}
+	hooks := CommandExecHooks{MonitorHere: rt.monitorHere, Stop: rt.stop, Logf: rt.logf}
 	collect := def.Purpose == PurposeCollectOutput
 	var kinds []string
 	var values []CommandValues
@@ -313,7 +205,7 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	}
 	closed := false
 	for i := range def.Commands {
-		if i > 0 && rt.isStopping() {
+		if i > 0 && isClosed(rt.stop) {
 			break
 		}
 		c := &def.Commands[i]
@@ -383,7 +275,7 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 			ScheduledFor: e.ScheduledFor, StartedAt: e.StartedAt, Finished: true, FinishedAt: now,
 			State: ResultError, Reason: ReasonInterrupted, Results: []CommandResultReport{},
 		}
-		d := rt.findCommandSet(e.SetID)
+		d := rt.sched.findSet(e.SetID)
 		if d != nil {
 			rep.SetName, rep.Purpose, rep.Joiner, rep.OSUser, rep.WorkDir = d.Name, d.Purpose, d.Joiner, d.OSUser, d.WorkDir
 			rep.CommandsTotal = len(d.Commands)
@@ -411,19 +303,6 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 		}
 		rt.logf("command set run %s was interrupted (the agent ended while it ran)", e.RunUID)
 	}
-}
-
-// findCommandSet returns a stored definition, valid or not (nil when absent).
-func (rt *AgentRuntime) findCommandSet(id int64) *CommandSetDef {
-	if rt.cmdDefs == nil {
-		return nil
-	}
-	for i := range rt.cmdDefs.Sets {
-		if rt.cmdDefs.Sets[i].ID == id {
-			return &rt.cmdDefs.Sets[i]
-		}
-	}
-	return nil
 }
 
 // queueCommandReport queues a report about command sets in the outbox; it is

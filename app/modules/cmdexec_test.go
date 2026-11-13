@@ -269,15 +269,18 @@ func closedAfter(d time.Duration) <-chan struct{} {
 func TestExecuteCommandHooks(t *testing.T) {
 	requireBash(t)
 	user := agentUserName()
-	monitored := 0
-	due := true
-	hooks := CommandExecHooks{
-		MonitorDue: func() bool { return due },
-		Monitor:    func() { monitored++; due = false },
-	}
+	// MonitorHere is offered on every pass of the wait loop; the agent's
+	// scheduler decides whether the step runs there.
+	offered, monitored := 0, 0
+	hooks := CommandExecHooks{MonitorHere: func() {
+		offered++
+		if offered == 1 {
+			monitored++
+		}
+	}}
 	r := runTestCommand(t, testCommand("sleep 0.3; echo ok"), user, "/", hooks)
-	if r.Kind != ResultSuccess || monitored != 1 || string(r.Output) != "ok\n" {
-		t.Fatalf("monitoring while the command runs: %+v %d", r, monitored)
+	if r.Kind != ResultSuccess || monitored != 1 || offered < 3 || string(r.Output) != "ok\n" {
+		t.Fatalf("monitoring while the command runs: %+v offered %d", r, offered)
 	}
 
 	hooks = CommandExecHooks{Stop: closedAfter(200 * time.Millisecond)}

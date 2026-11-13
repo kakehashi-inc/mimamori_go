@@ -166,7 +166,7 @@ func TestRemoveAuditRulesImmutable(t *testing.T) {
 func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
-	rt.Transport = &fakeTransport{}
+	rt.mon.transport = &fakeTransport{}
 	removed := 0
 	var fail error
 	rt.removeAudit = func(*AuditGlobals) error {
@@ -176,8 +176,8 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 
 	// Nothing applied: nothing to remove.
 	rt.sync()
-	if removed != 0 || rt.lastApply != nil {
-		t.Fatalf("an agent without a rule must not touch audit rules: %d %+v", removed, rt.lastApply)
+	if removed != 0 || rt.mon.lastApply != nil {
+		t.Fatalf("an agent without a rule must not touch audit rules: %d %+v", removed, rt.mon.lastApply)
 	}
 
 	ra := &RuleAssignment{ID: 3, Version: 2, Name: "web"}
@@ -194,20 +194,20 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	fail = errors.New("auditctl failed")
 	rt.sync()
 	rt.sync()
-	if removed != 2 || rt.rule == nil || rt.lastApply.Status != "error" || !strings.Contains(rt.lastApply.Message, "auditctl failed") {
-		t.Fatalf("failed removal: %d %+v %+v", removed, rt.rule, rt.lastApply)
+	if removed != 2 || rt.mon.rule == nil || rt.mon.lastApply.Status != "error" || !strings.Contains(rt.mon.lastApply.Message, "auditctl failed") {
+		t.Fatalf("failed removal: %d %+v %+v", removed, rt.mon.rule, rt.mon.lastApply)
 	}
 
 	fail = nil
 	rt.sync()
-	if removed != 3 || rt.rule != nil || rt.lastApply == nil || rt.lastApply.Status != ApplyStatusNone || rt.lastApply.RuleID != 0 {
-		t.Fatalf("removal: %d %+v %+v", removed, rt.rule, rt.lastApply)
+	if removed != 3 || rt.mon.rule != nil || rt.mon.lastApply == nil || rt.mon.lastApply.Status != ApplyStatusNone || rt.mon.lastApply.RuleID != 0 {
+		t.Fatalf("removal: %d %+v %+v", removed, rt.mon.rule, rt.mon.lastApply)
 	}
 	if models.GetLocalState(rt.DB.Read(), stateRule) != "" || models.GetLocalState(rt.DB.Read(), stateApply) != "" {
 		t.Fatal("the stored rule and application result must be cleared")
 	}
 	// The report carries the result, so the central shows nothing applied.
-	tr := rt.Transport.(*fakeTransport)
+	tr := rt.mon.transport.(*fakeTransport)
 	rt.report(nil)
 	if len(tr.reports) != 1 || tr.reports[0].Apply == nil || tr.reports[0].Apply.Status != ApplyStatusNone {
 		t.Fatalf("report: %+v", tr.reports)
@@ -219,8 +219,8 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	}
 	// After a restart nothing is held any more.
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
-	if rt.rule != nil || rt.lastApply != nil {
-		t.Fatalf("state after restart: %+v %+v", rt.rule, rt.lastApply)
+	if rt.mon.rule != nil || rt.mon.lastApply != nil {
+		t.Fatalf("state after restart: %+v %+v", rt.mon.rule, rt.mon.lastApply)
 	}
 }
 
@@ -238,14 +238,14 @@ func TestResetStoredRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt = NewAgentRuntime(rt.DB, &fakeTransport{}, nil)
-	if rt.rule != nil || rt.lastApply == nil || rt.lastApply.Status != "pending" {
-		t.Fatalf("after reset: %+v %+v", rt.rule, rt.lastApply)
+	if rt.mon.rule != nil || rt.mon.lastApply == nil || rt.mon.lastApply.Status != "pending" {
+		t.Fatalf("after reset: %+v %+v", rt.mon.rule, rt.mon.lastApply)
 	}
 	removed := 0
 	rt.removeAudit = func(*AuditGlobals) error { removed++; return nil }
 	rt.sync()
-	if removed != 1 || rt.lastApply.Status != ApplyStatusNone {
-		t.Fatalf("the next sync without a rule must remove the audit rules: %d %+v", removed, rt.lastApply)
+	if removed != 1 || rt.mon.lastApply.Status != ApplyStatusNone {
+		t.Fatalf("the next sync without a rule must remove the audit rules: %d %+v", removed, rt.mon.lastApply)
 	}
 }
 

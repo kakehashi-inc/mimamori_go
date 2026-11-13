@@ -109,11 +109,14 @@ func (o *outbox) queuePeriodic(req *ReportRequest) (int, error) {
 	return dropped, nil
 }
 
-// flush sends the queued reports in the order of their rows, one request
-// each, and deletes a row (one Write) after the central answered it. It
-// stops at the first failure, which it hands to onError; that row and the
-// later ones stay queued and are sent again, with the same identity, next
-// time. A row that cannot be parsed is deleted. The rows are listed on the
+// flush sends the reports queued when it starts, in the order of their rows,
+// one request each, and deletes a row (one Write) after the central answered
+// it. It stops at the first failure, which it hands to onError; that row and
+// the later ones stay queued and are sent again, with the same identity,
+// next time. Each row is read again just before it is sent, so a row that
+// a limit shrank meanwhile (command set reports are queued by other workers
+// during a flush) is sent as it is now, and a row the limit deleted is not
+// sent. A row that cannot be parsed is deleted. The rows are read on the
 // read side; no request to the central is made inside a Write.
 func (o *outbox) flush(tr AgentTransport, onError func(error)) {
 	items, err := models.ListOutbox(o.db.Read())
@@ -123,7 +126,14 @@ func (o *outbox) flush(tr AgentTransport, onError func(error)) {
 	deleteItem := func(id int64) {
 		_ = o.db.Write(func(tx models.Writer) error { return models.DeleteOutbox(tx, id) })
 	}
-	for _, it := range items {
+	for _, listed := range items {
+		it, err := models.GetOutbox(o.db.Read(), listed.ID)
+		if err != nil {
+			return
+		}
+		if it == nil {
+			continue
+		}
 		var req ReportRequest
 		if err := json.Unmarshal([]byte(it.Payload), &req); err != nil {
 			deleteItem(it.ID)

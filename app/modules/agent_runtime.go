@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"mimamori/app/models"
@@ -45,49 +46,33 @@ const (
 	stateAuditGlobals = "audit_globals"
 )
 
-// AgentRuntime performs the periodic processing of an agent. Everything runs
-// sequentially in the calling flow: syncing, applying rules, reading the
-// audit log, scanning files and reporting.
+// AgentRuntime performs the work of an agent: the monitoring step (syncing,
+// applying rules, reading the audit log, scanning files and reporting) and
+// the runs of command sets, on as many flows as its worker count (with one
+// worker the calling flow only). The scheduler (agent_scheduler.go) decides
+// what runs next; its file comment says who owns which state.
 //
 // DB is the handle of the agent's local database. What the runtime reads it
 // reads through DB.Read; every change is a DB.Write, and what decides a
 // change is read inside that Write. A request to the central, an external
 // program, a file walk or a running command never happens inside a Write.
 type AgentRuntime struct {
-	DB        *DB
-	Transport AgentTransport
-	Config    *AgentConfig // nil for the built-in agent
-	Logger    *log.Logger
-	// OnConfigSaved is called with the configuration after a change from
-	// the central (renewed token, name, expiry, CAs) was saved, so that the
-	// transport uses the saved token and CAs from the next request on.
-	OnConfigSaved func(cfg *AgentConfig)
+	DB     *DB
+	Logger *log.Logger
 
-	defaultInterval int
-	rule            *RuleAssignment
-	lastApply       *ApplyResult
-	// failedRule is the rule version whose application failed. It is not
-	// retried every cycle (each attempt replaces the loaded rules); a new
-	// version or a restart of the agent tries again.
-	failedRule string
-	// lastOK is the result of the last successful application, restored when
-	// the central assigns the running version again after a failed one.
-	lastOK *ApplyResult
-
-	// stop is the channel given to Run, closed when the agent stops (also
-	// looked at while a command runs); lastMonitor is the start of the last
-	// monitoring step.
-	stop        <-chan struct{}
-	lastMonitor time.Time
-	// Command sets: the stored definitions, the valid sets by ID, the manual
-	// requests waiting to run (oldest first) and the requests answered in
-	// this process.
-	cmdDefs     *CommandDefinitions
-	cmdValid    map[int64]*CommandSetDef
-	cmdRequests []CommandRunRequest
-	cmdAcked    map[int64]bool
+	// mon is the state of the monitoring step, touched only by the flow that
+	// runs the step.
+	mon monitorState
+	// sched decides what runs next.
+	sched *agentScheduler
 	// out is the outbox, the only owner of the queued reports.
 	out *outbox
+
+	// Fixed before Run starts a worker, then only read. workers is the number
+	// of units processed at the same time (1 unless a test sets more); stop
+	// is the channel given to Run, closed when the agent stops.
+	workers int
+	stop    <-chan struct{}
 	// clock, loc and cmdKillGrace replace the time, the host's time zone and
 	// the grace before SIGKILL in tests.
 	clock        func() time.Time
@@ -99,24 +84,55 @@ type AgentRuntime struct {
 	removeAudit func(restore *AuditGlobals) error
 }
 
-// NewAgentRuntime loads the stored state.
+// monitorState is what only the monitoring step uses.
+type monitorState struct {
+	transport AgentTransport
+	config    *AgentConfig // nil for the built-in agent
+	// onConfigSaved is called with the configuration after a change from the
+	// central (renewed token, name, expiry, CAs) was saved, so that the
+	// transport uses the saved token and CAs from the next request on.
+	onConfigSaved func(cfg *AgentConfig)
+
+	defaultInterval int
+	rule            *RuleAssignment
+	lastApply       *ApplyResult
+	// failedRule is the rule version whose application failed. It is not
+	// retried every cycle (each attempt replaces the loaded rules); a new
+	// version or a restart of the agent tries again.
+	failedRule string
+	// lastOK is the result of the last successful application, restored when
+	// the central assigns the running version again after a failed one.
+	lastOK *ApplyResult
+}
+
+// interval is the check interval: the assigned rule's, else the central's
+// default from the last sync.
+func (m *monitorState) interval() time.Duration {
+	if m.rule != nil {
+		return time.Duration(m.rule.Content.CheckInterval()) * time.Second
+	}
+	return time.Duration(m.defaultInterval) * time.Second
+}
+
+// NewAgentRuntime loads the stored state. tr is the transport to the central.
 func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
-	rt := &AgentRuntime{DB: db, Transport: tr, Logger: logger,
-		defaultInterval: DefaultCheckIntervalSec, cmdValid: map[int64]*CommandSetDef{}, cmdAcked: map[int64]bool{}}
+	rt := &AgentRuntime{DB: db, Logger: logger, workers: 1,
+		mon: monitorState{transport: tr, defaultInterval: DefaultCheckIntervalSec}}
 	rt.out = newOutbox(db, rt.logf)
 	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
 			r.Content.Normalize()
-			rt.rule = &r
+			rt.mon.rule = &r
 		}
 	}
 	if v := models.GetLocalState(db.Read(), stateApply); v != "" {
 		var a ApplyResult
 		if json.Unmarshal([]byte(v), &a) == nil {
-			rt.lastApply = &a
+			rt.mon.lastApply = &a
 		}
 	}
+	rt.sched = newAgentScheduler(db, rt.now, rt.location, rt.mon.interval())
 	rt.loadCommandDefinitions()
 	return rt
 }
@@ -127,106 +143,87 @@ func (rt *AgentRuntime) logf(format string, a ...any) {
 	}
 }
 
-// Interval returns the wait before the next cycle.
-func (rt *AgentRuntime) Interval() time.Duration {
-	if rt.rule != nil {
-		return time.Duration(rt.rule.Content.CheckInterval()) * time.Second
-	}
-	return time.Duration(rt.defaultInterval) * time.Second
-}
-
 // ReapplyStored re-applies the stored rule at start, because a reboot or an
 // auditd restart reloads the OS defaults.
 func (rt *AgentRuntime) ReapplyStored() {
-	if rt.rule == nil {
+	if rt.mon.rule == nil {
 		return
 	}
-	rt.logf("re-applying rule %q version %d", rt.rule.Name, rt.rule.Version)
-	rt.applyRule(rt.rule, true)
+	rt.logf("re-applying rule %q version %d", rt.mon.rule.Name, rt.mon.rule.Version)
+	rt.applyRule(rt.mon.rule, true)
 }
 
-// Run loops in the calling flow until stop is closed (a nil stop never
-// is). The stop is checked between steps of a cycle and ends the waits
-// between them; a running cycle always completes and saves its state before
-// returning.
+// Run processes the agent's units until stop is closed (a nil stop never
+// is): the calling flow is the first worker, and workers-1 flows more are
+// started. Each worker asks the scheduler for a unit (the monitoring step
+// when due, else the oldest manual request whose set does not run, else the
+// due scheduled set), runs it and asks again; with nothing to run it waits
+// until the next monitoring step or the next scheduled time. While a command
+// runs, its wait loop runs the monitoring step when it is due and no other
+// worker is idle.
 //
-// Each pass runs the monitoring step when the check interval has passed,
-// then the command sets that are due, one at a time (manual requests first,
-// then schedules by due time), and waits until the next monitoring step or
-// the next scheduled time, whichever comes first. While a command runs, its
-// wait loop runs the monitoring step when it is due; a stop ends the running
-// command (SIGTERM, grace, SIGKILL) and its run is still reported: one
-// attempt to send the queued reports is made before returning.
+// After the stop no unit starts; a running monitoring step completes (see
+// monitorStep), and a running command is ended (SIGTERM, grace, SIGKILL) and
+// its run still reported. Run returns when every worker has returned, after
+// one attempt to send the queued reports when a run ended after the stop.
 func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	rt.stop = stop
-	if !rt.isStopping() {
+	rt.sched.stop = stop
+	if !isClosed(stop) {
 		rt.ReapplyStored()
 	}
 	rt.recoverInterruptedRuns()
+	var wg sync.WaitGroup
+	for i := 1; i < rt.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rt.work()
+		}()
+	}
+	rt.work()
+	wg.Wait()
+	if rt.sched.runsStoppedByStop() {
+		// A run was closed because of the stop: one attempt to send its
+		// reports, so that the central does not show it running until the
+		// next start (what fails stays queued). Every worker has returned, so
+		// this is the only flush.
+		rt.flushOutbox()
+	}
+}
+
+// work is one worker: it runs the units the scheduler gives it until the
+// stop.
+func (rt *AgentRuntime) work() {
 	for {
-		if rt.isStopping() {
+		u, acks := rt.sched.next()
+		rt.queueAcks(acks)
+		switch {
+		case u == nil && len(acks) == 0:
 			return
-		}
-		if rt.monitorDue() {
-			rt.monitorStep()
-		}
-		for !rt.isStopping() {
-			job := rt.nextCommandJob()
-			if job == nil || !rt.runCommandJob(job) {
-				break
-			}
-			if rt.isStopping() {
-				// The run was closed because of the stop: one attempt to send
-				// its reports, so that the central does not show it running
-				// until the next start (what fails stays queued).
-				rt.flushOutbox()
-				return
-			}
-			if rt.monitorDue() && !rt.isStopping() {
-				rt.monitorStep()
-			}
-		}
-		if rt.isStopping() {
-			return
-		}
-		if !rt.wait(rt.nextWait()) {
-			return
+		case u == nil:
+		case u.monitor:
+			rt.runMonitorStep()
+		default:
+			started := rt.runCommandJob(u.job)
+			rt.sched.doneRun(u.job, started)
 		}
 	}
 }
 
-// wait sleeps for d and returns false when the stop came meanwhile.
-func (rt *AgentRuntime) wait(d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-rt.stop:
-		return false
-	case <-t.C:
-		return true
-	}
+// runMonitorStep runs the monitoring step the scheduler gave to this flow
+// and tells the scheduler that it ended.
+func (rt *AgentRuntime) runMonitorStep() {
+	rt.monitorStep()
+	rt.sched.doneMonitor(rt.mon.interval())
 }
 
-// monitorDue reports whether the check interval has passed since the start
-// of the last monitoring step.
-func (rt *AgentRuntime) monitorDue() bool {
-	return rt.lastMonitor.IsZero() || rt.now().Sub(rt.lastMonitor) >= rt.Interval()
-}
-
-// nextWait is the time until the next monitoring step or the next scheduled
-// time of a command set, whichever comes first.
-func (rt *AgentRuntime) nextWait() time.Duration {
-	now := rt.now()
-	next := rt.lastMonitor.Add(rt.Interval()).Sub(now)
-	if next < time.Second {
-		next = time.Second
+// monitorHere is called from the wait loop of a running command: it runs the
+// monitoring step on this flow when the scheduler gives it to this worker.
+func (rt *AgentRuntime) monitorHere() {
+	if rt.sched.inlineMonitor() {
+		rt.runMonitorStep()
 	}
-	if due, ok := rt.nextScheduleDue(); ok {
-		if d := due.Sub(now); d < next {
-			next = max(d, commandPollMax)
-		}
-	}
-	return next
 }
 
 // Cycle performs one monitoring step.
@@ -245,12 +242,11 @@ func (rt *AgentRuntime) Cycle() {
 // application or removal that has begun runs to its end.
 func (rt *AgentRuntime) monitorStep() {
 	cycleStart := time.Now()
-	rt.lastMonitor = rt.now()
 	rt.sync()
 
 	var detections []DetectionReport
-	if rt.rule != nil {
-		c := &rt.rule.Content
+	if rt.mon.rule != nil {
+		c := &rt.mon.rule.Content
 		res := ResolveRule(c)
 		if c.ExecEnabled() || c.DeniedEnabled() || c.ReadEnabled() || c.NetworkEnabled() {
 			detections = append(detections, rt.collectAudit(c, res.UserByID)...)
@@ -272,31 +268,31 @@ func (rt *AgentRuntime) sync() {
 		rt.logf("sync: reading the running command set runs failed: %v", err)
 		return
 	}
-	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.lastApply, CommandSig: rt.commandSignature(),
+	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.mon.lastApply, CommandSig: rt.sched.signature(),
 		RunningRequests: running}
-	if rt.rule != nil {
-		req.RuleID, req.RuleVersion = rt.rule.ID, rt.rule.Version
+	if rt.mon.rule != nil {
+		req.RuleID, req.RuleVersion = rt.mon.rule.ID, rt.mon.rule.Version
 	}
-	if rt.Config != nil {
-		req.CAFingerprints = CAFingerprintsOf(rt.Config.CAPEMs)
+	if rt.mon.config != nil {
+		req.CAFingerprints = CAFingerprintsOf(rt.mon.config.CAPEMs)
 	}
-	resp, err := rt.Transport.Sync(req)
+	resp, err := rt.mon.transport.Sync(req)
 	if err != nil {
 		rt.logConnectionError("sync", err)
 		return
 	}
 	if resp.DefaultIntervalSec > 0 {
-		rt.defaultInterval = resp.DefaultIntervalSec
+		rt.mon.defaultInterval = resp.DefaultIntervalSec
 	}
-	if rt.Config != nil {
+	if rt.mon.config != nil {
 		rt.saveConfigUpdates(resp)
 	}
-	// Definitions and requests are only stored here; they are used when no
-	// set runs (a running set keeps the definition it started with).
+	// Definitions and requests go to the scheduler; a running set keeps the
+	// definition it started with.
 	if resp.CommandSets != nil {
 		rt.storeCommandDefinitions(resp.CommandSets)
 	}
-	rt.receiveCommandRequests(resp.CommandRequests)
+	rt.queueAcks(rt.sched.receiveRequests(resp.CommandRequests))
 	if isClosed(rt.stop) {
 		// After the stop no rule is applied or removed (both run tools); the
 		// next start syncs again.
@@ -305,14 +301,14 @@ func (rt *AgentRuntime) sync() {
 	switch {
 	case resp.Rule == nil:
 		rt.removeRule()
-	case rt.rule != nil && resp.Rule.ID == rt.rule.ID && resp.Rule.Version == rt.rule.Version:
+	case rt.mon.rule != nil && resp.Rule.ID == rt.mon.rule.ID && resp.Rule.Version == rt.mon.rule.Version:
 		// The running version is assigned again (for example after a newer
 		// version failed): report its successful result again.
-		rt.failedRule = ""
-		if rt.lastApply != nil && rt.lastApply.Status == "error" && rt.lastOK != nil {
-			rt.setApply(rt.lastOK)
+		rt.mon.failedRule = ""
+		if rt.mon.lastApply != nil && rt.mon.lastApply.Status == "error" && rt.mon.lastOK != nil {
+			rt.setApply(rt.mon.lastOK)
 		}
-	case ruleKey(resp.Rule) != rt.failedRule:
+	case ruleKey(resp.Rule) != rt.mon.failedRule:
 		resp.Rule.Content.Normalize()
 		rt.applyRule(resp.Rule, false)
 	}
@@ -335,8 +331,8 @@ func (rt *AgentRuntime) runningRequests() ([]int64, error) {
 }
 
 func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
-	cfg := *rt.Config
-	cfg.CAPEMs = append([]string(nil), rt.Config.CAPEMs...)
+	cfg := *rt.mon.config
+	cfg.CAPEMs = append([]string(nil), rt.mon.config.CAPEMs...)
 	changed := false
 	if resp.TokenExpiresAt > 0 && resp.TokenExpiresAt != cfg.TokenExpiresAt {
 		cfg.TokenExpiresAt = resp.TokenExpiresAt
@@ -364,12 +360,12 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 		rt.logf("failed to save configuration (token renewal or CA update postponed): %v", err)
 		return
 	}
-	*rt.Config = cfg
+	*rt.mon.config = cfg
 	if renewed {
 		rt.logf("token renewed; new expiry %s", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
 	}
-	if rt.OnConfigSaved != nil {
-		rt.OnConfigSaved(rt.Config)
+	if rt.mon.onConfigSaved != nil {
+		rt.mon.onConfigSaved(rt.mon.config)
 	}
 }
 
@@ -387,11 +383,11 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	default:
 		rt.logf("%s: cannot reach the central: %v", op, err)
 	}
-	if rt.Config != nil && rt.Config.TokenExpiresAt > 0 {
-		left := time.Until(time.Unix(rt.Config.TokenExpiresAt, 0))
+	if rt.mon.config != nil && rt.mon.config.TokenExpiresAt > 0 {
+		left := time.Until(time.Unix(rt.mon.config.TokenExpiresAt, 0))
 		if left < time.Duration(DefaultTokenRenewDays)*24*time.Hour {
 			rt.logf("warning: the token expires at %s (in %s) and could not be renewed",
-				time.Unix(rt.Config.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"), left.Round(time.Minute))
+				time.Unix(rt.mon.config.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"), left.Round(time.Minute))
 		}
 	}
 }
@@ -408,7 +404,7 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if ps := ra.Content.Problems(); len(ps) > 0 {
 		result.Status = "error"
 		result.setMessage(M("apply.validation_failed", "problems", firstProblems(ps, 5)))
-		rt.failedRule = ruleKey(ra)
+		rt.mon.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d rejected: %s", ra.Name, ra.Version, result.Message)
 		return
@@ -419,12 +415,12 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if err != nil {
 		result.Status = "error"
 		result.setMessage(AsMsg(err))
-		rt.failedRule = ruleKey(ra)
+		rt.mon.failedRule = ruleKey(ra)
 		rt.setApply(result)
 		rt.logf("rule %q version %d not applied: %v", ra.Name, ra.Version, err)
 		return
 	}
-	rt.failedRule = ""
+	rt.mon.failedRule = ""
 	result.setWarnings(append(res.Warnings, applyWarnings...))
 	if len(result.Warnings) > 0 {
 		result.Status = "warning"
@@ -437,8 +433,8 @@ func (rt *AgentRuntime) applyRule(ra *RuleAssignment, reapply bool) {
 	if err := rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateRule, string(b)) }); err != nil {
 		rt.logf("failed to store the applied rule: %v", err)
 	}
-	rt.rule = ra
-	rt.lastOK = result
+	rt.mon.rule = ra
+	rt.mon.lastOK = result
 	rt.setApply(result)
 	if !reapply {
 		rt.logf("rule %q version %d applied: %s", ra.Name, ra.Version, result.Message)
@@ -463,7 +459,7 @@ func holdsRule(rule *RuleAssignment, apply *ApplyResult) bool {
 // check tries again.
 func (rt *AgentRuntime) removeRule() {
 	restore := storedAuditGlobals(rt.DB.Read())
-	if !holdsRule(rt.rule, rt.lastApply) && restore == nil {
+	if !holdsRule(rt.mon.rule, rt.mon.lastApply) && restore == nil {
 		return
 	}
 	remove := rt.removeAudit
@@ -474,7 +470,7 @@ func (rt *AgentRuntime) removeRule() {
 	if err := remove(restore); err != nil {
 		failed := &ApplyResult{Status: "error", At: now}
 		failed.setMessage(M("apply.none_remove_failed", "cause", AsMsg(err)))
-		if rt.lastApply == nil || rt.lastApply.Status != "error" || rt.lastApply.Message != failed.Message {
+		if rt.mon.lastApply == nil || rt.mon.lastApply.Status != "error" || rt.mon.lastApply.Message != failed.Message {
 			rt.setApply(failed)
 			rt.logf("%s", failed.Message)
 		}
@@ -488,9 +484,9 @@ func (rt *AgentRuntime) removeRule() {
 	}); err != nil {
 		rt.logf("failed to clear the stored rule: %v", err)
 	}
-	rt.rule, rt.lastOK, rt.failedRule = nil, nil, ""
-	rt.lastApply = &ApplyResult{Status: ApplyStatusNone, At: now}
-	rt.lastApply.setMessage(M("apply.none_removed"))
+	rt.mon.rule, rt.mon.lastOK, rt.mon.failedRule = nil, nil, ""
+	rt.mon.lastApply = &ApplyResult{Status: ApplyStatusNone, At: now}
+	rt.mon.lastApply.setMessage(M("apply.none_removed"))
 	rt.logf("no rule is assigned: the audit rules with key %s and %s were removed%s", AuditKey, AuditRulesFile, restoredNote(restore))
 }
 
@@ -615,7 +611,7 @@ func firstProblems(ps []Problem, n int) []any {
 }
 
 func (rt *AgentRuntime) setApply(r *ApplyResult) {
-	rt.lastApply = r
+	rt.mon.lastApply = r
 	if b, err := json.Marshal(r); err == nil {
 		_ = rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateApply, string(b)) })
 	}
@@ -1027,14 +1023,14 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The directory structure is reported only for the scan origin of the
 	// applied rule; there is no default origin.
-	in := HostInfoInput{LastApply: rt.lastApply}
-	if rt.rule != nil {
-		in.Rule = &RuleRef{ID: rt.rule.ID, Version: rt.rule.Version}
-		in.ScanBase = rt.rule.Content.Writable.Base
+	in := HostInfoInput{LastApply: rt.mon.lastApply}
+	if rt.mon.rule != nil {
+		in.Rule = &RuleRef{ID: rt.mon.rule.ID, Version: rt.mon.rule.Version}
+		in.ScanBase = rt.mon.rule.Content.Writable.Base
 		in.IncompleteScans = rt.incompleteScans()
 	}
-	if rt.Config != nil {
-		in.TrustedCAPEMs = rt.Config.CAPEMs
+	if rt.mon.config != nil {
+		in.TrustedCAPEMs = rt.mon.config.CAPEMs
 	}
 	in.Stop = rt.stop
 	// After the stop, or when the stop cut its collection, the report goes
@@ -1048,7 +1044,7 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The dropped count is read, reported in the queued report and reset in
 	// the outbox's one transaction, so that a count is neither lost nor
 	// reported twice.
-	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.lastApply}
+	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.mon.lastApply}
 	dropped, err := rt.out.queuePeriodic(req)
 	if err != nil {
 		rt.logf("failed to queue the report: %v", err)
@@ -1063,5 +1059,5 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 // flushOutbox sends the queued reports (see outbox.flush); a failure is
 // logged as a failed report.
 func (rt *AgentRuntime) flushOutbox() {
-	rt.out.flush(rt.Transport, func(err error) { rt.logConnectionError("report", err) })
+	rt.out.flush(rt.mon.transport, func(err error) { rt.logConnectionError("report", err) })
 }

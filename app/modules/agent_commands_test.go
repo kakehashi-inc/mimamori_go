@@ -107,7 +107,7 @@ func newCommandRuntime(t *testing.T, tr AgentTransport) *AgentRuntime {
 	rt := NewAgentRuntime(db, tr, nil)
 	rt.cmdKillGrace = 300 * time.Millisecond
 	// No monitoring step during unit runs (the flow tests reset this).
-	rt.lastMonitor = time.Now()
+	rt.sched.lastMonitor = time.Now()
 	return rt
 }
 
@@ -123,6 +123,32 @@ func testSet(id int64, purpose string, lines ...string) CommandSetDef {
 
 func defsOf(sets ...CommandSetDef) *CommandDefinitions {
 	return &CommandDefinitions{Signature: "sig" + time.Now().String(), Sets: sets}
+}
+
+// nextCommandJob asks the scheduler for the run to start now without
+// waiting, queues the answers found on the way and takes the set off the
+// running sets again (the tests run the job themselves, or not at all).
+func nextCommandJob(rt *AgentRuntime) *commandJob {
+	rt.sched.mu.Lock()
+	job, acks := rt.sched.pickRunLocked(rt.now())
+	if job != nil {
+		delete(rt.sched.running, job.def.ID)
+	}
+	rt.sched.mu.Unlock()
+	rt.queueAcks(acks)
+	return job
+}
+
+// nextWake is how long an idle worker would wait now.
+func nextWake(rt *AgentRuntime) time.Duration {
+	rt.sched.mu.Lock()
+	defer rt.sched.mu.Unlock()
+	return rt.sched.wakeLocked(rt.now())
+}
+
+// receiveRequests hands manual requests to the scheduler as a sync does.
+func receiveRequests(rt *AgentRuntime, reqs []CommandRunRequest) {
+	rt.queueAcks(rt.sched.receiveRequests(reqs))
 }
 
 // queuedRuns returns the run reports queued in the outbox, in order.
@@ -254,10 +280,10 @@ func TestCommandRequestsRunOnce(t *testing.T) {
 		{ID: 9, SetID: 42, RequestedAt: now - 5, ExpiresAt: now + 3600},
 	}
 	rt.sync()
-	if len(rt.cmdRequests) != 2 || rt.cmdRequests[0].ID != 7 {
-		t.Fatalf("queued requests: %+v", rt.cmdRequests)
+	if len(rt.sched.requests) != 2 || rt.sched.requests[0].ID != 7 {
+		t.Fatalf("queued requests: %+v", rt.sched.requests)
 	}
-	for job := rt.nextCommandJob(); job != nil; job = rt.nextCommandJob() {
+	for job := nextCommandJob(rt); job != nil; job = nextCommandJob(rt) {
 		rt.runCommandJob(job)
 	}
 	reports := queuedReports(t, rt)
@@ -279,11 +305,11 @@ func TestCommandRequestsRunOnce(t *testing.T) {
 	// Delivered again (the central did not process the answer yet), even by
 	// a restarted agent: the request is not run a second time.
 	rt2 := NewAgentRuntime(rt.DB, tr, nil)
-	if rt2.commandSignature() != tr.resp.CommandSets.Signature {
+	if rt2.sched.signature() != tr.resp.CommandSets.Signature {
 		t.Fatal("the stored definitions must be restored")
 	}
 	rt2.sync()
-	if job := rt2.nextCommandJob(); job != nil {
+	if job := nextCommandJob(rt2); job != nil {
 		t.Fatalf("a request must not run twice: %+v", job)
 	}
 	var again []CommandRequestAck
@@ -312,8 +338,8 @@ func TestCommandSetInvalidOnAgent(t *testing.T) {
 	bad := testSet(2, PurposeCollectOutput, "echo x")
 	bad.Commands[0].Patterns = []string{`(no named group)`}
 	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true"), bad))
-	if rt.cmdValid[1] == nil || rt.cmdValid[2] != nil {
-		t.Fatalf("valid sets: %v", rt.cmdValid)
+	if rt.sched.valid[1] == nil || rt.sched.valid[2] != nil {
+		t.Fatalf("valid sets: %v", rt.sched.valid)
 	}
 	reports := queuedReports(t, rt)
 	ap := reports[len(reports)-1].CommandApply
@@ -421,9 +447,9 @@ func TestCommandRunRecordsRunningCommand(t *testing.T) {
 		seen = append(seen, runs...)
 	}
 	// The monitoring step becomes due while the second command runs.
-	rt.lastMonitor = time.Now().Add(300*time.Millisecond - rt.Interval())
+	rt.sched.lastMonitor = time.Now().Add(300*time.Millisecond - rt.mon.interval())
 	start := time.Now().Unix()
-	rt.runCommandJob(&commandJob{def: rt.cmdValid[1], trigger: TriggerManual, requestID: 5})
+	rt.runCommandJob(&commandJob{def: rt.sched.valid[1], trigger: TriggerManual, requestID: 5})
 	if len(seen) != 1 || seen[0].RunningPosition != 1 || seen[0].RunningStartedAt < start {
 		t.Fatalf("running command seen during the run: %+v", seen)
 	}
@@ -453,27 +479,27 @@ func TestCommandSchedules(t *testing.T) {
 	rt.storeCommandDefinitions(defsOf(every, daily, manual))
 
 	// Right after the definitions arrived, past occurrences are not run.
-	if job := rt.nextCommandJob(); job != nil {
+	if job := nextCommandJob(rt); job != nil {
 		t.Fatalf("armed now, nothing is due: %+v", job)
 	}
-	if d := rt.nextWait(); d > 90*time.Second+time.Second {
+	if d := nextWake(rt); d > 90*time.Second+time.Second {
 		t.Fatalf("the wait must end at the next due time (09:02): %s", d)
 	}
 	// 09:21: the every-5-minutes set missed 09:05..09:20 and runs once
 	// (09:20); the daily set is due at 09:02 and comes first.
 	now = time.Date(2026, 11, 12, 9, 21, 0, 0, loc)
-	job := rt.nextCommandJob()
+	job := nextCommandJob(rt)
 	if job == nil || job.def.ID != 2 || job.scheduledFor != time.Date(2026, 11, 12, 9, 2, 0, 0, loc).Unix() {
 		t.Fatalf("first due: %+v", job)
 	}
 	requireBash(t)
 	rt.runCommandJob(job)
-	job = rt.nextCommandJob()
+	job = nextCommandJob(rt)
 	if job == nil || job.def.ID != 1 || job.scheduledFor != time.Date(2026, 11, 12, 9, 20, 0, 0, loc).Unix() {
 		t.Fatalf("missed occurrences run once: %+v", job)
 	}
 	rt.runCommandJob(job)
-	if job := rt.nextCommandJob(); job != nil {
+	if job := nextCommandJob(rt); job != nil {
 		t.Fatalf("nothing more is due: %+v", job)
 	}
 	runs := runReports(queuedReports(t, rt))
@@ -482,11 +508,11 @@ func TestCommandSchedules(t *testing.T) {
 	}
 	// A manual request comes before due schedules.
 	now = time.Date(2026, 11, 12, 9, 25, 0, 0, loc)
-	rt.receiveCommandRequests([]CommandRunRequest{{ID: 1, SetID: 3, RequestedAt: now.Unix(), ExpiresAt: now.Unix() + 60}})
-	if job := rt.nextCommandJob(); job == nil || job.trigger != TriggerManual {
+	receiveRequests(rt, []CommandRunRequest{{ID: 1, SetID: 3, RequestedAt: now.Unix(), ExpiresAt: now.Unix() + 60}})
+	if job := nextCommandJob(rt); job == nil || job.trigger != TriggerManual {
 		t.Fatalf("requests first: %+v", job)
 	}
-	if job := rt.nextCommandJob(); job == nil || job.def.ID != 1 {
+	if job := nextCommandJob(rt); job == nil || job.def.ID != 1 {
 		t.Fatalf("then the schedule: %+v", job)
 	}
 	// Unchanged definitions delivered again keep the schedule state; a
@@ -500,7 +526,7 @@ func TestCommandSchedules(t *testing.T) {
 	if st, _ := models.GetCommandSchedule(rt.DB.Read(), 1); st.LastDue != 0 || st.ArmedAt != now.Unix() {
 		t.Fatalf("re-armed: %+v", st)
 	}
-	if job := rt.nextCommandJob(); job != nil {
+	if job := nextCommandJob(rt); job != nil {
 		t.Fatalf("a changed schedule does not run past occurrences: %+v", job)
 	}
 }
@@ -516,8 +542,8 @@ func TestCommandRunKeepsMonitoring(t *testing.T) {
 	tr.resp.DefaultIntervalSec = 1
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5; echo done", "echo second"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	rt.defaultInterval = 1
-	rt.lastMonitor = time.Time{}
+	rt.mon.defaultInterval = 1
+	rt.sched.lastMonitor = time.Time{}
 	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
 	if tr.syncs < 3 {
 		t.Fatalf("the monitoring must go on while the command runs: %d syncs", tr.syncs)
@@ -552,7 +578,7 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo started; sleep 30", "echo never"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	stop, _ := stopAfterFirstSync(tr, 300*time.Millisecond, nil)
-	rt.lastMonitor = time.Time{}
+	rt.sched.lastMonitor = time.Time{}
 	start := time.Now()
 	rt.Run(stop)
 	if time.Since(start) > 10*time.Second {
@@ -585,7 +611,7 @@ func TestCommandRunStoppedSendsOnce(t *testing.T) {
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 30"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	stop, stopAt := stopAfterFirstSync(tr, 300*time.Millisecond, func() { tr.failReports = true })
-	rt.lastMonitor = time.Time{}
+	rt.sched.lastMonitor = time.Time{}
 	rt.Run(stop)
 	after := 0
 	for _, a := range tr.attempts {
@@ -648,9 +674,9 @@ func TestCommandOutbox(t *testing.T) {
 func TestConfigSavedReachesTransport(t *testing.T) {
 	tr := &cmdTransport{}
 	rt := newCommandRuntime(t, tr)
-	rt.Config = &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: 8443, Token: "old", TokenName: "a"}
+	rt.mon.config = &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: 8443, Token: "old", TokenName: "a"}
 	var saved []string
-	rt.OnConfigSaved = func(c *AgentConfig) {
+	rt.mon.onConfigSaved = func(c *AgentConfig) {
 		if stored := models.GetLocalState(rt.DB.Read(), agentCfgToken); stored != c.Token {
 			t.Errorf("called before the configuration was saved: stored token %q", stored)
 		}
@@ -658,8 +684,8 @@ func TestConfigSavedReachesTransport(t *testing.T) {
 	}
 	tr.resp.TokenRenewal = &TokenRenewal{Token: "new", ExpiresAt: time.Now().Add(time.Hour).Unix()}
 	rt.Cycle()
-	if len(saved) != 1 || saved[0] != "new" || rt.Config.Token != "new" {
-		t.Fatalf("renewed token: %v, config %q", saved, rt.Config.Token)
+	if len(saved) != 1 || saved[0] != "new" || rt.mon.config.Token != "new" {
+		t.Fatalf("renewed token: %v, config %q", saved, rt.mon.config.Token)
 	}
 	rt.Cycle()
 	if len(saved) != 1 {

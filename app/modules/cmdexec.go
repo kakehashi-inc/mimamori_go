@@ -22,9 +22,9 @@ import (
 // 1, which could not be told from the command's own 1), a first marker
 // without the second means the working directory could not be entered.
 //
-// Everything runs in the calling flow: the process is polled with wait4 and
-// its output pipe is drained in the same loop, which also calls the
-// caller's monitoring when it is due.
+// A command runs on the calling flow (the agent's worker that runs the set):
+// the process is polled with wait4 and its output pipe is drained in the
+// same loop, which also lets the caller run its monitoring step.
 
 // commandWrapper is the script bash runs with the arguments marker ($1),
 // working directory ($2, empty for the home directory) and command line ($3).
@@ -50,10 +50,10 @@ const signalHelperScript = `kill -s "$2" -- -"$1"`
 // CommandExecHooks connect the wait loop of a running command to the agent.
 // Every field may be nil.
 type CommandExecHooks struct {
-	// MonitorDue reports whether the monitoring step is due; Monitor runs it.
-	// They are called from the wait loop while the command runs.
-	MonitorDue func() bool
-	Monitor    func()
+	// MonitorHere is called from the wait loop on every pass while the agent
+	// is not stopping. It runs the monitoring step on this flow when the
+	// agent's scheduler gives it to this worker, and returns after it.
+	MonitorHere func()
 	// Stop is closed when the agent stops; the command is then ended
 	// (SIGTERM, grace, SIGKILL) and its result is an error with the reason
 	// interrupted. A nil channel never stops the command.
@@ -257,8 +257,8 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 	return splitMarkers(buf.Bytes(), buf.total, marker), raw
 }
 
-// waitProcess polls the process until it ends, draining the pipe, running the
-// monitoring when due, and ending the process group on the time limit or a
+// waitProcess polls the process until it ends, draining the pipe, letting the
+// caller run its monitoring step, and ending the process group on the time limit or a
 // stop (SIGTERM, then SIGKILL after the grace). When the group could not be
 // signalled (a command of another OS user that the helper could not end
 // either) and the agent is stopping, it stops waiting one grace after the
@@ -314,11 +314,9 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 			sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", sig.osUser)
 			return raw
 		}
-		if !stopping && hooks.MonitorDue != nil && hooks.Monitor != nil && hooks.MonitorDue() {
+		if !stopping && hooks.MonitorHere != nil {
+			hooks.MonitorHere()
 			drain(r, buf)
-			hooks.Monitor()
-			drain(r, buf)
-			continue
 		}
 		time.Sleep(sleep)
 		if sleep < commandPollMax {

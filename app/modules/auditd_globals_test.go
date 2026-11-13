@@ -57,11 +57,11 @@ func TestAuditGlobalsRecordedAndRestored(t *testing.T) {
 	}
 
 	// No rule assigned any more.
-	rt.rule = &RuleAssignment{ID: 3, Version: 2, Name: "web"}
-	rt.lastApply = &ApplyResult{RuleID: 3, Version: 2, Status: "ok"}
+	rt.mon.rule = &RuleAssignment{ID: 3, Version: 2, Name: "web"}
+	rt.mon.lastApply = &ApplyResult{RuleID: 3, Version: 2, Status: "ok"}
 	rt.removeRule()
-	if rt.lastApply.Status != ApplyStatusNone {
-		t.Fatalf("removal: %+v", rt.lastApply)
+	if rt.mon.lastApply.Status != ApplyStatusNone {
+		t.Fatalf("removal: %+v", rt.mon.lastApply)
 	}
 	if got := globalsFromFake(t); got != fakeOriginalGlobals {
 		t.Fatalf("settings after removal: %+v", got)
@@ -97,17 +97,17 @@ func TestAuditGlobalsRestoreFailure(t *testing.T) {
 	if err := os.WriteFile(failB, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rt.rule = &RuleAssignment{ID: 3, Version: 2, Name: "web"}
-	rt.lastApply = &ApplyResult{RuleID: 3, Version: 2, Status: "ok"}
+	rt.mon.rule = &RuleAssignment{ID: 3, Version: 2, Name: "web"}
+	rt.mon.lastApply = &ApplyResult{RuleID: 3, Version: 2, Status: "ok"}
 	rt.removeRule()
 	if readFile(t, state) != "" {
 		t.Fatal("the rules must be removed although the settings could not be set back")
 	}
-	if rt.lastApply.Status != "error" || !strings.Contains(rt.lastApply.Message, "setting the global audit settings back") {
-		t.Fatalf("the failure must be reported: %+v", rt.lastApply)
+	if rt.mon.lastApply.Status != "error" || !strings.Contains(rt.mon.lastApply.Message, "setting the global audit settings back") {
+		t.Fatalf("the failure must be reported: %+v", rt.mon.lastApply)
 	}
-	if g := storedAuditGlobals(rt.DB.Read()); g == nil || *g != fakeOriginalGlobals || rt.rule == nil {
-		t.Fatalf("the record must stay for the next try: %+v %+v", g, rt.rule)
+	if g := storedAuditGlobals(rt.DB.Read()); g == nil || *g != fakeOriginalGlobals || rt.mon.rule == nil {
+		t.Fatalf("the record must stay for the next try: %+v %+v", g, rt.mon.rule)
 	}
 	// The other settings were set back all the same.
 	if got := globalsFromFake(t); got.Failure != 2 || got.BacklogWaitTime != 15000 {
@@ -118,8 +118,8 @@ func TestAuditGlobalsRestoreFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.removeRule()
-	if rt.lastApply.Status != ApplyStatusNone || storedAuditGlobals(rt.DB.Read()) != nil {
-		t.Fatalf("the next try: %+v", rt.lastApply)
+	if rt.mon.lastApply.Status != ApplyStatusNone || storedAuditGlobals(rt.DB.Read()) != nil {
+		t.Fatalf("the next try: %+v", rt.mon.lastApply)
 	}
 	if got := globalsFromFake(t); got != fakeOriginalGlobals {
 		t.Fatalf("settings after the next try: %+v", got)

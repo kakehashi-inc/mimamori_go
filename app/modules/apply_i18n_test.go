@@ -56,11 +56,11 @@ func TestApplyValidationFailedMessage(t *testing.T) {
 		n++
 		rt.applyRule(&RuleAssignment{ID: 1, Version: i + 1, Name: "r", Content: *c}, false)
 		want := "validation failed: " + oldJoinMax(errs, 5)
-		if rt.lastApply.Status != "error" || rt.lastApply.Message != want {
-			t.Fatalf("content %d: %+v, want %q", i, rt.lastApply, want)
+		if rt.mon.lastApply.Status != "error" || rt.mon.lastApply.Message != want {
+			t.Fatalf("content %d: %+v, want %q", i, rt.mon.lastApply, want)
 		}
-		checkCoded(t, fmt.Sprint("content ", i), rt.lastApply.MessageI18n, "apply.validation_failed", want)
-		items, _ := rt.lastApply.MessageI18n.Params["problems"].([]any)
+		checkCoded(t, fmt.Sprint("content ", i), rt.mon.lastApply.MessageI18n, "apply.validation_failed", want)
+		items, _ := rt.mon.lastApply.MessageI18n.Params["problems"].([]any)
 		if wantItems := min(len(errs), 5) + min(len(errs)-min(len(errs), 5), 1); len(items) != wantItems {
 			t.Fatalf("content %d: %d items, want %d", i, len(items), wantItems)
 		}
@@ -98,7 +98,7 @@ func TestApplyWarningsCarryCodes(t *testing.T) {
 		t.Fatalf("content: %v", errs)
 	}
 	rt.applyRule(&RuleAssignment{ID: 1, Version: 1, Name: "r", Content: c}, false)
-	ap := rt.lastApply
+	ap := rt.mon.lastApply
 	wantWarnings := []string{
 		`OS user "no-such-user-mimamori" does not exist`,
 		`directory "/no/such/dir" does not exist`,
@@ -118,10 +118,10 @@ func TestApplyWarningsCarryCodes(t *testing.T) {
 	c = RuleContent{}
 	c.Normalize()
 	rt.applyRule(&RuleAssignment{ID: 1, Version: 2, Name: "r", Content: c}, false)
-	if rt.lastApply.Status != "ok" || rt.lastApply.Warnings != nil || rt.lastApply.WarningsI18n != nil {
-		t.Fatalf("result: %+v", rt.lastApply)
+	if rt.mon.lastApply.Status != "ok" || rt.mon.lastApply.Warnings != nil || rt.mon.lastApply.WarningsI18n != nil {
+		t.Fatalf("result: %+v", rt.mon.lastApply)
 	}
-	checkCoded(t, "message", rt.lastApply.MessageI18n, "apply.applied", "applied (0 audit rules)")
+	checkCoded(t, "message", rt.mon.lastApply.MessageI18n, "apply.applied", "applied (0 audit rules)")
 }
 
 // The rules file: a missing directory is a warning, a directory in place of
@@ -158,18 +158,18 @@ func TestRemoveFailureMessage(t *testing.T) {
 	rt.removeAudit = func(*AuditGlobals) error { return cause }
 	rt.removeRule()
 	want := "no rule is assigned, but removing the audit rules failed: " + cause.Error()
-	if rt.lastApply.Status != "error" || rt.lastApply.Message != want {
-		t.Fatalf("result: %+v", rt.lastApply)
+	if rt.mon.lastApply.Status != "error" || rt.mon.lastApply.Message != want {
+		t.Fatalf("result: %+v", rt.mon.lastApply)
 	}
-	checkCoded(t, "failed removal", rt.lastApply.MessageI18n, "apply.none_remove_failed", want)
-	nested, _ := rt.lastApply.MessageI18n.Params["cause"].(Msg)
+	checkCoded(t, "failed removal", rt.mon.lastApply.MessageI18n, "apply.none_remove_failed", want)
+	nested, _ := rt.mon.lastApply.MessageI18n.Params["cause"].(Msg)
 	if nested.Code != "common.lines" {
-		t.Fatalf("cause: %#v", rt.lastApply.MessageI18n.Params["cause"])
+		t.Fatalf("cause: %#v", rt.mon.lastApply.MessageI18n.Params["cause"])
 	}
 
 	rt.removeAudit = func(*AuditGlobals) error { return nil }
 	rt.removeRule()
-	checkCoded(t, "removed", rt.lastApply.MessageI18n, "apply.none_removed", "no rule is assigned; the audit rules were removed")
+	checkCoded(t, "removed", rt.mon.lastApply.MessageI18n, "apply.none_removed", "no rule is assigned; the audit rules were removed")
 }
 
 // "agent init --overwrite" leaves a pending result with a coded message.
