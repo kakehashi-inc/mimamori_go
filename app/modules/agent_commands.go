@@ -368,8 +368,8 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 // agent ended while they ran) as interrupted. The command that was running
 // gets an interrupted result (the central keeps a result already reported
 // for its position). The report of a run is queued and the run is recorded
-// as finished in one transaction, so that a run is never reported twice nor
-// finished without its report.
+// as finished in one transaction of the outbox, so that a run is never
+// reported twice nor finished without its report.
 func (rt *AgentRuntime) recoverInterruptedRuns() {
 	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
 	if err != nil {
@@ -398,27 +398,16 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 			}
 			rep.Results = append(rep.Results, res)
 		}
-		item, err := rt.commandReportItem(&ReportRequest{CommandRuns: []CommandRunReport{rep}})
-		if err != nil {
-			rt.logf("failed to queue a command set report: %v", err)
-		}
-		queueFailed := false
-		err = rt.DB.Write(func(tx models.Writer) error {
-			if item != nil {
-				if err := models.InsertOutbox(tx, item); err != nil {
-					queueFailed = true
-					return err
-				}
-			}
+		finishing := false
+		err := rt.out.queueWith(rt.stamped(&ReportRequest{CommandRuns: []CommandRunReport{rep}}), func(tx models.Writer) error {
+			finishing = true
 			return models.FinishCommandExecution(tx, e.RunUID, now)
 		})
 		switch {
-		case err != nil && queueFailed:
-			rt.logf("failed to queue a command set report: %v", err)
-		case err != nil:
+		case err != nil && finishing:
 			rt.logf("recording the end of run %s failed: %v", e.RunUID, err)
-		case item != nil:
-			rt.enforceCommandOutboxLimit()
+		case err != nil:
+			rt.logf("failed to queue a command set report: %v", err)
 		}
 		rt.logf("command set run %s was interrupted (the agent ended while it ran)", e.RunUID)
 	}
@@ -440,138 +429,16 @@ func (rt *AgentRuntime) findCommandSet(id int64) *CommandSetDef {
 // queueCommandReport queues a report about command sets in the outbox; it is
 // sent with the next report.
 func (rt *AgentRuntime) queueCommandReport(req *ReportRequest) {
-	item, err := rt.commandReportItem(req)
-	if err != nil {
+	if err := rt.out.queue(rt.stamped(req)); err != nil {
 		rt.logf("failed to queue a command set report: %v", err)
-		return
 	}
-	if err := rt.DB.Write(func(tx models.Writer) error { return models.InsertOutbox(tx, item) }); err != nil {
-		rt.logf("failed to queue a command set report: %v", err)
-		return
-	}
-	rt.enforceCommandOutboxLimit()
 }
 
-// commandReportItem stamps a report about command sets with the current time
-// and returns the outbox row that queues it.
-func (rt *AgentRuntime) commandReportItem(req *ReportRequest) (*models.OutboxItem, error) {
+// stamped sets the creation time of a report about command sets to the
+// agent's current time and returns it.
+func (rt *AgentRuntime) stamped(req *ReportRequest) *ReportRequest {
 	req.CreatedAt = rt.now().Unix()
-	b, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	return &models.OutboxItem{Payload: string(b), CommandBytes: commandBytesOf(req, len(b))}, nil
-}
-
-// commandBytesOf is the size counted against the outbox limit of command set
-// reports: the payload size when the report carries runs.
-func commandBytesOf(req *ReportRequest, size int) int64 {
-	if len(req.CommandRuns) == 0 {
-		return 0
-	}
-	return int64(size)
-}
-
-// enforceCommandOutboxLimit keeps the queued command set reports under
-// MaxOutboxCommandBytes. Oldest first, it drops the console output of
-// run_only sets, then of collect_output sets (their values are kept, the
-// results are marked truncated), then the reports of commands that do not
-// close a run, and last the closing reports.
-//
-// The total is checked on the read side first (it is under the limit on
-// almost every report); the rows are then listed and rewritten in one
-// transaction.
-func (rt *AgentRuntime) enforceCommandOutboxLimit() {
-	limit := int64(MaxOutboxCommandBytes)
-	if rt.cmdOutboxLimit > 0 {
-		limit = rt.cmdOutboxLimit
-	}
-	if models.OutboxCommandBytes(rt.DB.Read()) <= limit {
-		return
-	}
-	over, dropped := false, 0
-	err := rt.DB.Write(func(tx models.Writer) error {
-		over, dropped = false, 0
-		total := models.OutboxCommandBytes(tx)
-		if total <= limit {
-			return nil
-		}
-		over = true
-		items, err := models.ListOutbox(tx)
-		if err != nil {
-			return err
-		}
-		for pass := 0; pass < 4 && total > limit; pass++ {
-			for _, it := range items {
-				if total <= limit {
-					break
-				}
-				if it.CommandBytes == 0 {
-					continue
-				}
-				var req ReportRequest
-				if json.Unmarshal([]byte(it.Payload), &req) != nil {
-					continue
-				}
-				changed := false
-				kept := req.CommandRuns[:0]
-				for _, run := range req.CommandRuns {
-					switch pass {
-					case 0, 1:
-						if (pass == 0) != (run.Purpose == PurposeRunOnly) {
-							break
-						}
-						for j := range run.Results {
-							if len(run.Results[j].Output) > 0 {
-								run.Results[j].Output = nil
-								run.Results[j].Truncated = true
-								changed = true
-							}
-						}
-					case 2, 3:
-						if (pass == 3) == run.Finished {
-							changed = true
-							dropped++
-							continue
-						}
-					}
-					kept = append(kept, run)
-				}
-				req.CommandRuns = kept
-				if !changed {
-					continue
-				}
-				if len(req.CommandRuns) == 0 && len(req.Detections) == 0 && len(req.CommandRequestAcks) == 0 &&
-					req.CommandApply == nil && req.Dropped == 0 && req.HostInfo == nil && req.Apply == nil {
-					if err := models.DeleteOutbox(tx, it.ID); err != nil {
-						return err
-					}
-					total -= it.CommandBytes
-					it.CommandBytes = 0
-					continue
-				}
-				b, err := json.Marshal(&req)
-				if err != nil {
-					continue
-				}
-				nb := commandBytesOf(&req, len(b))
-				total -= it.CommandBytes - nb
-				it.Payload, it.CommandBytes = string(b), nb
-				if err := models.UpdateOutbox(tx, it); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil || !over {
-		return
-	}
-	if dropped > 0 {
-		rt.logf("report storage limit reached: dropped %d command set report(s)", dropped)
-	} else {
-		rt.logf("report storage limit reached: dropped the console output of queued command set results")
-	}
+	return req
 }
 
 // pruneCommandExecutions removes old records of finished runs.

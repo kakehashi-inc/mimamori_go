@@ -184,10 +184,11 @@ func setLocalState(t testing.TB, db *DB, key, value string) {
 	}
 }
 
-// queueReport queues req in the outbox the way a report does, in a write
-// transaction of its own.
+// queueReport queues req in the outbox the way the report of a monitoring
+// step does.
 func queueReport(rt *AgentRuntime, req *ReportRequest) error {
-	return rt.DB.Write(func(tx models.Writer) error { return enqueue(tx, req) })
+	_, err := rt.out.queuePeriodic(req)
+	return err
 }
 
 func TestEnqueueKeepsOneHostInfo(t *testing.T) {
@@ -209,7 +210,8 @@ func TestEnqueueKeepsOneHostInfo(t *testing.T) {
 		t.Fatalf("a report with another application result must be kept: %d rows", n)
 	}
 	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2, Detections: []DetectionReport{{Type: TypeExec, Category: CategoryAlert}}})
-	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2, Dropped: 3})
+	setLocalState(t, rt.DB, stateDroppedPending, "3")
+	_ = queueReport(rt, &ReportRequest{HostInfo: hi, Apply: v2})
 	items, _ := models.ListOutbox(rt.DB.Read())
 	var withHost, withDetections, withDropped int
 	for _, it := range items {

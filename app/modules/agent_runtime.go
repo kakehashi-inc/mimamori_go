@@ -86,13 +86,13 @@ type AgentRuntime struct {
 	cmdValid    map[int64]*CommandSetDef
 	cmdRequests []CommandRunRequest
 	cmdAcked    map[int64]bool
-	// clock, loc, cmdKillGrace and cmdOutboxLimit replace the time, the
-	// host's time zone, the grace before SIGKILL and MaxOutboxCommandBytes
-	// in tests.
-	clock          func() time.Time
-	loc            *time.Location
-	cmdKillGrace   time.Duration
-	cmdOutboxLimit int64
+	// out is the outbox, the only owner of the queued reports.
+	out *outbox
+	// clock, loc and cmdKillGrace replace the time, the host's time zone and
+	// the grace before SIGKILL in tests.
+	clock        func() time.Time
+	loc          *time.Location
+	cmdKillGrace time.Duration
 	// scanLimit replaces MaxScanEntries and removeAudit replaces
 	// RemoveAuditRules in tests.
 	scanLimit   int
@@ -103,6 +103,7 @@ type AgentRuntime struct {
 func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
 	rt := &AgentRuntime{DB: db, Transport: tr, Logger: logger,
 		defaultInterval: DefaultCheckIntervalSec, cmdValid: map[int64]*CommandSetDef{}, cmdAcked: map[int64]bool{}}
+	rt.out = newOutbox(db, rt.logf)
 	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
@@ -263,7 +264,16 @@ func (rt *AgentRuntime) monitorStep() {
 }
 
 func (rt *AgentRuntime) sync() {
-	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.lastApply, CommandSig: rt.commandSignature()}
+	running, err := rt.runningRequests()
+	if err != nil {
+		// Without the list the central could take a running request for
+		// ended; the sync is left out and the step goes on as after a failed
+		// sync.
+		rt.logf("sync: reading the running command set runs failed: %v", err)
+		return
+	}
+	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.lastApply, CommandSig: rt.commandSignature(),
+		RunningRequests: running}
 	if rt.rule != nil {
 		req.RuleID, req.RuleVersion = rt.rule.ID, rt.rule.Version
 	}
@@ -306,6 +316,22 @@ func (rt *AgentRuntime) sync() {
 		resp.Rule.Content.Normalize()
 		rt.applyRule(resp.Rule, false)
 	}
+}
+
+// runningRequests returns the request IDs of the manual runs that were
+// started and are not finished, from the local database (never nil).
+func (rt *AgentRuntime) runningRequests() ([]int64, error) {
+	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
+	if err != nil {
+		return nil, err
+	}
+	ids := []int64{}
+	for _, e := range runs {
+		if e.RequestID > 0 {
+			ids = append(ids, e.RequestID)
+		}
+	}
+	return ids, nil
 }
 
 func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
@@ -1020,172 +1046,22 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	}
 
 	// The dropped count is read, reported in the queued report and reset in
-	// one transaction, so that a count is neither lost nor reported twice.
-	createdAt := time.Now().Unix()
-	err := rt.DB.Write(func(tx models.Writer) error {
-		dropped, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
-		req := &ReportRequest{CreatedAt: createdAt, Detections: detections, HostInfo: hi, Apply: rt.lastApply, Dropped: dropped}
-		if err := enqueue(tx, req); err != nil {
-			return err
-		}
-		return models.SetLocalState(tx, stateDroppedPending, "0")
-	})
+	// the outbox's one transaction, so that a count is neither lost nor
+	// reported twice.
+	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.lastApply}
+	dropped, err := rt.out.queuePeriodic(req)
 	if err != nil {
 		rt.logf("failed to queue the report: %v", err)
 		return
 	}
-	rt.enforceOutboxLimit()
+	if dropped > 0 {
+		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
+	}
 	rt.flushOutbox()
 }
 
-func countCategories(ds []DetectionReport) (alerts, normals int) {
-	for _, d := range ds {
-		if d.Category == CategoryAlert {
-			alerts++
-		} else {
-			normals++
-		}
-	}
-	return
-}
-
-// enqueue stores a report. Only the newest report needs the host
-// information, so it is removed from the queued ones, and a queued report
-// with nothing else to deliver (no detections, no dropped count, nothing
-// about command sets and the same application result as the new one) is
-// replaced by the new report.
-//
-// It runs inside the write transaction tx, which also lists the queued
-// reports it rewrites.
-func enqueue(tx models.Writer, req *ReportRequest) error {
-	b, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	apply, _ := json.Marshal(req.Apply)
-	items, err := models.ListOutbox(tx)
-	if err != nil {
-		return err
-	}
-	for _, it := range items {
-		var old ReportRequest
-		if json.Unmarshal([]byte(it.Payload), &old) != nil {
-			continue
-		}
-		oldApply, _ := json.Marshal(old.Apply)
-		if len(old.Detections) == 0 && old.Dropped == 0 && string(oldApply) == string(apply) &&
-			len(old.CommandRuns) == 0 && len(old.CommandRequestAcks) == 0 && old.CommandApply == nil {
-			if err := models.DeleteOutbox(tx, it.ID); err != nil {
-				return err
-			}
-			continue
-		}
-		if old.HostInfo != nil {
-			old.HostInfo = nil
-			ob, err := json.Marshal(&old)
-			if err != nil {
-				return err
-			}
-			it.Payload = string(ob)
-			it.CommandBytes = commandBytesOf(&old, len(ob))
-			if err := models.UpdateOutbox(tx, it); err != nil {
-				return err
-			}
-		}
-	}
-	a, n := countCategories(req.Detections)
-	return models.InsertOutbox(tx, &models.OutboxItem{Payload: string(b), AlertCount: a, NormalCount: n})
-}
-
-// enforceOutboxLimit keeps the stored detections under the limit by dropping
-// normal detections oldest first (then alerts oldest first if still needed)
-// and remembers how many were dropped so the count is reported.
-//
-// The total is checked on the read side first (it is under the limit on
-// almost every report); the rows are then listed, rewritten and the count
-// stored in one transaction.
-func (rt *AgentRuntime) enforceOutboxLimit() {
-	if models.OutboxDetectionCount(rt.DB.Read()) <= DefaultOutboxMaxDetection {
-		return
-	}
-	dropped := 0
-	err := rt.DB.Write(func(tx models.Writer) error {
-		dropped = 0
-		total := models.OutboxDetectionCount(tx)
-		if total <= DefaultOutboxMaxDetection {
-			return nil
-		}
-		excess := total - DefaultOutboxMaxDetection
-		items, err := models.ListOutbox(tx)
-		if err != nil {
-			return err
-		}
-		for _, pass := range []string{CategoryNormal, CategoryAlert} {
-			for _, it := range items {
-				if excess <= 0 {
-					break
-				}
-				var req ReportRequest
-				if json.Unmarshal([]byte(it.Payload), &req) != nil {
-					continue
-				}
-				kept := req.Detections[:0]
-				for _, d := range req.Detections {
-					isPass := (pass == CategoryAlert && d.Category == CategoryAlert) || (pass == CategoryNormal && d.Category != CategoryAlert)
-					if excess > 0 && isPass {
-						excess--
-						dropped++
-						continue
-					}
-					kept = append(kept, d)
-				}
-				req.Detections = kept
-				b, _ := json.Marshal(&req)
-				it.Payload = string(b)
-				it.CommandBytes = commandBytesOf(&req, len(b))
-				it.AlertCount, it.NormalCount = countCategories(kept)
-				if err := models.UpdateOutbox(tx, it); err != nil {
-					return err
-				}
-			}
-		}
-		if dropped == 0 {
-			return nil
-		}
-		prev, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
-		return models.SetLocalState(tx, stateDroppedPending, strconv.Itoa(prev+dropped))
-	})
-	if err == nil && dropped > 0 {
-		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
-	}
-}
-
-// flushOutbox sends queued reports in order and stops at the first failure.
-// The queue is listed on the read side; each report is deleted by its ID in
-// a transaction of its own after the central took it (the request to the
-// central is never made inside a transaction).
+// flushOutbox sends the queued reports (see outbox.flush); a failure is
+// logged as a failed report.
 func (rt *AgentRuntime) flushOutbox() {
-	items, err := models.ListOutbox(rt.DB.Read())
-	if err != nil {
-		return
-	}
-	deleteItem := func(id int64) {
-		_ = rt.DB.Write(func(tx models.Writer) error { return models.DeleteOutbox(tx, id) })
-	}
-	for i, it := range items {
-		var req ReportRequest
-		if err := json.Unmarshal([]byte(it.Payload), &req); err != nil {
-			deleteItem(it.ID)
-			continue
-		}
-		// Only the newest report needs the host information.
-		if i < len(items)-1 {
-			req.HostInfo = nil
-		}
-		if err := rt.Transport.Report(&req); err != nil {
-			rt.logConnectionError("report", err)
-			return
-		}
-		deleteItem(it.ID)
-	}
+	rt.out.flush(rt.Transport, func(err error) { rt.logConnectionError("report", err) })
 }

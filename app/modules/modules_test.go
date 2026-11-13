@@ -257,7 +257,6 @@ func TestOutboxKeepsReportsAndDropsNormalFirst(t *testing.T) {
 	mkReport(CategoryNormal, DefaultOutboxMaxDetection/2)
 	mkReport(CategoryAlert, DefaultOutboxMaxDetection/2)
 	mkReport(CategoryAlert, 10)
-	rt.enforceOutboxLimit()
 	if n := models.OutboxDetectionCount(db.Read()); n != DefaultOutboxMaxDetection {
 		t.Fatalf("outbox size %d", n)
 	}

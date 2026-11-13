@@ -54,6 +54,12 @@ type SyncRequest struct {
 	// CommandSig is the signature of the command set definitions the agent
 	// holds ("" when it holds none).
 	CommandSig string `json:"command_sig"`
+	// RunningRequests are the request IDs of the manual runs the agent has
+	// started and not finished (its command_executions with request_id >
+	// 0), read when the request is built. Always a list, empty when nothing
+	// runs, so that a central can tell it from an agent that does not send
+	// it.
+	RunningRequests []int64 `json:"running_requests"`
 }
 
 // RuleAssignment is the rule version assigned to an agent.
@@ -102,6 +108,12 @@ type DetectionReport struct {
 
 // ReportRequest is sent at the end of every cycle (or later from the outbox).
 type ReportRequest struct {
+	// ReportID is the identity of the report: 32 lowercase hexadecimal
+	// characters (16 random bytes), made when the report is first written
+	// to the agent's outbox, different for every row there, and kept with
+	// the row when a limit rewrites it, when it is sent again and over a
+	// restart of the agent. A report sent again carries the same ID.
+	ReportID   string            `json:"report_id,omitempty"`
 	CreatedAt  int64             `json:"created_at"`
 	Detections []DetectionReport `json:"detections"`
 	HostInfo   *HostInfo         `json:"host_info,omitempty"`

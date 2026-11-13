@@ -15,10 +15,12 @@ import (
 // answers with resp (definitions only when the signature differs) and
 // reports are recorded.
 type cmdTransport struct {
-	resp    SyncResponse
-	syncs   int
-	reports []*ReportRequest
-	onSync  func(n int)
+	resp  SyncResponse
+	syncs int
+	// syncReqs records every sync request as it was sent.
+	syncReqs []SyncRequest
+	reports  []*ReportRequest
+	onSync   func(n int)
 	// failReports makes every report fail; attempts records when reports
 	// were attempted.
 	failReports bool
@@ -27,6 +29,7 @@ type cmdTransport struct {
 
 func (f *cmdTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 	f.syncs++
+	f.syncReqs = append(f.syncReqs, *req)
 	if f.onSync != nil {
 		f.onSync(f.syncs)
 	}
@@ -606,7 +609,7 @@ func TestCommandOutbox(t *testing.T) {
 		return &ReportRequest{CommandRuns: []CommandRunReport{{RunUID: purpose, Purpose: purpose, Finished: finished,
 			Results: []CommandResultReport{{Output: []byte(big), OutputBytes: 4000}}}}}
 	}
-	rt.cmdOutboxLimit = 1 << 30
+	rt.out.limit = 1 << 30
 	rt.queueCommandReport(mk(PurposeCollectOutput, false))
 	rt.queueCommandReport(mk(PurposeRunOnly, false))
 	rt.queueCommandReport(&ReportRequest{CommandRequestAcks: []CommandRequestAck{{RequestID: 1, Status: RequestAckStarted}}})
@@ -619,14 +622,16 @@ func TestCommandOutbox(t *testing.T) {
 	}
 	// Over the limit: the output of run_only sets goes first.
 	total := models.OutboxCommandBytes(rt.DB.Read())
-	rt.cmdOutboxLimit = total - 1000
-	rt.enforceCommandOutboxLimit()
+	rt.out.limit = total - 1000
+	if err := rt.DB.Write(func(tx models.Writer) error { _, _, err := rt.out.applyCommandLimit(tx); return err }); err != nil {
+		t.Fatal(err)
+	}
 	runs := runReports(queuedReports(t, rt))
 	if len(runs[0].Results[0].Output) == 0 || len(runs[1].Results[0].Output) != 0 || !runs[1].Results[0].Truncated {
 		t.Fatalf("run_only output must be dropped first: %+v", runs)
 	}
 	// Far over the limit: outputs, then whole reports, oldest first.
-	rt.cmdOutboxLimit = 10
+	rt.out.limit = 10
 	rt.queueCommandReport(mk(PurposeCollectOutput, true))
 	if b := models.OutboxCommandBytes(rt.DB.Read()); b > 10 {
 		t.Fatalf("the limit must hold: %d", b)

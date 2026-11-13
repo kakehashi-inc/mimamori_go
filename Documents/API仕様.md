@@ -657,6 +657,7 @@ interface SyncRequest {
   ca_fingerprints: string[];               // 信頼している独自 CA の SHA-256 フィンガープリント
   last_apply: ApplyResult | null;          // 最後の適用の結果
   command_sig: string;                     // 保持しているコマンドセットの定義の署名（無ければ ""）
+  running_requests: number[];              // 開始して終わっていない手動の実行の指示の ID（無ければ []。null にはしない）。現在のセントラルは使わない
 }
 interface RuleAssignment { id: number; name: string; version: number; content: RuleContent }   // RuleContent は 6 章
 interface TokenRenewal { token: string; expires_at: number }
@@ -689,6 +690,7 @@ interface DetectionReport {
   file_ctime?: number; file_owner?: string; file_mode?: string;   // writable と exec_file の検知
 }
 interface ReportRequest {
+  report_id?: string;                  // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の報告に入れたときに作り、送り直しても変わらない。現在のセントラルは使わない
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
   host_info?: HostInfo;                // 4 章の HostInfo と同じ項目に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
