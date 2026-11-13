@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"mimamori/app/models"
@@ -30,41 +31,66 @@ func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *
 	if err != nil {
 		return err
 	}
-	sig, err := modules.TargetCommandSignature(tdb)
+	sig, err := modules.TargetCommandSignature(tdb.Read())
 	if err != nil {
 		return err
 	}
 	if sig != req.CommandSig {
-		defs, err := modules.LoadCommandDefinitions(tdb)
+		defs, err := modules.LoadCommandDefinitions(tdb.Read())
 		if err != nil {
 			return err
 		}
 		resp.CommandSets = defs
 	}
-	reqs, err := models.ListActiveCommandRequests(tdb)
+	reqs, err := models.ListActiveCommandRequests(tdb.Read())
 	if err != nil {
 		return err
+	}
+	if slices.ContainsFunc(reqs, func(r *models.CommandRequest) bool { return deliverable(r, now) }) {
+		// Something is to be marked delivered: the list is read again in
+		// the transaction that marks it, so a request discarded or expired
+		// meanwhile is not delivered.
+		err = tdb.Write(func(tx models.Writer) error {
+			list, err := models.ListActiveCommandRequests(tx)
+			if err != nil {
+				return err
+			}
+			reqs = reqs[:0]
+			for _, r := range list {
+				if r.State == models.RequestPending {
+					if !deliverable(r, now) {
+						continue
+					}
+					if err := models.MarkCommandRequestDelivered(tx, r.ID, now); err != nil {
+						return err
+					}
+				}
+				reqs = append(reqs, r)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 	}
 	for _, r := range reqs {
 		// A pending request past its expiry is ended by the periodic task;
 		// a delivered one is delivered again until the agent answers it
 		// (the agent runs a request at most once and answers it again).
-		if r.State == models.RequestPending {
-			if r.ExpiresAt <= now {
-				continue
-			}
-			if err := models.MarkCommandRequestDelivered(tdb, r.ID, now); errors.Is(err, sql.ErrNoRows) {
-				// Discarded or expired after it was listed: not delivered.
-				continue
-			} else if err != nil {
-				return err
-			}
+		if r.State == models.RequestPending && !deliverable(r, now) {
+			continue
 		}
 		resp.CommandRequests = append(resp.CommandRequests, modules.CommandRunRequest{
 			ID: r.ID, SetID: r.SetID, RequestedAt: r.RequestedAt, ExpiresAt: r.ExpiresAt,
 		})
 	}
 	return nil
+}
+
+// deliverable reports whether a run request is waiting to be delivered and
+// not past its expiry.
+func deliverable(r *models.CommandRequest, now int64) bool {
+	return r.State == models.RequestPending && r.ExpiresAt > now
 }
 
 // validResultKind reports whether k is one of the three result kinds.
@@ -77,8 +103,11 @@ func validResultKind(k string) bool {
 // repeats its start values, so the run is created from whichever arrives
 // first; results are stored once per (run, position) and a run is closed
 // once. Runs of sets the database does not have (a recreated database) are
-// skipped.
-func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []modules.CommandRunReport, now int64) error {
+// skipped and returned, so that the caller logs them after the transaction
+// (the agent's name is read from the central database, which a transaction
+// on the target database does not touch).
+func storeCommandRuns(tx models.Writer, runs []modules.CommandRunReport, now int64) ([]ignoredRun, error) {
+	var ignored []ignoredRun
 	for i := range runs {
 		rep := &runs[i]
 		if rep.RunUID == "" || len(rep.RunUID) > 128 {
@@ -86,10 +115,10 @@ func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []mo
 		}
 		set, err := models.GetCommandSet(tx, rep.SetID)
 		if errors.Is(err, sql.ErrNoRows) {
-			c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), rep.RunUID, rep.SetID)
+			ignored = append(ignored, ignoredRun{runUID: rep.RunUID, setID: rep.SetID})
 			continue
 		} else if err != nil {
-			return err
+			return nil, err
 		}
 		row := modules.CommandRunRow(rep)
 		// A run the agent found interrupted at its start may come without
@@ -105,11 +134,11 @@ func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []mo
 		}
 		run, _, err := models.EnsureCommandRun(tx, row, now)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if run.RequestID > 0 {
 			if err := models.MarkCommandRequestDone(tx, run.RequestID, run.RunUID, now); err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
+				return nil, err
 			}
 		}
 		for j := range rep.Results {
@@ -121,12 +150,12 @@ func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []mo
 				res.Kind, res.Reason = modules.ResultError, truncate(res.Reason, 64)
 			}
 			if _, err := models.InsertCommandResult(tx, modules.CommandResultRow(run.ID, res)); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if !rep.Finished {
 			if err := models.TouchCommandRun(tx, run.ID, now); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
@@ -134,7 +163,7 @@ func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []mo
 		if !validResultKind(state) {
 			kinds, err := models.CommandResultKinds(tx, run.ID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if state = modules.RunState(kinds); state == "" {
 				state = modules.ResultError
@@ -151,10 +180,17 @@ func (c *core) storeCommandRuns(tx models.Writer, agent *models.Agent, runs []mo
 		}
 		err = models.FinishCommandRun(tx, run.ID, state, truncate(rep.Reason, 64), finishedAt, display, truncated, now)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return ignored, nil
+}
+
+// ignoredRun is a run of a report whose command set the target database
+// does not have.
+type ignoredRun struct {
+	runUID string
+	setID  int64
 }
 
 // endedRequest is a run request the agent answered without running it.
@@ -294,7 +330,11 @@ func (c *core) expireCommandRequests(now time.Time) {
 		if err != nil {
 			continue
 		}
-		list, err := models.ExpireCommandRequests(tdb, now.Unix())
+		var list []*models.CommandRequest
+		err = tdb.Write(func(tx models.Writer) error {
+			list, err = models.ExpireCommandRequests(tx, now.Unix())
+			return err
+		})
 		if err != nil {
 			c.logger.Printf("command requests of %s: %v", c.agentDisplayName(a), err)
 			continue
@@ -306,37 +346,35 @@ func (c *core) expireCommandRequests(now time.Time) {
 	}
 }
 
-// commandRetention removes the runs of a target older than cut (also the
-// last run of a set), the finished runs of every set beyond its keep count,
-// and the ended run requests older than cut.
-func (c *core) commandRetention(a *models.Agent, tdb *sql.DB, cut int64) {
-	removed, err := models.DeleteCommandRunsBefore(tdb, cut)
+// commandRetention removes, inside a transaction of a target database, the
+// runs older than cut (also the last run of a set), the finished runs of
+// every set beyond its keep count, and the ended run requests older than
+// cut. It returns the number of runs removed; on an error it stops and
+// returns what it removed so far with the error.
+func commandRetention(tx models.Writer, cut int64) (int64, error) {
+	removed, err := models.DeleteCommandRunsBefore(tx, cut)
 	if err != nil {
-		c.logger.Printf("retention of command runs of %s: %v", c.agentDisplayName(a), err)
-		return
+		return 0, err
 	}
-	sets, err := models.ListCommandSets(tdb)
+	sets, err := models.ListCommandSets(tx)
 	if err != nil {
-		return
+		return removed, nil
 	}
 	for _, s := range sets {
-		n, err := models.DeleteCommandRunsBeyondKeep(tdb, s.ID, s.KeepRuns)
+		n, err := models.DeleteCommandRunsBeyondKeep(tx, s.ID, s.KeepRuns)
 		if err != nil {
-			c.logger.Printf("retention of command runs of %s: %v", c.agentDisplayName(a), err)
-			return
+			return removed, err
 		}
 		removed += n
 	}
-	if removed > 0 {
-		c.logger.Printf("retention: removed %d command run(s) of %s", removed, c.agentDisplayName(a))
-	}
-	_, _ = models.DeleteEndedCommandRequestsBefore(tdb, cut)
+	_, _ = models.DeleteEndedCommandRequestsBefore(tx, cut)
+	return removed, nil
 }
 
 // commandTarget names a set for the history: "<agent> / <set name>", or
 // "<agent> / set <id>" when the set no longer exists.
-func (c *core) commandTarget(a *models.Agent, tdb *sql.DB, setID int64) modules.Msg {
-	if s, err := models.GetCommandSet(tdb, setID); err == nil {
+func (c *core) commandTarget(a *models.Agent, tdb *modules.DB, setID int64) modules.Msg {
+	if s, err := models.GetCommandSet(tdb.Read(), setID); err == nil {
 		return modules.Raw(c.agentDisplayName(a) + " / " + s.Name)
 	}
 	return modules.M("history.target.command_set", "agent", c.agentDisplayName(a),

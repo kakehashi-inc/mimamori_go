@@ -52,7 +52,7 @@ func TestNotificationNotComposedWhileUnsent(t *testing.T) {
 		t.Fatalf("a second mail was composed while one is undelivered: %d unsent", len(list))
 	}
 	tdb, _ := e.c.targetDB(b)
-	if pending, _ := models.ListPendingNotify(tdb); len(pending) != 1 {
+	if pending, _ := models.ListPendingNotify(tdb.Read()); len(pending) != 1 {
 		t.Fatalf("the new detection must wait for the next mail: %d pending", len(pending))
 	}
 }
@@ -190,13 +190,13 @@ func TestSuppressionKeepsConcurrentOccurrences(t *testing.T) {
 	_ = tr.Report(rep)
 	tdb, _ := e.c.targetDB(b)
 	f := false
-	stale, _, _ := models.ListDetections(tdb, models.DetectionFilter{Suppressed: &f}, 10)
+	stale, _, _ := models.ListDetections(tdb.Read(), models.DetectionFilter{Suppressed: &f}, 10)
 	rep.Detections[0].LastAt = 200
 	_ = tr.Report(rep)
-	if err := models.MarkDetectionSuppressed(tdb, stale[0].ID, 7); err != nil {
+	if err := tdb.Write(func(tx models.Writer) error { return models.MarkDetectionSuppressed(tx, stale[0].ID, 7) }); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := models.GetDetection(tdb, stale[0].ID)
+	d, _ := models.GetDetection(tdb.Read(), stale[0].ID)
 	if !d.Suppressed || d.SuppressionID != 7 || d.Count != 2 || d.LastAt != 200 || d.NotifyState != models.NotifySkipped {
 		t.Fatalf("detection after suppression: %+v", d)
 	}

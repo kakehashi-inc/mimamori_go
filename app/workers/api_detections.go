@@ -130,7 +130,7 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 			c.logger.Printf("target database of agent %d: %v", a.ID, err)
 			continue
 		}
-		list, n, err := models.ListDetections(tdb, f, offset+limit)
+		list, n, err := models.ListDetections(tdb.Read(), f, offset+limit)
 		if err != nil {
 			c.internalError(w, r, err)
 			return
@@ -165,7 +165,7 @@ func (c *core) handleGetDetection(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	d, err := models.GetDetection(tdb, id)
+	d, err := models.GetDetection(tdb.Read(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, modules.M("detection.not_found"))
 		return
@@ -201,7 +201,11 @@ func (c *core) handleAckDetections(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		ok, err := models.AcknowledgeDetection(tdb, it.ID, p.operator(), now)
+		var ok bool
+		err = tdb.Write(func(tx models.Writer) error {
+			ok, err = models.AcknowledgeDetection(tx, it.ID, p.operator(), now)
+			return err
+		})
 		if err != nil {
 			c.internalError(w, r, err)
 			return
@@ -368,17 +372,26 @@ func (c *core) applySuppression(s *models.Suppression) int {
 		if err != nil {
 			continue
 		}
-		list, _, err := models.ListDetections(tdb, models.DetectionFilter{Acknowledged: &f, Suppressed: &f}, 100000)
-		if err != nil {
-			continue
-		}
-		for _, d := range list {
-			if !matchSuppression(s, a.ID, d.Type, d.OSUser, d.Exe, d.Target) {
-				continue
+		// The detections are listed and marked in one transaction, so a
+		// detection acknowledged meanwhile is not marked.
+		marked := 0
+		err = tdb.Write(func(tx models.Writer) error {
+			list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &f}, 100000)
+			if err != nil {
+				return err
 			}
-			if models.MarkDetectionSuppressed(tdb, d.ID, s.ID) == nil {
-				n++
+			for _, d := range list {
+				if !matchSuppression(s, a.ID, d.Type, d.OSUser, d.Exe, d.Target) {
+					continue
+				}
+				if models.MarkDetectionSuppressed(tx, d.ID, s.ID) == nil {
+					marked++
+				}
 			}
+			return nil
+		})
+		if err == nil {
+			n += marked
 		}
 	}
 	return n
@@ -424,40 +437,38 @@ func (c *core) releaseSuppression(s *models.Suppression) int {
 
 // releaseSuppressionOf does releaseSuppression for the detections of one
 // target, in one transaction.
-func (c *core) releaseSuppressionOf(tdb *sql.DB, agentID, suppressionID int64, sups []*models.Suppression) (int, error) {
-	tx, err := tdb.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	t, f := true, false
-	list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &t}, 100000)
-	if err != nil {
-		return 0, err
-	}
+func (c *core) releaseSuppressionOf(tdb *modules.DB, agentID, suppressionID int64, sups []*models.Suppression) (int, error) {
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
 	n := 0
-	for _, d := range list {
-		if d.SuppressionID != suppressionID {
-			continue
+	err := tdb.Write(func(tx models.Writer) error {
+		t, f := true, false
+		list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &t}, 100000)
+		if err != nil {
+			return err
 		}
-		if other := findSuppression(sups, agentID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
-			if err := models.MoveDetectionSuppression(tx, d.ID, suppressionID, other.ID); err != nil {
-				return 0, err
+		for _, d := range list {
+			if d.SuppressionID != suppressionID {
+				continue
 			}
-			continue
+			if other := findSuppression(sups, agentID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
+				if err := models.MoveDetectionSuppression(tx, d.ID, suppressionID, other.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			state := d.NotifyState
+			if state == models.NotifySkipped && now-models.LastNotifiedAt(tx, d.Fingerprint) >= dedupe {
+				state = models.NotifyPending
+			}
+			if err := models.ReleaseDetectionSuppression(tx, d.ID, suppressionID, state); err != nil {
+				return err
+			}
+			n++
 		}
-		state := d.NotifyState
-		if state == models.NotifySkipped && now-models.LastNotifiedAt(tx, d.Fingerprint) >= dedupe {
-			state = models.NotifyPending
-		}
-		if err := models.ReleaseDetectionSuppression(tx, d.ID, suppressionID, state); err != nil {
-			return 0, err
-		}
-		n++
-	}
-	if err := tx.Commit(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -625,7 +636,7 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 	unacked := 0
 	for _, a := range agents {
 		if tdb, err := c.targetDB(a); err == nil {
-			n, _ := models.CountUnackedAlerts(tdb)
+			n, _ := models.CountUnackedAlerts(tdb.Read())
 			unacked += n
 		}
 	}

@@ -239,7 +239,7 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 		}
 	}
 	if tdb, err := c.targetDB(a); err == nil {
-		s.UnackedAlerts, _ = models.CountUnackedAlerts(tdb)
+		s.UnackedAlerts, _ = models.CountUnackedAlerts(tdb.Read())
 	}
 	return s
 }
@@ -307,7 +307,7 @@ func (c *core) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		TokenHistory: []historyJSON{}, DroppedTotal: a.DroppedTotal}
 	var hi *modules.HostInfo
 	if tdb, err := c.targetDB(a); err == nil {
-		if rep, err := models.LatestHostReport(tdb); err == nil {
+		if rep, err := models.LatestHostReport(tdb.Read()); err == nil {
 			var h modules.HostInfo
 			if json.Unmarshal([]byte(rep.HostInfo), &h) == nil {
 				hi = &h

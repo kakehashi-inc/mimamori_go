@@ -1,7 +1,6 @@
 package workers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
@@ -26,7 +25,7 @@ func (e *testEnv) cli(method, path string, body any) *httptest.ResponseRecorder 
 
 // commandAgent issues a token for a fake agent and returns the token value,
 // the agent and its target database.
-func commandAgent(t *testing.T, e *testEnv, name string) (string, *models.Agent, *sql.DB) {
+func commandAgent(t *testing.T, e *testEnv, name string) (string, *models.Agent, *modules.DB) {
 	t.Helper()
 	issued := e.admin("POST", "/tokens", map[string]any{"name": name})
 	tok := issued["value"].(string)
@@ -175,7 +174,7 @@ func TestCommandSetSyncAndHostInfo(t *testing.T) {
 	}
 	sig = resp.CommandSets.Signature
 	// A recreated database (new random value) is noticed.
-	if _, err := tdb.Exec(`UPDATE db_instance SET value = 'recreated'`); err != nil {
+	if err := execTDB(tdb, `UPDATE db_instance SET value = 'recreated'`); err != nil {
 		t.Fatal(err)
 	}
 	if resp = syncAgent(t, e, tok, sig); resp.CommandSets == nil || resp.CommandSets.Signature == sig {
@@ -250,7 +249,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	if len(resp.CommandRequests) != 1 || resp.CommandRequests[0].ID != qid2 || resp.CommandRequests[0].SetID != setID {
 		t.Fatalf("delivered requests: %+v", resp.CommandRequests)
 	}
-	if r, _ := models.GetCommandRequest(tdb, qid2); r.State != models.RequestDelivered || r.DeliveredAt == 0 {
+	if r, _ := models.GetCommandRequest(tdb.Read(), qid2); r.State != models.RequestDelivered || r.DeliveredAt == 0 {
 		t.Fatalf("delivered state: %+v", r)
 	}
 	if rec := e.cli("DELETE", path+"/command-requests/"+itoa64(qid2), nil); rec.Code != 409 {
@@ -263,7 +262,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		CommandRuns:        []modules.CommandRunReport{runReport("run-1", setID, "s", qid2, []modules.CommandResultReport{}, false, "")},
 		CommandRequestAcks: []modules.CommandRequestAck{{RequestID: qid2, Status: modules.RequestAckStarted, RunUID: "run-1", At: 1000}},
 	})
-	if r, _ := models.GetCommandRequest(tdb, qid2); r.State != models.RequestDone || r.RunUID != "run-1" {
+	if r, _ := models.GetCommandRequest(tdb.Read(), qid2); r.State != models.RequestDone || r.RunUID != "run-1" {
 		t.Fatalf("done: %+v", r)
 	}
 	if resp = syncAgent(t, e, tok, sig); len(resp.CommandRequests) != 0 {
@@ -276,7 +275,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		id := int64(q["id"].(float64))
 		syncAgent(t, e, tok, "")
 		reportAgent(t, e, tok, modules.ReportRequest{CommandRequestAcks: []modules.CommandRequestAck{{RequestID: id, Status: status, At: 5}}})
-		if r, _ := models.GetCommandRequest(tdb, id); r.State != models.RequestExpired {
+		if r, _ := models.GetCommandRequest(tdb.Read(), id); r.State != models.RequestExpired {
 			t.Fatalf("%s: %+v", status, r)
 		}
 	}
@@ -284,20 +283,20 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	// not delivered within 24 hours: expired by the periodic task, never delivered
 	q = e.admin("POST", sp+"/run", nil)
 	id := int64(q["id"].(float64))
-	if _, err := tdb.Exec(`UPDATE command_requests SET expires_at = ? WHERE id = ?`, time.Now().Unix()-1, id); err != nil {
+	if err := execTDB(tdb, `UPDATE command_requests SET expires_at = ? WHERE id = ?`, time.Now().Unix()-1, id); err != nil {
 		t.Fatal(err)
 	}
 	if resp = syncAgent(t, e, tok, ""); len(resp.CommandRequests) != 0 {
 		t.Fatalf("expired request delivered: %+v", resp.CommandRequests)
 	}
 	e.c.expireCommandRequests(time.Now())
-	if r, _ := models.GetCommandRequest(tdb, id); r.State != models.RequestExpired {
+	if r, _ := models.GetCommandRequest(tdb.Read(), id); r.State != models.RequestExpired {
 		t.Fatalf("expired: %+v", r)
 	}
 	// Deleting a set discards its request that was not delivered.
 	q = e.admin("POST", sp+"/run", nil)
 	e.admin("DELETE", sp, nil)
-	if r, _ := models.GetCommandRequest(tdb, int64(q["id"].(float64))); r.State != models.RequestDiscarded {
+	if r, _ := models.GetCommandRequest(tdb.Read(), int64(q["id"].(float64))); r.State != models.RequestDiscarded {
 		t.Fatalf("request of a deleted set: %+v", r)
 	}
 	if rec := e.cli("POST", sp+"/run", nil); rec.Code != 404 {
@@ -327,11 +326,11 @@ func TestCommandReportIdempotent(t *testing.T) {
 	for _, rep := range []modules.CommandRunReport{start, r0, r0, start} {
 		reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{rep}})
 	}
-	run, err := models.GetCommandRunByUID(tdb, "u1")
+	run, err := models.GetCommandRunByUID(tdb.Read(), "u1")
 	if err != nil || run.State != models.RunStateRunning || run.Trigger != modules.TriggerSchedule || run.ScheduledFor != 960 {
 		t.Fatalf("running run: %+v %v", run, err)
 	}
-	if res, _ := models.ListCommandResults(tdb, run.ID); len(res) != 1 || string(res[0].Output) != "first\xff" {
+	if res, _ := models.ListCommandResults(tdb.Read(), run.ID); len(res) != 1 || string(res[0].Output) != "first\xff" {
 		t.Fatalf("results once: %+v", res)
 	}
 	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{r1}})
@@ -340,15 +339,15 @@ func TestCommandReportIdempotent(t *testing.T) {
 	again := r1
 	again.State, again.Reason, again.Results = modules.ResultError, modules.ReasonInterrupted, nil
 	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{again, r1}})
-	run, _ = models.GetCommandRunByUID(tdb, "u1")
+	run, _ = models.GetCommandRunByUID(tdb.Read(), "u1")
 	if run.State != modules.ResultFailure || run.Reason != "" || run.FinishedAt != 1010 || !strings.Contains(run.DisplayRows, "1.2") {
 		t.Fatalf("finished run: %+v", run)
 	}
-	if res, _ := models.ListCommandResults(tdb, run.ID); len(res) != 2 {
+	if res, _ := models.ListCommandResults(tdb.Read(), run.ID); len(res) != 2 {
 		t.Fatalf("results: %d", len(res))
 	}
 	var n int
-	_ = tdb.QueryRow(`SELECT COUNT(*) FROM command_runs`).Scan(&n)
+	_ = tdb.Read().QueryRow(`SELECT COUNT(*) FROM command_runs`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("runs: %d", n)
 	}
@@ -356,11 +355,11 @@ func TestCommandReportIdempotent(t *testing.T) {
 	// the database does not know is ignored.
 	only := runReport("u2", setID, "s", 0, []modules.CommandResultReport{result(0, modules.ResultError, 0, "")}, true, "bogus")
 	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{only, runReport("u3", 999, "x", 0, nil, true, "error")}})
-	run2, err := models.GetCommandRunByUID(tdb, "u2")
+	run2, err := models.GetCommandRunByUID(tdb.Read(), "u2")
 	if err != nil || run2.State != modules.ResultError || run2.FinishedAt == 0 {
 		t.Fatalf("run from a final report: %+v %v", run2, err)
 	}
-	if ok, _ := models.CommandRunExists(tdb, "u3"); ok {
+	if ok, _ := models.CommandRunExists(tdb.Read(), "u3"); ok {
 		t.Fatal("run of an unknown set stored")
 	}
 
@@ -384,14 +383,15 @@ func TestCommandRetention(t *testing.T) {
 	old := now - int64(e.c.conf().RetentionDays+1)*86400
 	add := func(uid string, set int64, received, finished int64) {
 		t.Helper()
-		run, _, err := models.EnsureCommandRun(tdb, &models.CommandRun{RunUID: uid, SetID: set, Trigger: "manual", StartedAt: finished}, received)
+		err := tdb.Write(func(tx models.Writer) error {
+			run, _, err := models.EnsureCommandRun(tx, &models.CommandRun{RunUID: uid, SetID: set, Trigger: "manual", StartedAt: finished}, received)
+			if err != nil || finished <= 0 {
+				return err
+			}
+			return models.FinishCommandRun(tx, run.ID, "success", "", finished, "", false, received)
+		})
 		if err != nil {
 			t.Fatal(err)
-		}
-		if finished > 0 {
-			if err := models.FinishCommandRun(tdb, run.ID, "success", "", finished, "", false, received); err != nil {
-				t.Fatal(err)
-			}
 		}
 	}
 	for i := int64(1); i <= 5; i++ {
@@ -400,14 +400,14 @@ func TestCommandRetention(t *testing.T) {
 	add("running", setID, now, 0)
 	add("ancient", oldID, old, old) // the only (last) run of its set
 	for _, st := range []string{"done", "expired", "discarded", "pending"} {
-		if _, err := tdb.Exec(`INSERT INTO command_requests (set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, 'x', ?)`,
+		if err := execTDB(tdb, `INSERT INTO command_requests (set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, 'x', ?)`,
 			oldID, st, old, old+86400); err != nil {
 			t.Fatal(err)
 		}
 	}
 	e.c.retention(time.Now())
 	var uids []string
-	rows, _ := tdb.Query(`SELECT run_uid FROM command_runs ORDER BY run_uid`)
+	rows, _ := tdb.Read().Query(`SELECT run_uid FROM command_runs ORDER BY run_uid`)
 	for rows.Next() {
 		var u string
 		_ = rows.Scan(&u)
@@ -418,7 +418,7 @@ func TestCommandRetention(t *testing.T) {
 		t.Fatalf("runs after retention: %v", uids)
 	}
 	var states []string
-	rows, _ = tdb.Query(`SELECT state FROM command_requests`)
+	rows, _ = tdb.Read().Query(`SELECT state FROM command_requests`)
 	for rows.Next() {
 		var s string
 		_ = rows.Scan(&s)
@@ -584,7 +584,7 @@ func TestCommandResultsPermissions(t *testing.T) {
 	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{
 		runReport("v1", setID, "disk", 0, []modules.CommandResultReport{result(0, modules.ResultSuccess, 0, "out0"), result(1, modules.ResultSuccess, 0, "out1")}, true, modules.ResultSuccess),
 	}})
-	run, _ := models.GetCommandRunByUID(e.mustTDB(a), "v1")
+	run, _ := models.GetCommandRunByUID(e.mustTDB(a).Read(), "v1")
 	viewer := newViewer(t, e)
 	admin := login(t, e, testAdminEmail, "Admin-pass-123")
 
@@ -719,7 +719,16 @@ func TestCommandSetBrowserAdministrator(t *testing.T) {
 	}
 }
 
-func (e *testEnv) mustTDB(a *models.Agent) *sql.DB {
+// execTDB runs one statement of a test in a write transaction of a target
+// database.
+func execTDB(tdb *modules.DB, query string, args ...any) error {
+	return tdb.Write(func(tx models.Writer) error {
+		_, err := tx.Exec(query, args...)
+		return err
+	})
+}
+
+func (e *testEnv) mustTDB(a *models.Agent) *modules.DB {
 	tdb, err := e.c.targetDB(a)
 	if err != nil {
 		e.t.Fatal(err)

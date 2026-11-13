@@ -221,11 +221,90 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
-	tx, err := tdb.Begin()
+	var ended []endedRequest
+	var ignored []ignoredRun
+	err = tdb.Write(func(tx models.Writer) error {
+		var err error
+		if err = storeDetections(tx, agent, req, sups, now, dedupe); err != nil {
+			return err
+		}
+		if ignored, err = storeCommandRuns(tx, req.CommandRuns, now); err != nil {
+			return err
+		}
+		ended, err = storeCommandAcks(tx, req.CommandRequestAcks, now)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	for _, r := range ignored {
+		c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), r.runUID, r.setID)
+	}
+	for _, e := range ended {
+		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
+	}
+	if req.CommandApply != nil {
+		if err := c.recordCommandApply(agent, req.CommandApply); err != nil {
+			return err
+		}
+	}
+
+	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
+	if hi := req.HostInfo; hi != nil {
+		f.HasHost = true
+		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
+		f.HostOSUser, f.TimeZone, f.UTCOffsetSec = truncate(hi.OSUser, 256), truncate(hi.TimeZone, 64), hi.UTCOffsetSec
+		b, _ := json.Marshal(hi.Auditd)
+		f.AuditdJSON = string(b)
+	}
+	if ap := req.Apply; ap != nil {
+		f.HasApply = true
+		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
+		w, _ := json.Marshal(nonNil(ap.Warnings))
+		f.ApplyWarnings = string(w)
+		// The coded texts are checked against the English the agent sent;
+		// the stored message is the English cut at 2000 bytes, and the
+		// screen shows the coded one only while both agree.
+		checked := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		i18n := checked
+		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
+			i18n.MessageI18n = nil
+		}
+		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
+		switch ap.Status {
+		case "ok", "warning":
+			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
+		case modules.ApplyStatusNone:
+			// The agent removed its audit rules: nothing is applied.
+			f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
+		default:
+			f.ReportedRuleID, f.ReportedRuleVersion = agent.ReportedRuleID, agent.ReportedRuleVersion
+		}
+		if ap.At != agent.ApplyAt || ap.Status != agent.ApplyStatus {
+			detail := applyResultText(ap, checked)
+			if ap.RuleID > 0 {
+				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
+				if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
+					ruleName = modules.Raw(r.Name)
+				}
+				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
+			}
+			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent), detail)
+		}
+	}
+	if req.Dropped > 0 {
+		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), modules.M("history.detail.dropped", "count", req.Dropped))
+	}
+	return models.RecordAgentReport(c.db, agent.ID, f)
+}
+
+// storeDetections stores the detections and the host information of a
+// report inside the report's transaction of the target database: each
+// detection is aggregated with the open row of the same detection, marked
+// suppressed by the first matching suppression of sups (read from the
+// central database before the transaction) and given its notification
+// state.
+func storeDetections(tx models.Writer, agent *models.Agent, req *modules.ReportRequest, sups []*models.Suppression, now, dedupe int64) error {
 	for i := range req.Detections {
 		d := &req.Detections[i]
 		if !slices.Contains(modules.DetectionTypes, d.Type) {
@@ -293,72 +372,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			return err
 		}
 	}
-	if err := c.storeCommandRuns(tx, agent, req.CommandRuns, now); err != nil {
-		return err
-	}
-	ended, err := storeCommandAcks(tx, req.CommandRequestAcks, now)
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	for _, e := range ended {
-		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
-	}
-	if req.CommandApply != nil {
-		if err := c.recordCommandApply(agent, req.CommandApply); err != nil {
-			return err
-		}
-	}
-
-	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
-	if hi := req.HostInfo; hi != nil {
-		f.HasHost = true
-		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
-		f.HostOSUser, f.TimeZone, f.UTCOffsetSec = truncate(hi.OSUser, 256), truncate(hi.TimeZone, 64), hi.UTCOffsetSec
-		b, _ := json.Marshal(hi.Auditd)
-		f.AuditdJSON = string(b)
-	}
-	if ap := req.Apply; ap != nil {
-		f.HasApply = true
-		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
-		w, _ := json.Marshal(nonNil(ap.Warnings))
-		f.ApplyWarnings = string(w)
-		// The coded texts are checked against the English the agent sent;
-		// the stored message is the English cut at 2000 bytes, and the
-		// screen shows the coded one only while both agree.
-		checked := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
-		i18n := checked
-		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
-			i18n.MessageI18n = nil
-		}
-		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
-		switch ap.Status {
-		case "ok", "warning":
-			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
-		case modules.ApplyStatusNone:
-			// The agent removed its audit rules: nothing is applied.
-			f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
-		default:
-			f.ReportedRuleID, f.ReportedRuleVersion = agent.ReportedRuleID, agent.ReportedRuleVersion
-		}
-		if ap.At != agent.ApplyAt || ap.Status != agent.ApplyStatus {
-			detail := applyResultText(ap, checked)
-			if ap.RuleID > 0 {
-				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
-				if r, err := models.GetRule(c.db, ap.RuleID); err == nil {
-					ruleName = modules.Raw(r.Name)
-				}
-				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
-			}
-			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent), detail)
-		}
-	}
-	if req.Dropped > 0 {
-		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), modules.M("history.detail.dropped", "count", req.Dropped))
-	}
-	return models.RecordAgentReport(c.db, agent.ID, f)
+	return nil
 }
 
 // applyResultText returns the history text of an application result: the

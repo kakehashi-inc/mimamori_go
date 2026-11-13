@@ -31,7 +31,7 @@ func pendingDetections(t *testing.T, e *testEnv) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, err := models.ListPendingNotify(tdb)
+	list, err := models.ListPendingNotify(tdb.Read())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestDeleteSuppressionReleases(t *testing.T) {
 		reportAlert(t, e, target)
 	}
 	byTarget := func() map[string]*models.Detection {
-		list, _, err := models.ListDetections(tdb, models.DetectionFilter{}, 100)
+		list, _, err := models.ListDetections(tdb.Read(), models.DetectionFilter{}, 100)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -66,10 +66,29 @@ func (c *core) retention(now time.Time) {
 		if err != nil {
 			continue
 		}
-		if n, err := models.DeleteDetectionsBefore(tdb, cut); err == nil && n > 0 {
-			c.logger.Printf("retention: removed %d detection(s) of %s", n, c.agentDisplayName(a))
+		// One transaction for the target. A statement that fails does not
+		// undo the others (the failure of the command runs is logged), as
+		// when each statement stood on its own.
+		var detections, runs int64
+		var runsErr error
+		err = tdb.Write(func(tx models.Writer) error {
+			if n, err := models.DeleteDetectionsBefore(tx, cut); err == nil {
+				detections = n
+			}
+			runs, runsErr = commandRetention(tx, cut)
+			return nil
+		})
+		if err != nil {
+			detections, runs, runsErr = 0, 0, err
 		}
-		c.commandRetention(a, tdb, cut)
+		if detections > 0 {
+			c.logger.Printf("retention: removed %d detection(s) of %s", detections, c.agentDisplayName(a))
+		}
+		if runsErr != nil {
+			c.logger.Printf("retention of command runs of %s: %v", c.agentDisplayName(a), runsErr)
+		} else if runs > 0 {
+			c.logger.Printf("retention: removed %d command run(s) of %s", runs, c.agentDisplayName(a))
+		}
 	}
 	_ = models.DeleteRejectedHistoryBefore(c.db, cut)
 	_ = models.DeleteExpiredSessions(c.db, now.Unix())
@@ -156,7 +175,7 @@ func (c *core) composeNotification(now time.Time) {
 		if err != nil {
 			continue
 		}
-		list, err := models.ListPendingNotify(tdb)
+		list, err := models.ListPendingNotify(tdb.Read())
 		if err != nil || len(list) == 0 {
 			continue
 		}
@@ -206,7 +225,9 @@ func (c *core) composeNotification(now time.Time) {
 	}
 	for _, g := range groups {
 		if tdb, err := c.targetDB(g.agent); err == nil {
-			_ = models.MarkNotified(tdb, g.tdbIDs, now.Unix())
+			_ = tdb.Write(func(tx models.Writer) error {
+				return models.MarkNotified(tx, g.tdbIDs, now.Unix())
+			})
 		}
 	}
 }

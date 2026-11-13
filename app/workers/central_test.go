@@ -367,7 +367,7 @@ func TestNotificationCompose(t *testing.T) {
 	// Re-reporting within the dedupe period does not notify again.
 	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"}}})
 	tdb, _ := e.c.targetDB(b)
-	pending, _ := models.ListPendingNotify(tdb)
+	pending, _ := models.ListPendingNotify(tdb.Read())
 	if len(pending) != 0 {
 		t.Fatalf("deduplicated detection is pending again: %+v", pending)
 	}

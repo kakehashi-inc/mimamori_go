@@ -44,8 +44,11 @@ type core struct {
 	// notifications). It is modules.SendMailTo; tests replace it.
 	sendMail func(cfg modules.SMTPConfig, to []string, subject, body string) error
 
+	// targets is the set of the agents' own databases (see targetDB).
+	// targetsMu guards the two maps only; it is never held while a file
+	// is opened.
 	targetsMu sync.Mutex
-	targets   map[int64]*sql.DB
+	targets   map[int64]*targetEntry
 	// refusedTargets holds the agents whose target database was refused as
 	// one of another build, so that the refusal is logged once.
 	refusedTargets map[int64]bool
@@ -62,9 +65,18 @@ type core struct {
 	builtinMessage modules.Msg
 }
 
+// targetEntry is an agent's database in the set of the central. ready is
+// closed when the open has ended; db and err are set before that and not
+// changed afterwards.
+type targetEntry struct {
+	ready chan struct{}
+	db    *modules.DB
+	err   error
+}
+
 func newCore(db *sql.DB, cfg *modules.CentralConfig, dataDir string, logger *log.Logger) *core {
 	h, _ := os.Hostname()
-	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*sql.DB{}, sendMail: modules.SendMailTo}
+	c := &core{db: db, started: cfg, dataDir: dataDir, logger: logger, hostname: h, targets: map[int64]*targetEntry{}, refusedTargets: map[int64]bool{}, sendMail: modules.SendMailTo}
 	c.cfg.Store(cfg)
 	return c
 }
@@ -99,13 +111,56 @@ func (c *core) builtinStatus() (bool, modules.Msg) {
 	return c.builtinRunning, c.builtinMessage
 }
 
-// targetDB opens (once) and returns the per-target database of an agent.
-func (c *core) targetDB(a *models.Agent) (*sql.DB, error) {
+// targetDB returns the handle of an agent's own database and opens it when
+// it is not open yet. Only flows that ask for the same agent wait for its
+// open: the lock of the set is held while the set is looked up or changed,
+// never while a file is opened or migrated, so flows that use other agents
+// go on. A failed open is not remembered; the next call tries again.
+func (c *core) targetDB(a *models.Agent) (*modules.DB, error) {
 	c.targetsMu.Lock()
-	defer c.targetsMu.Unlock()
-	if db, ok := c.targets[a.ID]; ok {
-		return db, nil
+	if t, ok := c.targets[a.ID]; ok {
+		c.targetsMu.Unlock()
+		<-t.ready
+		return t.db, t.err
 	}
+	t := &targetEntry{ready: make(chan struct{})}
+	c.targets[a.ID] = t
+	c.targetsMu.Unlock()
+
+	// The flows waiting for this entry are released however the open
+	// ends, also when it panics.
+	defer func() {
+		if t.db == nil {
+			if t.err == nil {
+				t.err = fmt.Errorf("agent %d: database not opened", a.ID)
+			}
+			c.targetsMu.Lock()
+			delete(c.targets, a.ID)
+			c.targetsMu.Unlock()
+		}
+		close(t.ready)
+	}()
+	t.db, t.err = c.openTarget(a)
+	if t.err != nil {
+		// A database of another build is logged here once, also for the
+		// callers that only skip the target; a request answers 500.
+		c.targetsMu.Lock()
+		logIt := modules.IsOtherBuildDB(t.err) && !c.refusedTargets[a.ID]
+		if logIt {
+			c.refusedTargets[a.ID] = true
+		}
+		c.targetsMu.Unlock()
+		if logIt {
+			c.logger.Print(t.err)
+		}
+	}
+	return t.db, t.err
+}
+
+// openTarget opens the database of an agent, giving the agent its file name
+// first when it has none yet. It is called by the one flow that put the
+// agent's entry into the set.
+func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 	file := a.DBFile
 	if file == "" {
 		file = fmt.Sprintf("agent-%d.db", a.ID)
@@ -114,21 +169,14 @@ func (c *core) targetDB(a *models.Agent) (*sql.DB, error) {
 		}
 		a.DBFile = file
 	}
-	db, err := modules.OpenSQLitePool(modules.TargetDBPath(c.dataDir, file), modules.SchemaAgentDB)
+	db, err := modules.OpenSQLite(modules.TargetDBPath(c.dataDir, file), modules.SchemaAgentDB)
 	if err != nil {
-		// A database of another build is logged here once, also for the
-		// callers that only skip the target; a request answers 500.
-		if modules.IsOtherBuildDB(err) && !c.refusedTargets[a.ID] {
-			if c.refusedTargets == nil {
-				c.refusedTargets = map[int64]bool{}
-			}
-			c.refusedTargets[a.ID] = true
-			c.logger.Print(err)
-		}
 		return nil, err
 	}
-	db.SetMaxOpenConns(2)
-	c.targets[a.ID] = db
+	// The central holds hundreds of these and reads each about once per
+	// check interval: one idle read connection is kept, further ones are
+	// opened only while several flows read the same agent at once.
+	db.KeepReadConns(1)
 	return db, nil
 }
 
@@ -151,12 +199,20 @@ func (c *core) openAllTargets() error {
 	return nil
 }
 
+// closeTargets closes every agent database the central has open. It is
+// called at stop, after the last request and periodic step have ended; an
+// open still in progress is waited for. A later targetDB opens the file
+// again.
 func (c *core) closeTargets() {
 	c.targetsMu.Lock()
-	defer c.targetsMu.Unlock()
-	for id, db := range c.targets {
-		db.Close()
-		delete(c.targets, id)
+	open := c.targets
+	c.targets = map[int64]*targetEntry{}
+	c.targetsMu.Unlock()
+	for _, t := range open {
+		<-t.ready
+		if t.db != nil {
+			t.db.Close()
+		}
 	}
 }
 
