@@ -89,7 +89,10 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	fps, _ := json.Marshal(req.CAFingerprints)
-	if err := models.RecordAgentSync(c.pool, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
+	err := c.db.Write(func(tx models.Writer) error {
+		return models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now)
+	})
+	if err != nil {
 		return nil, err
 	}
 	resp := &modules.SyncResponse{
@@ -122,18 +125,22 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 			v := modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter)
 			tok.PendingHash = modules.HashSecret(v)
 			tok.PendingExpiresAt = now + int64(c.conf().TokenValidDays)*86400
-			// Stored only while the token is unchanged since it was read; when
-			// it was revoked, reissued or renewed meanwhile, no value is handed
-			// out this time.
-			err := models.SetTokenRenewal(c.pool, tok, prevPending, prevCounter)
+			// Stored only while the token is unchanged since it was read (at
+			// authentication; the key derivation lies between): when it was
+			// revoked, reissued or renewed meanwhile, no value is handed out
+			// this time. The history row is written with it.
+			err := c.db.Write(func(tx models.Writer) error {
+				if err := models.SetTokenRenewal(tx, tok, prevPending, prevCounter); err != nil {
+					return err
+				}
+				return models.InsertHistory(tx, c.historyRow(nil, models.HistToken, "renewal_issued", modules.Raw(tok.Name),
+					modules.M("history.detail.token_renewal_issued", "expires", time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339))))
+			})
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 				offer = false
 			case err != nil:
 				return nil, err
-			default:
-				c.history(nil, models.HistToken, "renewal_issued", tok.Name, modules.M("history.detail.token_renewal_issued",
-					"expires", time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339)))
 			}
 		}
 		// The same value is handed out again until the agent uses it.
@@ -159,11 +166,11 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 }
 
 func (c *core) ruleAssignment(ruleID int64, version int) (*modules.RuleAssignment, error) {
-	rule, err := models.GetRule(c.pool, ruleID)
+	rule, err := models.GetRule(c.db.Read(), ruleID)
 	if err != nil {
 		return nil, err
 	}
-	rv, err := models.GetRuleVersion(c.pool, ruleID, version)
+	rv, err := models.GetRuleVersion(c.db.Read(), ruleID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +222,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	if err != nil {
 		return err
 	}
-	sups, err := models.ListSuppressions(c.pool)
+	sups, err := models.ListSuppressions(c.db.Read())
 	if err != nil {
 		return err
 	}
@@ -243,12 +250,6 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	for _, e := range ended {
 		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
 	}
-	if req.CommandApply != nil {
-		if err := c.recordCommandApply(agent, req.CommandApply); err != nil {
-			return err
-		}
-	}
-
 	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
 	if hi := req.HostInfo; hi != nil {
 		f.HasHost = true
@@ -257,6 +258,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		b, _ := json.Marshal(hi.Auditd)
 		f.AuditdJSON = string(b)
 	}
+	var checked applyI18nJSON
 	if ap := req.Apply; ap != nil {
 		f.HasApply = true
 		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
@@ -265,37 +267,58 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		// The coded texts are checked against the English the agent sent;
 		// the stored message is the English cut at 2000 bytes, and the
 		// screen shows the coded one only while both agree.
-		checked := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		checked = checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
 		i18n := checked
 		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
 			i18n.MessageI18n = nil
 		}
 		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
-		switch ap.Status {
-		case "ok", "warning":
-			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
-		case modules.ApplyStatusNone:
-			// The agent removed its audit rules: nothing is applied.
-			f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
-		default:
-			f.ReportedRuleID, f.ReportedRuleVersion = agent.ReportedRuleID, agent.ReportedRuleVersion
+	}
+	// The central part of the report is one transaction that reads the
+	// agent row again and decides from it: two reports of one agent take
+	// their turns, so a changed application result is recorded once, and
+	// each history row is written together with the row or not at all.
+	return c.db.Write(func(tx models.Writer) error {
+		cur, err := models.GetAgent(tx, agent.ID)
+		if err != nil {
+			return err
 		}
-		if ap.At != agent.ApplyAt || ap.Status != agent.ApplyStatus {
-			detail := applyResultText(ap, checked)
-			if ap.RuleID > 0 {
-				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
-				if r, err := models.GetRule(c.pool, ap.RuleID); err == nil {
-					ruleName = modules.Raw(r.Name)
-				}
-				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
+		if req.CommandApply != nil {
+			if err := recordCommandApply(tx, cur, req.CommandApply); err != nil {
+				return err
 			}
-			c.history(nil, models.HistRule, "apply_result_"+ap.Status, c.agentDisplayName(agent), detail)
 		}
-	}
-	if req.Dropped > 0 {
-		c.history(nil, models.HistDetection, "dropped", c.agentDisplayName(agent), modules.M("history.detail.dropped", "count", req.Dropped))
-	}
-	return models.RecordAgentReport(c.pool, agent.ID, f)
+		if ap := req.Apply; ap != nil {
+			switch ap.Status {
+			case "ok", "warning":
+				f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
+			case modules.ApplyStatusNone:
+				// The agent removed its audit rules: nothing is applied.
+				f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
+			default:
+				f.ReportedRuleID, f.ReportedRuleVersion = cur.ReportedRuleID, cur.ReportedRuleVersion
+			}
+			if ap.At != cur.ApplyAt || ap.Status != cur.ApplyStatus {
+				detail := applyResultText(ap, checked)
+				if ap.RuleID > 0 {
+					ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
+					if r, err := models.GetRule(tx, ap.RuleID); err == nil {
+						ruleName = modules.Raw(r.Name)
+					}
+					detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
+				}
+				if err := models.InsertHistory(tx, c.historyRow(nil, models.HistRule, "apply_result_"+ap.Status, modules.Raw(agentName(tx, cur)), detail)); err != nil {
+					return err
+				}
+			}
+		}
+		if req.Dropped > 0 {
+			if err := models.InsertHistory(tx, c.historyRow(nil, models.HistDetection, "dropped", modules.Raw(agentName(tx, cur)), modules.M("history.detail.dropped", "count", req.Dropped))); err != nil {
+				return err
+			}
+		}
+		return models.RecordAgentReport(tx, cur.ID, f)
+	})
 }
 
 // storeDetections stores the detections and the host information of a

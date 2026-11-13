@@ -164,3 +164,42 @@ func TestIssueTokenIsOneStep(t *testing.T) {
 		t.Fatalf("after the failed issue: %d tokens, %d agents", tokens, agents)
 	}
 }
+
+// Two reports of one agent with the same changed application result are
+// processed at the same moment: each decides from the agent row read in its
+// own transaction, so the result is recorded in the history once.
+func TestReportCentralPartIsOneStep(t *testing.T) {
+	e := newTestEnv(t)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
+	tr := &inProcessTransport{c: e.c, agentID: b.ID}
+	rep := &modules.ReportRequest{Apply: &modules.ApplyResult{Status: modules.ApplyStatusNone, Message: "nothing applied", At: 1234}}
+	const flows = 8
+	errs := make([]error, flows)
+	var wg sync.WaitGroup
+	for i := range flows {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = tr.Report(rep)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("report %d: %v", i, err)
+		}
+	}
+	items, _, err := models.ListHistory(e.c.db.Read(), models.HistRule, "", nil, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, h := range items {
+		if h.Action == "apply_result_"+modules.ApplyStatusNone {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("application result recorded %d times", n)
+	}
+}
