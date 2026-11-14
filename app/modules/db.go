@@ -43,14 +43,16 @@ func writeDSN(dbPath string, lockWaitMS int) string {
 		sqliteURIPath.Replace(dbPath), lockWaitMS)
 }
 
-// readDSN names the database at dbPath for a read-only connection
-// (mode=ro): SQLite opens the file read-only and refuses every write through
-// the connection. The journal mode is not set here: the file is already in
-// WAL mode when a read connection is opened (the write connection of the
-// handle set it), and the driver fails the open of a read-only connection
-// that asks for WAL on a file that is not.
+// readDSN names the database at dbPath for a read-only connection: SQLite
+// opens the file read-only (mode=ro), and query_only makes it refuse every
+// statement that writes by any route, also into a TEMP table or into a file
+// attached read-write (mode=ro covers only the file itself). The journal
+// mode is not set here: the file is already in WAL mode when a read
+// connection is opened (the write connection of the handle set it), and the
+// driver fails the open of a read-only connection that asks for WAL on a
+// file that is not.
 func readDSN(dbPath string, lockWaitMS int) string {
-	return fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=temp_store(MEMORY)",
+	return fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=temp_store(MEMORY)&_pragma=query_only(1)",
 		sqliteURIPath.Replace(dbPath), lockWaitMS)
 }
 

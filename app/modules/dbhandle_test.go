@@ -190,6 +190,63 @@ func TestReadSideRefusesWrites(t *testing.T) {
 	}
 }
 
+// A read connection writes by no other route either: not into a TEMP table,
+// and not through the same file or another one attached read-write.
+func TestReadSideRefusesWritesByAnyRoute(t *testing.T) {
+	d := openHandle(t, openOptions{})
+	other := filepath.Join(t.TempDir(), "other.db")
+	conn, err := d.r.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	exec := func(q string) error {
+		_, err := conn.ExecContext(t.Context(), q)
+		return err
+	}
+	for _, q := range []string{
+		`CREATE TEMP TABLE tt (x)`,
+		`CREATE TEMP VIEW tv AS SELECT 1`,
+	} {
+		if err := exec(q); !IsWriteThroughRead(err) {
+			t.Errorf("%s on a read connection: %v, want the refusal of a write", q, err)
+		}
+	}
+	// The same file attached read-write: attaching only reads, every write
+	// through it is refused.
+	if err := exec(`ATTACH DATABASE '` + "file:" + sqliteURIPath.Replace(d.Path()) + `?mode=rw' AS w`); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	for _, q := range []string{
+		`UPDATE w.t SET v = 4242 WHERE id = 1`,
+		`INSERT INTO w.t (id, v) VALUES (7, 7)`,
+		`CREATE TABLE w.u (id INTEGER PRIMARY KEY)`,
+	} {
+		if err := exec(q); !IsWriteThroughRead(err) {
+			t.Errorf("%s through the attached file: %v, want the refusal of a write", q, err)
+		}
+	}
+	if err := exec(`DETACH DATABASE w`); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	// Another file attached with mode=rwc: SQLite may create the empty file
+	// when it attaches, but nothing is written into it.
+	if err := exec(`ATTACH DATABASE '` + "file:" + sqliteURIPath.Replace(other) + `?mode=rwc' AS o`); err == nil {
+		if err := exec(`CREATE TABLE o.x (id INTEGER PRIMARY KEY)`); !IsWriteThroughRead(err) {
+			t.Errorf("creating a table in an attached new file: %v, want the refusal of a write", err)
+		}
+		_ = exec(`DETACH DATABASE o`)
+	}
+	if st, err := os.Stat(other); err == nil && st.Size() > 0 {
+		t.Errorf("the read connection wrote %d bytes into %s", st.Size(), other)
+	}
+	wantV(t, d, 0)
+	var n int
+	if err := d.Read().QueryRow(`SELECT COUNT(*) FROM t`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("rows of t: %d %v, want 1", n, err)
+	}
+}
+
 // The compiler keeps the reading side out of every function that writes,
 // and a transaction cannot be ended or begun by the function that gets it.
 func TestReadSideIsNotAWriter(t *testing.T) {
