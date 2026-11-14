@@ -55,7 +55,8 @@ type testMailServer struct {
 }
 
 // mailConns holds the connection SendMailTo made to each mail server of the
-// tests, by the server's address (each server takes one connection).
+// tests, by the server's address (each server takes one connection), until
+// the server's test ends.
 var mailConns sync.Map
 
 func init() {
@@ -99,6 +100,9 @@ func startMailServer(t *testing.T, s *testMailServer) *testMailServer {
 	s.done = make(chan struct{})
 	t.Cleanup(func() { close(s.done) })
 	s.addr = ln.Addr().(*net.TCPAddr)
+	// Forgotten before the listener closes (cleanups run last first): a
+	// later server can get the same port only after that.
+	t.Cleanup(func() { mailConns.Delete(s.addr.String()) })
 	go func() {
 		c, err := ln.Accept()
 		if err != nil {
