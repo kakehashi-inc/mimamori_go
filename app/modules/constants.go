@@ -91,6 +91,11 @@ const (
 	// them and each is read about once per check interval. Every other
 	// database keeps all its read connections.
 	TargetReadConnsKept = 1
+	// DetectionPageRows is how many detections creating or deleting a
+	// suppression reads at a time in its transaction: it goes through every
+	// matching detection page by page, so the memory it holds does not grow
+	// with their number.
+	DetectionPageRows = 1000
 )
 
 // --- Secrets ---

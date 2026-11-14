@@ -531,7 +531,7 @@ interface Detection {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/suppressions` | V | - | `Suppression[]` |
-| POST | `/suppressions` | A | `{"agent_id"?,"type"?,"os_user"?,"exe"?,"target"?,"comment"?}` | `Suppression`（作成時に、条件に一致する未確認の検知へ抑止を即時に反映する） |
+| POST | `/suppressions` | A | `{"agent_id"?,"type"?,"os_user"?,"exe"?,"target"?,"comment"?}` | `Suppression`（作成時に、条件に一致する未確認の検知すべてへ抑止を即時に反映する） |
 | DELETE | `/suppressions/{id}` | A | - | `{}` |
 
 ```ts
@@ -542,7 +542,7 @@ interface Suppression {
 }
 ```
 
-削除すると、その条件で抑止していた未確認の検知は抑止されていない状態に戻り、通知の対象になります（詳細は [システム仕様.md](システム仕様.md) の 12 章の抑止）。確認済みの検知は変えません。
+削除すると、その条件で抑止していた未確認の検知はすべて抑止されていない状態に戻り、通知の対象になります（詳細は [システム仕様.md](システム仕様.md) の 12 章の抑止）。確認済みの検知は変えません。
 
 作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要で、すべて空なら 400 です。未知の `type` と存在しない `agent_id` も 400 です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
 

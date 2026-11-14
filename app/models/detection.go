@@ -176,6 +176,25 @@ func ListDetections(db Reader, f DetectionFilter, limit int) ([]*Detection, int,
 	return items, total, err
 }
 
+// ListUnsuppressedOpenDetections returns up to limit unacknowledged
+// detections that are not suppressed and whose id is greater than afterID,
+// in id order. Called again with the last id of each page, it goes through
+// all of them once.
+func ListUnsuppressedOpenDetections(db Reader, afterID int64, limit int) ([]*Detection, error) {
+	rows, err := db.Query(`SELECT `+detectionCols+` FROM detections WHERE acknowledged_at = 0 AND suppressed = 0 AND id > ? ORDER BY id LIMIT ?`,
+		afterID, limit)
+	return collect(rows, err, scanDetection)
+}
+
+// ListOpenDetectionsOfSuppression returns up to limit unacknowledged
+// detections suppressed by suppressionID whose id is greater than afterID,
+// in id order (paged like ListUnsuppressedOpenDetections).
+func ListOpenDetectionsOfSuppression(db Reader, suppressionID, afterID int64, limit int) ([]*Detection, error) {
+	rows, err := db.Query(`SELECT `+detectionCols+` FROM detections WHERE acknowledged_at = 0 AND suppressed = 1 AND suppression_id = ? AND id > ? ORDER BY id LIMIT ?`,
+		suppressionID, afterID, limit)
+	return collect(rows, err, scanDetection)
+}
+
 // CountUnackedAlerts counts unacknowledged, unsuppressed alert detections.
 func CountUnackedAlerts(db Reader) (int, error) {
 	var n int

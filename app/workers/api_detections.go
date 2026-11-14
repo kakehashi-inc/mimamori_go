@@ -355,15 +355,15 @@ func describeSuppression(s *models.Suppression) string {
 	return strings.Join(parts, " ")
 }
 
-// applySuppression marks open detections matching a new suppression so they
-// are not notified.
+// applySuppression marks every unacknowledged detection matching a new
+// suppression, of every target it covers, so they are not notified. It
+// returns the number of marked detections.
 func (c *core) applySuppression(s *models.Suppression) int {
 	agents, err := models.ListAgents(c.db.Read())
 	if err != nil {
 		return 0
 	}
 	n := 0
-	f := false
 	for _, a := range agents {
 		if s.AgentID.Valid && s.AgentID.Int64 != a.ID {
 			continue
@@ -372,23 +372,30 @@ func (c *core) applySuppression(s *models.Suppression) int {
 		if err != nil {
 			continue
 		}
-		// The detections are listed and marked in one transaction, so a
-		// detection acknowledged meanwhile is not marked.
+		// Every unacknowledged detection is read (page by page) and marked
+		// in one transaction, so a detection acknowledged meanwhile is not
+		// marked.
 		marked := 0
 		err = tdb.Write(func(tx models.Writer) error {
-			list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &f}, 100000)
-			if err != nil {
-				return err
-			}
-			for _, d := range list {
-				if !matchSuppression(s, a.ID, d.Type, d.OSUser, d.Exe, d.Target) {
-					continue
+			marked = 0
+			for after := int64(0); ; {
+				list, err := models.ListUnsuppressedOpenDetections(tx, after, modules.DetectionPageRows)
+				if err != nil {
+					return err
 				}
-				if models.MarkDetectionSuppressed(tx, d.ID, s.ID) == nil {
-					marked++
+				for _, d := range list {
+					after = d.ID
+					if !matchSuppression(s, a.ID, d.Type, d.OSUser, d.Exe, d.Target) {
+						continue
+					}
+					if models.MarkDetectionSuppressed(tx, d.ID, s.ID) == nil {
+						marked++
+					}
+				}
+				if len(list) < modules.DetectionPageRows {
+					return nil
 				}
 			}
-			return nil
 		})
 		if err == nil {
 			n += marked
@@ -442,31 +449,33 @@ func (c *core) releaseSuppressionOf(tdb *modules.DB, agentID, suppressionID int6
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
 	n := 0
 	err := tdb.Write(func(tx models.Writer) error {
-		t, f := true, false
-		list, _, err := models.ListDetections(tx, models.DetectionFilter{Acknowledged: &f, Suppressed: &t}, 100000)
-		if err != nil {
-			return err
-		}
-		for _, d := range list {
-			if d.SuppressionID != suppressionID {
-				continue
-			}
-			if other := findSuppression(sups, agentID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
-				if err := models.MoveDetectionSuppression(tx, d.ID, suppressionID, other.ID); err != nil {
-					return err
-				}
-				continue
-			}
-			state := d.NotifyState
-			if state == models.NotifySkipped && now-models.LastNotifiedAt(tx, d.Fingerprint) >= dedupe {
-				state = models.NotifyPending
-			}
-			if err := models.ReleaseDetectionSuppression(tx, d.ID, suppressionID, state); err != nil {
+		n = 0
+		for after := int64(0); ; {
+			list, err := models.ListOpenDetectionsOfSuppression(tx, suppressionID, after, modules.DetectionPageRows)
+			if err != nil {
 				return err
 			}
-			n++
+			for _, d := range list {
+				after = d.ID
+				if other := findSuppression(sups, agentID, d.Type, d.OSUser, d.Exe, d.Target); other != nil {
+					if err := models.MoveDetectionSuppression(tx, d.ID, suppressionID, other.ID); err != nil {
+						return err
+					}
+					continue
+				}
+				state := d.NotifyState
+				if state == models.NotifySkipped && now-models.LastNotifiedAt(tx, d.Fingerprint) >= dedupe {
+					state = models.NotifyPending
+				}
+				if err := models.ReleaseDetectionSuppression(tx, d.ID, suppressionID, state); err != nil {
+					return err
+				}
+				n++
+			}
+			if len(list) < modules.DetectionPageRows {
+				return nil
+			}
 		}
-		return nil
 	})
 	if err != nil {
 		return 0, err
