@@ -3,8 +3,12 @@ package workers
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"mimamori/app/models"
@@ -51,5 +55,38 @@ func TestTargetDBOfOtherBuild(t *testing.T) {
 		if code := e.adminStatus("GET", p, nil); code != http.StatusOK {
 			t.Fatalf("GET %s: %d, want 200", p, code)
 		}
+	}
+}
+
+// central start refuses a central.db of another build before it writes
+// central.lock: the lock file of the refused data directory keeps its
+// content.
+func TestCentralStartOtherBuildKeepsLock(t *testing.T) {
+	modules.MigrationsFS = os.DirFS("../..")
+	dir := t.TempDir()
+	modules.SetDataDir(dir)
+	path := filepath.Join(dir, modules.CentralDBFileName)
+	db, err := modules.OpenSQLite(path, modules.SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Write(func(tx models.Writer) error {
+		_, err := tx.Exec(`PRAGMA user_version = 0`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	lockPath := filepath.Join(dir, modules.CentralLockFileName)
+	if err := os.WriteFile(lockPath, []byte("12345\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = startCentral()
+	var ee *modules.ExitError
+	if !errors.As(err, &ee) || ee.Code != modules.ExitConfig || !strings.Contains(err.Error(), path+" was created by another build") {
+		t.Fatalf("central start: %v", err)
+	}
+	if b, err := os.ReadFile(lockPath); err != nil || string(b) != "12345\n" {
+		t.Fatalf("central.lock: %q %v", b, err)
 	}
 }

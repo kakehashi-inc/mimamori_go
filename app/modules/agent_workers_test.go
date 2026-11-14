@@ -359,3 +359,35 @@ func TestHostInfoWorkers(t *testing.T) {
 		t.Fatal("running_workers left after Run")
 	}
 }
+
+// agent start and agent set-central refuse an agent.db of another build
+// before they write agent.lock: no lock file comes into being in the
+// refused data directory.
+func TestAgentCommandsOtherBuildLeaveNoLock(t *testing.T) {
+	MigrationsFS = os.DirFS("../..")
+	fakeAuditctl(t, "1", nil)
+	fakeTool(t, "ausearch", "exit 0\n")
+	dir := t.TempDir()
+	path := filepath.Join(dir, AgentLocalDBFileName)
+	newLocalDB(t, path)
+	db, err := OpenSQLite(path, SchemaAgentLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := execWrite(db, `PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	for name, run := range map[string]func() error{
+		"agent start":       func() error { return AgentStart(dir) },
+		"agent set-central": func() error { return AgentSetCentral(dir, "127.0.0.1", 1) },
+	} {
+		ee := wantExit(t, run(), ExitConfig)
+		if !strings.Contains(ee.Error(), path+" was created by another build") {
+			t.Fatalf("%s: %q", name, ee.Error())
+		}
+		if _, err := os.Stat(filepath.Join(dir, AgentLockFileName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s created agent.lock: %v", name, err)
+		}
+	}
+}

@@ -36,12 +36,20 @@ func startCentral() error {
 	if err := modules.EnsureDataDir(filepath.Join(dataDir, modules.TargetDBDirName)); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory: %v", err)
 	}
+	dbPath := filepath.Join(dataDir, modules.CentralDBFileName)
+	// A central.db of another build is refused before central.lock is
+	// written, so that the refused data directory is left as it is.
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := modules.CheckSQLiteBuild(dbPath, modules.SchemaCentral); modules.IsOtherBuildDB(err) {
+			return modules.DBOpenFailed(err, modules.ExitConfig, "database")
+		}
+	}
 	lock, err := modules.AcquireLock(filepath.Join(dataDir, modules.CentralLockFileName))
 	if err != nil {
 		return modules.NewExitError(modules.ExitConfig, err.Error())
 	}
 	defer lock.Release()
-	db, err := modules.OpenSQLite(filepath.Join(dataDir, modules.CentralDBFileName), modules.SchemaCentral)
+	db, err := modules.OpenSQLite(dbPath, modules.SchemaCentral)
 	if err != nil {
 		return modules.DBOpenFailed(err, modules.ExitConfig, "database")
 	}

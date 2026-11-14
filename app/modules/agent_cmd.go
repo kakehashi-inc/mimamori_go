@@ -306,6 +306,11 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	if _, err := os.Stat(dbPath); err != nil {
 		return NewExitError(ExitConfig, ErrAgentNotInitialized.Error())
 	}
+	// An agent.db of another build is refused before agent.lock is
+	// written, so that the refused data directory is left as it is.
+	if err := CheckSQLiteBuild(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
+		return DBOpenFailed(err, ExitConfig, "local database")
+	}
 	lock, err := AcquireLock(filepath.Join(dataDir, AgentLockFileName))
 	if err != nil {
 		return NewExitError(ExitConfig, "the agent is running; stop it before changing the central host")
@@ -366,6 +371,11 @@ func AgentStart(dataDir string) error {
 	dbPath := filepath.Join(dataDir, AgentLocalDBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
 		return NewExitError(ExitConfig, ErrAgentNotInitialized.Error())
+	}
+	// An agent.db of another build is refused before agent.lock is
+	// written, so that the refused data directory is left as it is.
+	if err := CheckSQLiteBuild(dbPath, SchemaAgentLocal); IsOtherBuildDB(err) {
+		return DBOpenFailed(err, ExitConfig, "local database")
 	}
 	lock, err := AcquireLock(filepath.Join(dataDir, AgentLockFileName))
 	if err != nil {
