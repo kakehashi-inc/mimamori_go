@@ -130,7 +130,7 @@ func parseWorkersArg(v string) (int, error) {
 // AgentSetWorkers saves the worker count the argument arg names for the
 // agent in dataDir (agent set-workers), or with builtin that of the built-in
 // agent of the central in dataDir (builtin-agent.db, created when missing;
-// central.db must be one of this build). The agent or the central may be
+// central.db must exist, not be empty and be one of this build). The agent or the central may be
 // running: the count takes effect at its next start, and the line printed
 // says which count the running process uses until then.
 func AgentSetWorkers(dataDir, arg string, builtin bool) error {
@@ -141,8 +141,15 @@ func AgentSetWorkers(dataDir, arg string, builtin bool) error {
 	var dbPath, lockPath string
 	if builtin {
 		centralPath := filepath.Join(dataDir, CentralDBFileName)
-		if _, err := os.Stat(centralPath); err != nil {
+		info, err := os.Stat(centralPath)
+		if err != nil {
 			return NewExitErrorf(ExitConfig, "the data directory %s holds no central (%s not found); --builtin sets the built-in agent of a central", dataDir, CentralDBFileName)
+		}
+		// An empty file is no central: opening it would make it a new
+		// central database. (The file of a central always holds at least
+		// its first page; its content may be in the -wal file.)
+		if info.Mode().IsRegular() && info.Size() == 0 {
+			return NewExitErrorf(ExitConfig, "the data directory %s holds no central (%s is empty); --builtin sets the built-in agent of a central", dataDir, CentralDBFileName)
 		}
 		// A data directory of another build is refused before
 		// builtin-agent.db is created in it.

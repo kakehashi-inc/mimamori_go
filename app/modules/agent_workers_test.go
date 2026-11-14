@@ -3,6 +3,7 @@ package modules
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -293,6 +294,42 @@ func TestAgentSetWorkersBuiltinOtherBuild(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, BuiltinAgentLocalDBName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("builtin-agent.db created in a refused directory: %v", err)
+	}
+}
+
+// agent set-workers --builtin in a data directory whose central.db is an
+// empty file: there is no central, so the command refuses with exit code 3
+// and writes nothing (the empty file is not made a central database, and
+// no other file comes into being).
+func TestAgentSetWorkersBuiltinEmptyCentral(t *testing.T) {
+	MigrationsFS = os.DirFS("../..")
+	dir := t.TempDir()
+	central := filepath.Join(dir, CentralDBFileName)
+	if err := os.WriteFile(central, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := func() string {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, fmt.Sprintf("%s %d", e.Name(), info.Size()))
+		}
+		return strings.Join(names, ", ")
+	}
+	before := list()
+	ee := wantExit(t, AgentSetWorkers(dir, "2", true), ExitConfig)
+	if want := "the data directory " + dir + " holds no central (central.db is empty); --builtin sets the built-in agent of a central"; ee.Error() != want {
+		t.Fatalf("with an empty central.db: %q, want %q", ee.Error(), want)
+	}
+	if after := list(); after != before {
+		t.Fatalf("the data directory changed: %s, before %s", after, before)
 	}
 }
 
