@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"context"
 	"io"
 	"net"
 	"os"
@@ -74,14 +75,53 @@ func NewIdleConn(c *net.TCPConn, idle time.Duration, onClose func()) (*IdleConn,
 }
 
 // DialIdle connects to addr (host:port) and wraps the connection in an
-// IdleConn. Connecting, name resolution included, waits at most idle; happy
-// eyeballs (parallel attempts) is off.
+// IdleConn. A host name is resolved first; the resolution follows the
+// host's resolver settings (/etc/hosts, resolv.conf and its timeouts) and
+// waits at most idle in all. Then the addresses are tried one after
+// another in the order the resolver gives them (no parallel attempts, no
+// happy eyeballs), and each attempt waits up to idle for the peer on its
+// own. The first address that connects is used; when none does, the error
+// of the first attempt is returned.
 func DialIdle(addr string, idle time.Duration) (*IdleConn, error) {
-	d := net.Dialer{Timeout: idle, FallbackDelay: -1}
-	c, err := d.Dial("tcp", addr)
+	return dialIdle(addr, idle, net.DefaultResolver)
+}
+
+// dialIdle is DialIdle with the resolver r (tests give one that asks a DNS
+// server of the test).
+func dialIdle(addr string, idle time.Duration, r *net.Resolver) (*IdleConn, error) {
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, err
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: err}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), idle)
+	ips, err := r.LookupIPAddr(ctx, host)
+	if err == nil {
+		_, err = r.LookupPort(ctx, "tcp", port)
+	}
+	cancel()
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: err}
+	}
+	var first error
+	for _, ip := range ips {
+		d := net.Dialer{Timeout: idle}
+		c, err := d.Dial("tcp", net.JoinHostPort(ip.String(), port))
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		return wrapDialed(c, idle)
+	}
+	if first == nil {
+		first = &net.OpError{Op: "dial", Net: "tcp", Err: &net.AddrError{Err: "no suitable address found", Addr: host}}
+	}
+	return nil, first
+}
+
+// wrapDialed wraps a connection DialIdle made in an IdleConn.
+func wrapDialed(c net.Conn, idle time.Duration) (*IdleConn, error) {
 	tc, ok := c.(*net.TCPConn)
 	if !ok {
 		_ = c.Close()

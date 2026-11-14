@@ -19,10 +19,11 @@ var mailRootCAs *x509.CertPool
 
 // SendMailTo delivers one plain-text message to the given recipients
 // synchronously in the calling flow. cfg.TimeoutSec is the longest silence
-// of the mail server that is waited for: connecting (name resolution
-// included), each answer of the server, and the sending of the message, which
-// is cut only when the server took no byte for that long (IdleConn). There is
-// no limit on the whole mail.
+// of the mail server that is waited for: the name resolution (in all), the
+// connecting to each address of the server (DialIdle), each answer of the
+// server, and the sending of the message, which is cut only when the server
+// took no byte for that long (IdleConn). There is no limit on the whole
+// mail.
 func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
 	if !cfg.CanSend() {
 		return fmt.Errorf("SMTP is not configured (smtp.host and smtp.from are required)")

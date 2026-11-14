@@ -1,9 +1,12 @@
 package modules
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -332,4 +335,191 @@ func TestDialIdle(t *testing.T) {
 	if _, err := DialIdle(addr, time.Second); !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("a refused address must fail: %v", err)
 	}
+}
+
+// fullListener listens on ip (IPv4) with an accept queue of one connection,
+// fills the queue and never accepts: the kernel then drops every further
+// SYN, so a connect to it waits without any answer. It returns the port.
+func fullListener(t *testing.T, ip net.IP) int {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	sa := &syscall.SockaddrInet4{}
+	copy(sa.Addr[:], ip.To4())
+	if err := syscall.Bind(fd, sa); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Listen(fd, 0); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := bound.(*syscall.SockaddrInet4).Port
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	for range 8 {
+		c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+		if err != nil {
+			return port // not answered: the queue is full
+		}
+		t.Cleanup(func() { _ = c.Close() })
+	}
+	t.Fatalf("the accept queue of %s did not fill", addr)
+	return 0
+}
+
+// fakeDNS serves the A records addrs for the name host on a UDP port of
+// loopback (no data for other types of host, "no such host" for other
+// names) and returns a resolver of Go's own that asks only this server.
+// Every answer waits for delay; with never no query is answered.
+func fakeDNS(t *testing.T, host string, delay time.Duration, never bool, addrs ...string) *net.Resolver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if never {
+				continue
+			}
+			answer := dnsAnswer(buf[:n], host, addrs)
+			go func() {
+				time.Sleep(delay)
+				_, _ = pc.WriteTo(answer, from)
+			}()
+		}
+	}()
+	server := pc.LocalAddr().String()
+	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", server)
+	}}
+}
+
+// dnsAnswer answers the DNS query q: the A records addrs when it asks for
+// the A records of host, no data for another type of host, "no such host"
+// for another name.
+func dnsAnswer(q []byte, host string, addrs []string) []byte {
+	if len(q) < 12 {
+		return nil
+	}
+	var labels []string
+	i := 12
+	for i < len(q) && q[i] != 0 {
+		l := int(q[i])
+		if i+1+l > len(q) {
+			return nil
+		}
+		labels = append(labels, string(q[i+1:i+1+l]))
+		i += l + 1
+	}
+	i++ // the root label
+	if i+4 > len(q) {
+		return nil
+	}
+	qtype := int(q[i])<<8 | int(q[i+1])
+	resp := append([]byte{q[0], q[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, q[12:i+4]...)
+	switch {
+	case !strings.EqualFold(strings.Join(labels, "."), host):
+		resp[3] |= 3 // NXDOMAIN
+	case qtype == 1:
+		resp[7] = byte(len(addrs))
+		for _, a := range addrs {
+			resp = append(resp, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
+			resp = append(resp, net.ParseIP(a).To4()...)
+		}
+	}
+	return resp
+}
+
+// A name with several addresses: each address gets the whole idle time on
+// its own. The first one never answers (a full accept queue drops the SYN);
+// the second is tried after the whole idle time and connects.
+func TestDialIdleEveryAddressGetsTheWholeTime(t *testing.T) {
+	t.Parallel()
+	const idle = 4 * time.Second
+	port := fullListener(t, net.IPv4(127, 0, 0, 2))
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.3", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			defer c.Close()
+			_, _ = io.Copy(io.Discard, c)
+		}
+	}()
+	start := time.Now()
+	c, err := dialIdle(net.JoinHostPort("two.test", strconv.Itoa(port)), idle, fakeDNS(t, "two.test", 0, false, "127.0.0.2", "127.0.0.3"))
+	took := time.Since(start)
+	if err != nil {
+		t.Fatalf("dial after %v: %v", took, err)
+	}
+	defer func() { _ = c.Close() }()
+	if got := c.RemoteAddr().String(); got != ln.Addr().String() {
+		t.Fatalf("connected to %s, want the second address %s", got, ln.Addr())
+	}
+	within(t, "connected to the second address", took, idle-50*time.Millisecond, idle+3*time.Second)
+}
+
+// When no address connects, the error of the first attempt is returned.
+func TestDialIdleNoAddressConnects(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	dns := fakeDNS(t, "two.test", 0, false, "127.0.0.2", "127.0.0.3")
+	_, err = dialIdle(net.JoinHostPort("two.test", strconv.Itoa(port)), time.Second, dns)
+	var oe *net.OpError
+	if !errors.Is(err, syscall.ECONNREFUSED) || !errors.As(err, &oe) || oe.Addr == nil || oe.Addr.String() != net.JoinHostPort("127.0.0.2", strconv.Itoa(port)) {
+		t.Fatalf("both addresses refuse: %v, want the refusal of the first one", err)
+	}
+	_, err = dialIdle(net.JoinHostPort("other.test", "1"), time.Second, dns)
+	var de *net.DNSError
+	if !errors.As(err, &de) || !de.IsNotFound || !strings.HasPrefix(err.Error(), "dial tcp: lookup other.test") {
+		t.Fatalf("unknown name: %v", err)
+	}
+}
+
+// Name resolution waits at most the idle time: a DNS server that never
+// answers ends the dial with an error after it, one that answers within it
+// is waited for.
+func TestDialIdleResolutionBounded(t *testing.T) {
+	t.Parallel()
+	const idle = 700 * time.Millisecond
+	start := time.Now()
+	_, err := dialIdle("slow.test:25", idle, fakeDNS(t, "slow.test", 0, true, "127.0.0.1"))
+	took := time.Since(start)
+	var de *net.DNSError
+	if !errors.As(err, &de) || !de.IsTimeout || !strings.Contains(err.Error(), "slow.test") {
+		t.Fatalf("resolution that is never answered: %v", err)
+	}
+	within(t, "resolution given up", took, idle-50*time.Millisecond, idle+2*time.Second)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	c, err := dialIdle(net.JoinHostPort("late.test", port), idle, fakeDNS(t, "late.test", 300*time.Millisecond, false, "127.0.0.1"))
+	if err != nil {
+		t.Fatalf("an answer within the idle time: %v", err)
+	}
+	_ = c.Close()
 }
