@@ -141,8 +141,18 @@ func ListAuditRules(stop <-chan struct{}) ([]string, error) {
 	return out, nil
 }
 
+// isOwnRule reports whether a rule, as "auditctl -l" prints it, carries this
+// system's key: one of its key fields ("-F key=K", or "-k K" of a watch) is
+// exactly AuditKey. A rule whose key only begins with AuditKey belongs to
+// someone else and is never deleted, counted or verified as ours.
 func isOwnRule(line string) bool {
-	return strings.Contains(line, "key="+AuditKey) || strings.HasSuffix(line, "-k "+AuditKey)
+	f := strings.Fields(line)
+	for i := 0; i+1 < len(f); i++ {
+		if (f[i] == "-F" && f[i+1] == "key="+AuditKey) || (f[i] == "-k" && f[i+1] == AuditKey) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolvedRule is a rule content after resolving names to ids and dropping

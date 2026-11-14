@@ -103,6 +103,57 @@ func TestRemoveAuditRules(t *testing.T) {
 	}
 }
 
+// A rule is this system's only when one of its keys is exactly AuditKey (as
+// "auditctl -l" prints it: -F key=K, or -k K for a watch). A key that only
+// begins with it, or the text "key=mimamori" inside another field, belongs to
+// someone else.
+func TestOwnRuleIsTheExactKey(t *testing.T) {
+	for line, want := range map[string]bool{
+		"-a always,exit -F arch=b64 -S connect -F exe=/usr/bin/curl -F key=" + AuditKey:      true,
+		"-a always,exit -F arch=b64 -S connect -F exe=/usr/bin/curl -k " + AuditKey:          true,
+		"-w /etc/passwd -p wa -k " + AuditKey:                                                true,
+		"-a always,exit -F arch=b64 -S execve -F key=other -F key=" + AuditKey:               true,
+		"-a always,exit -F arch=b64 -S execve -F key=" + AuditKey + " -F key=other":          true,
+		"-a always,exit -F arch=b64 -S execve -F euid=0 -F key=" + AuditKey + "2":            false,
+		"-a always,exit -F arch=b64 -S execve -F key=" + AuditKey + "_other":                 false,
+		"-w /etc/passwd -p wa -k " + AuditKey + "2":                                          false,
+		"-a always,exit -F arch=b64 -S execve -F key=x" + AuditKey:                           false,
+		"-a always,exit -F arch=b64 -F dir=/srv/key=" + AuditKey + " -F perm=r -F key=other": false,
+		"-a always,exit -F arch=b64 -F dir=/srv/x-k -F perm=r -F key=" + AuditKey + "-old":   false,
+		"-a always,exit -F arch=b64 -S execve":                                               false,
+		"-a never,task":                                                                      false,
+	} {
+		if got := isOwnRule(line); got != want {
+			t.Errorf("isOwnRule(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
+
+// Rules of another product whose key begins with this system's key are
+// neither deleted nor counted: applying works and keeps them, removing
+// keeps them.
+func TestRulesWithASimilarKeyAreNotOurs(t *testing.T) {
+	foreign := []string{
+		"-a always,exit -F arch=b64 -S execve -F euid=0 -F key=" + AuditKey + "2",
+		"-a always,exit -F arch=b64 -S connect -F exe=/usr/bin/wget -F key=" + AuditKey + "_other",
+		"-w /etc/shadow -p wa -k " + AuditKey + "2",
+	}
+	own := "-a always,exit -F arch=b64 -S connect -F exe=/usr/bin/nc -F key=" + AuditKey
+	state, _ := fakeAuditctl(t, "1", append([]string{own}, foreign...))
+	if _, err := ApplyAuditRules([]string{ownConnectRule}, nil); err != nil {
+		t.Fatalf("apply next to rules with a similar key: %v", err)
+	}
+	if got, want := readFile(t, state), strings.Join(append(foreign, ownConnectRule), "\n")+"\n"; got != want {
+		t.Fatalf("loaded rules after apply:\n%s\nwant\n%s", got, want)
+	}
+	if err := RemoveAuditRules(nil); err != nil {
+		t.Fatalf("remove next to rules with a similar key: %v", err)
+	}
+	if got, want := readFile(t, state), strings.Join(foreign, "\n")+"\n"; got != want {
+		t.Fatalf("loaded rules after removal:\n%s\nwant\n%s", got, want)
+	}
+}
+
 // When a rule file loaded at boot adds the suppression rule, which applying
 // the rules cancelled, removing the rules loads it again; without such a
 // file, or when it is still loaded, it is not added.
