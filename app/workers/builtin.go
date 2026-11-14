@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"mimamori/app/models"
@@ -21,7 +22,14 @@ func (t *inProcessTransport) agent() (*models.Agent, error) {
 	return models.GetAgent(t.c.db.Read(), t.agentID)
 }
 
+// builtinSyncHook, when not nil, is called at the start of every sync of the
+// built-in agent (tests use it to make a worker panic).
+var builtinSyncHook func()
+
 func (t *inProcessTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse, error) {
+	if builtinSyncHook != nil {
+		builtinSyncHook()
+	}
 	entered := time.Now().Unix()
 	a, err := t.agent()
 	if err != nil {
@@ -115,8 +123,18 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	go func() {
 		defer close(done)
 		defer db.Close()
-		rt.Run(stop)
-		c.setBuiltinStatus(false, modules.M("builtin.stopped"))
+		// Whatever ends the built-in agent (a stop, a panic of one of its
+		// workers that Run recovered, or a panic of this flow), the central
+		// keeps running and the screen shows that it stopped.
+		defer func() {
+			if v := recover(); v != nil {
+				logger.Printf("panic: %v\n%s", v, debug.Stack())
+			}
+			c.setBuiltinStatus(false, modules.M("builtin.stopped"))
+		}()
+		if err := rt.Run(stop); err != nil {
+			logger.Printf("%v", err)
+		}
 	}()
 	return func() { <-done }
 }

@@ -254,7 +254,9 @@ func TestSyncRunningRequestsDuringRun(t *testing.T) {
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 41, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	rt.mon.defaultInterval = 1
 	rt.sched.lastMonitor = time.Time{}
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
+		t.Fatal(err)
+	}
 	rt.Cycle()
 	n := len(tr.syncReqs)
 	if n < 3 {

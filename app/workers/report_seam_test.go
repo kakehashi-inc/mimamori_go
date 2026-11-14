@@ -172,7 +172,9 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 			}
 		}
 	}()
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	for range 20 {
 		if items, err := models.ListOutbox(db.Read()); err == nil && len(items) == 0 {
 			break
@@ -251,7 +253,9 @@ func TestAgentLostRunEndedBySync(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		rt1.Run(stop)
+		if err := rt1.Run(stop); err != nil {
+			t.Error(err)
+		}
 	}()
 	stopped := false
 	stopAgent := func() {

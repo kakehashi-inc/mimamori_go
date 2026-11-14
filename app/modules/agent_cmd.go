@@ -410,8 +410,11 @@ func AgentStart(dataDir string) error {
 	stopCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger.Printf("%s agent %s started (central %s, token %s, workers %d)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName, workers)
-	rt.Run(stopCtx.Done())
+	err = rt.Run(stopCtx.Done())
 	logger.Printf("agent stopped")
+	if err != nil {
+		return NewExitError(ExitGeneral, err.Error())
+	}
 	return nil
 }
 

@@ -179,7 +179,9 @@ func TestSchedulerIdleWorkerMonitors(t *testing.T) {
 	rt := newParallelRuntime(t, tr, 3)
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 3.2"))
 	tr.resp.CommandRequests = manualRequests(1, 1)
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
+		t.Fatal(err)
+	}
 	during := 0
 	for i, s := range tr.seen() {
 		if s.inWaitLoop {
@@ -207,7 +209,9 @@ func TestSchedulerAllBusyMonitors(t *testing.T) {
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 3.5"), testSet(2, PurposeRunOnly, "sleep 3.5"),
 		testSet(3, PurposeRunOnly, "sleep 3.5"))
 	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 3))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 3)); err != nil {
+		t.Fatal(err)
+	}
 	inside := 0
 	for _, s := range tr.seen() {
 		if s.inWaitLoop {
@@ -252,7 +256,9 @@ func TestSchedulerSameSetNotTwice(t *testing.T) {
 	}
 	tr.resp.CommandSets = defs
 	tr.resp.CommandRequests = manualRequests(1, 1, 2, 1)
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 4))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 4)); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, r := range runReports(allReports(t, rt, tr)) {
 		if r.Finished && r.State != ResultSuccess {
@@ -318,7 +324,9 @@ func TestStopWithSeveralSets(t *testing.T) {
 		}
 		return running == 3
 	})
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	if d := time.Since(*stopAt); d > 3*time.Second {
 		t.Fatalf("the stop took %s", d)
 	}
@@ -374,7 +382,9 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 	rt2.workers = 3
 	stop := make(chan struct{})
 	close(stop)
-	rt2.Run(stop)
+	if err := rt2.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	got := map[string]CommandRunReport{}
 	for _, r := range runReports(queuedReports(t, rt2)) {
 		got[r.RunUID] = r
@@ -411,7 +421,9 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 		_, finished := countRuns(rt.DB)
 		return finished == len(ids) && len(tr.seen()) >= 3
 	})
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	// What the last step did not send yet.
 	rt.flushOutbox()
 	if q := queuedReports(t, rt); len(q) != 0 {

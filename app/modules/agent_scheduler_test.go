@@ -24,7 +24,9 @@ func TestSchedulerOneWorkerAsToday(t *testing.T) {
 	stop := stopWhenRunsFinished(t, rt.DB, 1)
 	// Every sync and every report runs on the flow that called Run.
 	here := goroutineNumber()
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	tr.mu.Lock()
 	reportFlows := slices.Clone(tr.reportFlows)
 	tr.mu.Unlock()
@@ -82,7 +84,9 @@ func TestSchedulerOrder(t *testing.T) {
 	}
 	// The schedules are due before the first step: the step comes first and
 	// delivers the requests, which come before the schedules.
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 4))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 4)); err != nil {
+		t.Fatal(err)
+	}
 	var order []int64
 	for _, r := range runReports(allReports(t, rt, tr)) {
 		if len(r.Results) == 0 && !r.Finished {
@@ -119,7 +123,9 @@ func TestSchedulerNoBusyRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop, _ := stopWhen(t, func() bool { return len(tr.seen()) >= 3 })
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	logMu.Lock()
 	failures := strings.Count(logBuf.String(), "recording the schedule failed")
 	logMu.Unlock()

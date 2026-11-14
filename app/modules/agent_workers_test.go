@@ -351,7 +351,9 @@ func TestHostInfoWorkers(t *testing.T) {
 
 	rwt := &runningWorkersTransport{db: rt.DB, stop: make(chan struct{})}
 	rt.mon.transport = rwt
-	rt.Run(rwt.stop)
+	if err := rt.Run(rwt.stop); err != nil {
+		t.Fatal(err)
+	}
 	if !rwt.found || rwt.value != "3" {
 		t.Fatalf("running_workers while running: %q %v", rwt.value, rwt.found)
 	}

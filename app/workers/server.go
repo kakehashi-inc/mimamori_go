@@ -142,8 +142,8 @@ func startCentral() error {
 		failed = err
 		logger.Printf("listener failed: %v", err)
 	}
-	if builtinRunning {
-		logger.Printf("shutting down; waiting for the built-in agent to finish its cycle")
+	if running, _ := c.builtinStatus(); running {
+		logger.Printf("shutting down; the built-in agent ends its running commands and waits for all its workers to finish their units")
 	} else {
 		logger.Printf("shutting down")
 	}
@@ -151,7 +151,9 @@ func startCentral() error {
 	// a time limit: the servers stop accepting, close the connections that
 	// have no request in work and let the requests in work finish and be
 	// answered (each bounded only by its peer's idle time); the periodic
-	// step in work and the built-in agent's cycle finish. A further signal
+	// step in work finishes; the built-in agent ends its running commands
+	// (SIGTERM, then SIGKILL after the grace) and waits for all its workers,
+	// whose monitoring step in work completes. A further signal
 	// changes nothing (the signal channel stays registered).
 	var stopped sync.WaitGroup
 	for _, srv := range []*http.Server{web, agent} {

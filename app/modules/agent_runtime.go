@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -73,6 +74,10 @@ type AgentRuntime struct {
 	// the channel given to Run, closed when the agent stops.
 	workers int
 	stop    <-chan struct{}
+	// halt is closed by the first flow that panicked (haltNow); Run then
+	// stops the agent as if stop had been closed and returns ErrAgentPanic.
+	halt     chan struct{}
+	haltOnce sync.Once
 	// clock, loc and cmdKillGrace replace the time, the host's time zone and
 	// the grace before SIGKILL in tests.
 	clock        func() time.Time
@@ -174,9 +179,39 @@ func (rt *AgentRuntime) ReapplyStored() {
 // one attempt to send the queued reports when a run ended after the stop.
 // While it runs, the state key running_workers holds the worker count in
 // use (for agent status and agent set-workers).
-func (rt *AgentRuntime) Run(stop <-chan struct{}) {
-	rt.stop = stop
-	rt.sched.stop = stop
+//
+// A panic of any of its flows is logged with its stack through the agent's
+// logger and stops the agent the way a stop does; Run then returns
+// ErrAgentPanic.
+func (rt *AgentRuntime) Run(stop <-chan struct{}) (err error) {
+	// A panic of the calling flow outside a unit is logged with its stack
+	// and ends Run like a panic of a worker (after the deferred clearing of
+	// running_workers below).
+	defer func() {
+		if v := recover(); v != nil {
+			rt.logf("panic: %v\n%s", v, debug.Stack())
+			err = ErrAgentPanic
+		}
+	}()
+	// The agent stops when stop is closed or when a flow panicked.
+	rt.halt = make(chan struct{})
+	merged := make(chan struct{})
+	ended := make(chan struct{})
+	defer close(ended)
+	if isClosed(stop) {
+		close(merged)
+	} else {
+		go func() {
+			select {
+			case <-stop:
+			case <-rt.halt:
+			case <-ended:
+			}
+			close(merged)
+		}()
+	}
+	rt.stop = merged
+	rt.sched.stop = merged
 	if err := recordRunningWorkers(rt.DB, rt.workers); err != nil {
 		rt.logf("failed to record the worker count in use: %v", err)
 	}
@@ -185,7 +220,7 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 			rt.logf("failed to clear the worker count in use: %v", err)
 		}
 	}()
-	if !isClosed(stop) {
+	if !isClosed(merged) {
 		rt.ReapplyStored()
 	}
 	rt.recoverInterruptedRuns()
@@ -194,10 +229,10 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rt.work()
+			rt.safeWork()
 		}()
 	}
-	rt.work()
+	rt.safeWork()
 	wg.Wait()
 	if rt.sched.runsStoppedByStop() {
 		// A run was closed because of the stop: one attempt to send its
@@ -206,6 +241,32 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 		// this is the only flush.
 		rt.flushOutbox()
 	}
+	if isClosed(rt.halt) {
+		return ErrAgentPanic
+	}
+	return nil
+}
+
+// ErrAgentPanic is returned by Run when a flow of the agent panicked: the
+// panic was logged with its stack and the agent stopped.
+var ErrAgentPanic = errors.New("the agent stopped because a worker panicked (the panic is in the log)")
+
+// safeWork runs work and recovers a panic of it: the panic is logged with
+// its stack and the agent is stopped (haltNow), so that the other workers
+// end their units the way they do at a stop and Run returns.
+func (rt *AgentRuntime) safeWork() {
+	defer func() {
+		if v := recover(); v != nil {
+			rt.logf("worker panic: %v\n%s", v, debug.Stack())
+			rt.haltNow()
+		}
+	}()
+	rt.work()
+}
+
+// haltNow stops the agent after a panic (see Run).
+func (rt *AgentRuntime) haltNow() {
+	rt.haltOnce.Do(func() { close(rt.halt) })
 }
 
 // work is one worker: it runs the units the scheduler gives it until the

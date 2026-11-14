@@ -544,7 +544,9 @@ func TestCommandRunKeepsMonitoring(t *testing.T) {
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	rt.mon.defaultInterval = 1
 	rt.sched.lastMonitor = time.Time{}
-	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
+		t.Fatal(err)
+	}
 	if tr.syncs < 3 {
 		t.Fatalf("the monitoring must go on while the command runs: %d syncs", tr.syncs)
 	}
@@ -580,7 +582,9 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	stop, _ := stopAfterFirstSync(tr, 300*time.Millisecond, nil)
 	rt.sched.lastMonitor = time.Time{}
 	start := time.Now()
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	if time.Since(start) > 10*time.Second {
 		t.Fatalf("the stop took %s", time.Since(start))
 	}
@@ -612,7 +616,9 @@ func TestCommandRunStoppedSendsOnce(t *testing.T) {
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
 	stop, stopAt := stopAfterFirstSync(tr, 300*time.Millisecond, func() { tr.failReports = true })
 	rt.sched.lastMonitor = time.Time{}
-	rt.Run(stop)
+	if err := rt.Run(stop); err != nil {
+		t.Fatal(err)
+	}
 	after := 0
 	for _, a := range tr.attempts {
 		if a.After(*stopAt) {

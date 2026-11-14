@@ -1,9 +1,14 @@
 package workers
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,4 +113,67 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, modules.AgentLocalDBFileName)); err == nil {
 		t.Fatal("agent.db created on the central's host")
 	}
+}
+
+// A panic of a worker of the built-in agent is logged with its stack under
+// the built-in agent's prefix and ends the built-in agent: the central keeps
+// running and the screen shows that the built-in agent stopped.
+func TestBuiltinAgentPanicStopsOnlyIt(t *testing.T) {
+	e := newTestEnv(t)
+	b, _ := models.GetBuiltinAgent(e.c.db.Read())
+	fakeAuditTools(t)
+	var logged lockedLog
+	e.c.logger = log.New(&logged, "", 0)
+	enabled := true
+	e.c.conf().BuiltinAgent = &enabled
+	builtinSyncHook = func() { panic("test panic in a sync") }
+	t.Cleanup(func() { builtinSyncHook = nil })
+	stop := make(chan struct{})
+	defer close(stop)
+	wait := e.c.startBuiltinAgent(b, stop)
+	ended := make(chan struct{})
+	go func() {
+		wait()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the built-in agent did not end after the panic")
+	}
+	if running, msg := e.c.builtinStatus(); running || msg.Code != "builtin.stopped" {
+		t.Fatalf("built-in agent status: running %v, %+v", running, msg)
+	}
+	out := logged.String()
+	for _, want := range []string{"worker panic: test panic in a sync", "(*AgentRuntime).safeWork", modules.ErrAgentPanic.Error()} {
+		i := strings.Index(out, want)
+		if i < 0 {
+			t.Fatalf("log lacks %q:\n%s", want, out)
+		}
+		if line := out[strings.LastIndex(out[:i], "\n")+1:]; !strings.HasPrefix(line, "[builtin-agent] ") && want != "(*AgentRuntime).safeWork" {
+			t.Fatalf("%q is not logged by the built-in agent:\n%s", want, out)
+		}
+	}
+	// The central goes on answering.
+	if code := e.adminStatus("GET", "/agents", nil); code != http.StatusOK {
+		t.Fatalf("GET /agents after the panic: %d", code)
+	}
+}
+
+// lockedLog is a buffer that several flows write log lines to.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
