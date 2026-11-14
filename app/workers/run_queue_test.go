@@ -1139,7 +1139,7 @@ func executionsOf(t *testing.T, db *modules.DB, requestID int64) int {
 
 // A real agent with two workers runs a request of a set; a second request of
 // the same set is handed to it (a worker is free) and waits in the agent
-// while the set runs, so its syncs no longer say free_worker. The agent is
+// while the set runs, so its syncs then say free_worker false. The agent is
 // stopped: its last report says stopping and closes the interrupted run, and
 // the request that waited goes back to queued at once. Started again, the
 // agent is handed that request at its first sync and runs it once.

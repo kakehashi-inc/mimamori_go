@@ -13,8 +13,8 @@ import (
 // (free_worker) hands it over: in the transaction that records the sync, the
 // oldest queued request of that agent becomes delivered (one per sync), and
 // the answer carries every delivered request of the agent. Requests of other
-// agents play no role; nothing counts requests over all agents. Reports then
-// move a request on (running, done, expired).
+// agents play no role. Reports then move a request on (running, done,
+// expired).
 
 // An agent that is not responding (it said that it stops, or it has not
 // synced within three of its check intervals and ten minutes, or never)
