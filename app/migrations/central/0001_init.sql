@@ -182,6 +182,7 @@ CREATE TABLE command_requests (
     requested_by TEXT    NOT NULL DEFAULT '',
     expires_at   INTEGER NOT NULL,
     delivered_at INTEGER NOT NULL DEFAULT 0,
+    running_at   INTEGER NOT NULL DEFAULT 0,
     done_at      INTEGER NOT NULL DEFAULT 0,
     run_uid      TEXT    NOT NULL DEFAULT '',
     discarded_at INTEGER NOT NULL DEFAULT 0,

@@ -29,19 +29,20 @@ type CommandRequest struct {
 	RequestedBy string
 	ExpiresAt   int64
 	DeliveredAt int64
+	RunningAt   int64
 	DoneAt      int64
 	RunUID      string
 	DiscardedAt int64
 	DiscardedBy string
 }
 
-const commandRequestCols = `id, agent_id, set_id, state, requested_at, requested_by, expires_at, delivered_at, done_at, run_uid,
+const commandRequestCols = `id, agent_id, set_id, state, requested_at, requested_by, expires_at, delivered_at, running_at, done_at, run_uid,
 	discarded_at, discarded_by`
 
 func scanCommandRequest(s rowScanner) (*CommandRequest, error) {
 	r := &CommandRequest{}
 	if err := s.Scan(&r.ID, &r.AgentID, &r.SetID, &r.State, &r.RequestedAt, &r.RequestedBy, &r.ExpiresAt, &r.DeliveredAt,
-		&r.DoneAt, &r.RunUID, &r.DiscardedAt, &r.DiscardedBy); err != nil {
+		&r.RunningAt, &r.DoneAt, &r.RunUID, &r.DiscardedAt, &r.DiscardedBy); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -129,10 +130,10 @@ func HandOverCommandRequests(db Writer, agentID, now int64) ([]*CommandRequest, 
 }
 
 // MarkCommandRequestRunning records that the agent started the run of a
-// delivered request (delivered -> running).
-func MarkCommandRequestRunning(db Writer, agentID, id int64, runUID string) (bool, error) {
-	return execChanged(db, `UPDATE command_requests SET state = 'running', run_uid = ? WHERE id = ? AND agent_id = ? AND state = 'delivered'`,
-		runUID, id, agentID)
+// delivered request (delivered -> running) and when the central learned it.
+func MarkCommandRequestRunning(db Writer, agentID, id int64, runUID string, now int64) (bool, error) {
+	return execChanged(db, `UPDATE command_requests SET state = 'running', run_uid = ?, running_at = ? WHERE id = ? AND agent_id = ? AND state = 'delivered'`,
+		runUID, now, id, agentID)
 }
 
 // MarkCommandRequestDone records that the run of a delivered or running
@@ -150,10 +151,14 @@ func MarkCommandRequestExpired(db Writer, agentID, id, now int64) (bool, error) 
 }
 
 // EndUnheldCommandRequests ends the running requests of an agent whose id
-// is not in held (the agent no longer runs them) and returns how many. An
-// empty held ends every running request of the agent.
-func EndUnheldCommandRequests(db Writer, agentID int64, held []int64, now int64) (int64, error) {
-	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE agent_id = ? AND state = 'running' ORDER BY id`, agentID)
+// is not in held (the agent no longer runs them) and returns how many. held
+// is the agent's list of a sync whose handling began at since: only the
+// requests that became running before since are ended, so a list read by
+// the agent before a run started never ends that run. An empty held ends
+// every such request of the agent.
+func EndUnheldCommandRequests(db Writer, agentID int64, held []int64, since, now int64) (int64, error) {
+	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE agent_id = ? AND state = 'running' AND running_at < ? ORDER BY id`,
+		agentID, since)
 	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
 		return 0, err

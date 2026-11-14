@@ -260,7 +260,7 @@ func applyRequestTransitions(tx models.Writer, agentID int64, ts []reqTransition
 		var err error
 		switch t.to {
 		case models.RequestRunning:
-			_, err = models.MarkCommandRequestRunning(tx, agentID, t.requestID, t.runUID)
+			_, err = models.MarkCommandRequestRunning(tx, agentID, t.requestID, t.runUID, now)
 		case models.RequestDone:
 			_, err = models.MarkCommandRequestDone(tx, agentID, t.requestID, t.runUID, now)
 		case models.RequestExpired:

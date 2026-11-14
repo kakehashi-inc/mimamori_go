@@ -263,6 +263,7 @@ func TestQueueConcurrentSyncs(t *testing.T) {
 			}
 			held := map[int64]int64{} // request id -> set id
 			sig := ""
+			var lastDrop time.Time
 			for !done.Load() && time.Now().Before(deadline) {
 				req := modules.SyncRequest{AgentVersion: "test", CommandSig: sig, RunningRequests: []int64{}}
 				for id := range held {
@@ -309,10 +310,18 @@ func TestQueueConcurrentSyncs(t *testing.T) {
 						rep.CommandRuns = append(rep.CommandRuns, runReport("run-"+itoa64(id), set, "s", id, []modules.CommandResultReport{}, true, modules.ResultSuccess))
 					} else {
 						dropped = true
+						lastDrop = time.Now()
 					}
 					delete(held, id)
 				}
 				if len(rep.CommandRuns) == 0 && len(rep.CommandRequestAcks) == 0 {
+					// A sync's list ends only the requests that became
+					// running before the second its handling began, so a
+					// lost end is learned by a sync in a later second.
+					if !dropped && time.Since(lastDrop) < 2*time.Second {
+						time.Sleep(1100 * time.Millisecond)
+						continue
+					}
 					if len(held) == 0 && !dropped {
 						select {
 						case <-wake[q.a.ID]:
@@ -521,6 +530,16 @@ func TestQueueRunningEndsBySync(t *testing.T) {
 		t.Fatalf("sync with null: %d", rec.Code)
 	}
 	wantStates(t, e, "null", A.a.ID, r1, models.RequestRunning)
+	// A list ends only what became running before the sync's handling
+	// began (whole seconds): in the same second it ends nothing.
+	if err := e.exec(`UPDATE command_requests SET running_at = ? WHERE id = ?`, time.Now().Unix()+5, r1); err != nil {
+		t.Fatal(err)
+	}
+	syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})
+	wantStates(t, e, "empty list older than the run", A.a.ID, r1, models.RequestRunning)
+	if err := e.exec(`UPDATE command_requests SET running_at = ? WHERE id = ?`, time.Now().Unix()-1, r1); err != nil {
+		t.Fatal(err)
+	}
 	syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})
 	wantStates(t, e, "empty list", A.a.ID, r1, models.RequestDone, A.a.ID, r2, models.RequestDelivered)
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), A.a.ID, r1); r.DoneAt == 0 || r.RunUID != "run-1" {
@@ -531,6 +550,43 @@ func TestQueueRunningEndsBySync(t *testing.T) {
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), A.a.ID, r1); r.State != models.RequestDone || r.RunUID != "run-1" {
 		t.Fatalf("after the closing report: %+v", r)
 	}
+}
+
+// A sync whose running_requests the agent read before the run started (the
+// agent gave up waiting for its answer and sent the report that made the
+// request running; the central carried the sync out after that report) does
+// not end the running request, so its worker is not given to another
+// request while the run goes on. A later sync ends it.
+func TestQueueStaleSyncKeepsRunning(t *testing.T) {
+	e := newTestEnv(t)
+	if err := e.exec(`INSERT INTO settings (key, value) VALUES ('config.workers', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`); err != nil {
+		t.Fatal(err)
+	}
+	e.c.reloadConfig()
+	A := newQueueAgent(t, e, "stale-a", 1)
+	B := newQueueAgent(t, e, "stale-b", 1)
+	syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})
+	syncWith(t, e, B.tok, modules.SyncRequest{RunningRequests: []int64{}})
+	ra, _ := requestRun(t, e, A.a, A.sets[0])
+	rb, _ := requestRun(t, e, B.a, B.sets[0])
+	entered := time.Now().Unix() - 1 // the stale sync's handling began
+	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})); len(got) != 1 || got[0] != ra {
+		t.Fatalf("handed over: %v", got)
+	}
+	reportAgent(t, e, A.tok, modules.ReportRequest{CommandRequestAcks: []modules.CommandRequestAck{
+		{RequestID: ra, Status: modules.RequestAckStarted, RunUID: "r-a", At: 1}}})
+	wantStates(t, e, "started", A.a.ID, ra, models.RequestRunning, B.a.ID, rb, models.RequestQueued)
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), A.a.ID, ra); r.RunningAt <= entered {
+		t.Fatalf("running_at %d, sync began %d", r.RunningAt, entered)
+	}
+	if _, err := e.c.centralSync(A.a, nil, &modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}}, entered); err != nil {
+		t.Fatal(err)
+	}
+	wantStates(t, e, "after the stale sync", A.a.ID, ra, models.RequestRunning, B.a.ID, rb, models.RequestQueued)
+	if _, err := e.c.centralSync(A.a, nil, &modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}}, time.Now().Unix()+1); err != nil {
+		t.Fatal(err)
+	}
+	wantStates(t, e, "after a later sync", A.a.ID, ra, models.RequestDone, B.a.ID, rb, models.RequestPending)
 }
 
 // What a report does to run requests (1.7).

@@ -40,6 +40,7 @@ func (c *core) handleAgentCA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *core) handleAgentSync(w http.ResponseWriter, r *http.Request) {
+	entered := time.Now().Unix()
 	tok, agent, err := c.authenticateAgent(r)
 	if err != nil {
 		c.agentAuthFailed(w, r, err)
@@ -50,7 +51,7 @@ func (c *core) handleAgentSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, modules.M("common.invalid_request"))
 		return
 	}
-	resp, err := c.centralSync(agent, tok, &req)
+	resp, err := c.centralSync(agent, tok, &req, entered)
 	if err != nil {
 		c.internalError(w, r, err)
 		return
@@ -86,7 +87,10 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 
 // centralSync answers a sync request of an agent (tok is nil for the
 // built-in agent, which needs neither token renewal nor CA distribution).
-func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest) (*modules.SyncResponse, error) {
+// entered is when the handling of the request began, before any waiting: the
+// agent read its running_requests before that, so the list ends only the
+// requests that became running before it.
+func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest, entered int64) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	fps, _ := json.Marshal(req.CAFingerprints)
 	// One transaction of the central database records the sync (so the
@@ -101,7 +105,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 			return err
 		}
 		if req.RunningRequests != nil {
-			if _, err := models.EndUnheldCommandRequests(tx, agent.ID, req.RunningRequests, now); err != nil {
+			if _, err := models.EndUnheldCommandRequests(tx, agent.ID, req.RunningRequests, entered, now); err != nil {
 				return err
 			}
 		}

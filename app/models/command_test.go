@@ -327,7 +327,7 @@ func TestCommandRequestModel(t *testing.T) {
 		// queued -> pending -> queued -> pending; nothing else from queued.
 		ok, err := models.ReleaseCommandRequest(tx, r.ID)
 		mustChange("release of queued", ok, err, false)
-		ok, err = models.MarkCommandRequestRunning(tx, A, r.ID, "u")
+		ok, err = models.MarkCommandRequestRunning(tx, A, r.ID, "u", 1)
 		mustChange("running from queued", ok, err, false)
 		ok, err = models.MarkCommandRequestDone(tx, A, r.ID, "u", 1)
 		mustChange("done from queued", ok, err, false)
@@ -370,10 +370,13 @@ func TestCommandRequestModel(t *testing.T) {
 		}
 
 		// delivered -> running (only by its own agent) -> done.
-		ok, err = models.MarkCommandRequestRunning(tx, B, r.ID, "u1")
+		ok, err = models.MarkCommandRequestRunning(tx, B, r.ID, "u1", 165)
 		mustChange("running by another agent", ok, err, false)
-		ok, err = models.MarkCommandRequestRunning(tx, A, r.ID, "u1")
+		ok, err = models.MarkCommandRequestRunning(tx, A, r.ID, "u1", 165)
 		mustChange("running", ok, err, true)
+		if got, _ := models.GetCommandRequest(tx, A, r.ID); got.RunningAt != 165 {
+			t.Fatalf("running_at: %+v", got)
+		}
 		ok, err = models.MarkCommandRequestExpired(tx, A, r.ID, 1)
 		mustChange("expired from running", ok, err, false)
 		// A new request of the set while the first one runs.
@@ -419,7 +422,7 @@ func TestCommandRequestModel(t *testing.T) {
 		r6 := insert(A, 3, 302)
 		_, _ = models.GrantCommandRequest(tx, r6.ID)
 		_, _ = models.HandOverCommandRequests(tx, A, 303)
-		_, _ = models.MarkCommandRequestRunning(tx, A, r6.ID, "u6")
+		_, _ = models.MarkCommandRequestRunning(tx, A, r6.ID, "u6", 304)
 		open, err := models.ListOpenCommandRequests(tx)
 		var ids []int64
 		for _, o := range open {
@@ -433,21 +436,25 @@ func TestCommandRequestModel(t *testing.T) {
 		}
 
 		// running requests the agent no longer holds end; delivered ones
-		// and listed ones are not touched.
+		// and listed ones are not touched, nor those that became running
+		// when or after the sync's handling began (its list is older).
 		r7 := insert(A, 4, 304)
 		_, _ = models.GrantCommandRequest(tx, r7.ID)
 		_, _ = models.HandOverCommandRequests(tx, A, 305)
-		_, _ = models.MarkCommandRequestRunning(tx, A, r7.ID, "u7")
-		if n, err := models.EndUnheldCommandRequests(tx, A, []int64{r7.ID}, 310); err != nil || n != 1 {
+		_, _ = models.MarkCommandRequestRunning(tx, A, r7.ID, "u7", 306)
+		if n, err := models.EndUnheldCommandRequests(tx, A, []int64{r7.ID}, 310, 310); err != nil || n != 1 {
 			t.Fatalf("end unheld: %d %v", n, err)
 		}
 		if state(r6.ID) != models.RequestDone || state(r7.ID) != models.RequestRunning || state(r5.ID) != models.RequestDelivered {
 			t.Fatalf("after end unheld: %s %s %s", state(r6.ID), state(r7.ID), state(r5.ID))
 		}
-		if n, _ := models.EndUnheldCommandRequests(tx, B, nil, 311); n != 0 {
+		if n, _ := models.EndUnheldCommandRequests(tx, A, []int64{}, 306, 311); n != 0 || state(r7.ID) != models.RequestRunning {
+			t.Fatalf("list older than the run: %d %s", n, state(r7.ID))
+		}
+		if n, _ := models.EndUnheldCommandRequests(tx, B, nil, 311, 311); n != 0 {
 			t.Fatalf("other agent ended %d", n)
 		}
-		if n, _ := models.EndUnheldCommandRequests(tx, A, []int64{}, 312); n != 1 || state(r7.ID) != models.RequestDone {
+		if n, _ := models.EndUnheldCommandRequests(tx, A, []int64{}, 312, 312); n != 1 || state(r7.ID) != models.RequestDone {
 			t.Fatalf("empty list: %d %s", n, state(r7.ID))
 		}
 

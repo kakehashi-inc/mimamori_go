@@ -22,11 +22,12 @@ func (t *inProcessTransport) agent() (*models.Agent, error) {
 }
 
 func (t *inProcessTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse, error) {
+	entered := time.Now().Unix()
 	a, err := t.agent()
 	if err != nil {
 		return nil, err
 	}
-	return t.c.centralSync(a, nil, req)
+	return t.c.centralSync(a, nil, req, entered)
 }
 
 func (t *inProcessTransport) Report(req *modules.ReportRequest) error {
