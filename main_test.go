@@ -510,8 +510,10 @@ func TestCommandLineExitCodes(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if _, errOut, code := runMain(t, "--data-dir", dir, "agent", "set-workers", "-1", "--builtin"); code != 2 || !strings.HasPrefix(errOut, "Error: ") {
-		t.Errorf("agent set-workers -1 --builtin: exit %d %q", code, errOut)
+	for _, args := range [][]string{{"agent", "set-workers", "-1", "--builtin"}, {"agent", "set-workers", "-1"}, {"agent", "set-workers", "0x10"}} {
+		if _, errOut, code := runMain(t, append([]string{"--data-dir", dir}, args...)...); code != 2 || errOut != "Error: the agent's worker count must be a whole number from 1 to 64\n" {
+			t.Errorf("%q: exit %d %q", args, code, errOut)
+		}
 	}
 	if out, errOut, code := runMain(t, "--data-dir", dir, "central", "config", "set", "notify.subject_prefix", "-1-"); code != 0 {
 		t.Fatalf("config set: exit %d %s %s", code, out, errOut)

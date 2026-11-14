@@ -648,7 +648,8 @@
         "builtin": {
             "auditd_unusable": "auditd を使えません: {{cause}}",
             "local_db": "ローカル DB でエラーが発生しました: {{cause}}",
-            "stopped": "停止しました。"
+            "stopped": "停止しました。",
+            "workers_invalid": "内蔵エージェントに保存されているワーカー数が {{min}}〜{{max}} の整数ではありません。"
         },
         "command": {
             "run_not_found": "実行結果が見つかりません。",

@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -106,12 +107,19 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
 		return none
 	}
-	// The built-in agent's own worker count, from its own database; the
-	// central's item workers has nothing to do with it.
-	workers, err := modules.LoadAgentWorkers(db.Read())
+	// The built-in agent's own worker count, from its own database. An
+	// invalid stored count is shown on the screens with a message of its
+	// own that names no command; the central's log names the command that
+	// repairs it.
+	workers, err := modules.LoadAgentWorkers(db.Read(), true)
 	if err != nil {
 		db.Close()
-		c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
+		var invalid *modules.AgentWorkersInvalidError
+		if errors.As(err, &invalid) {
+			c.setBuiltinNotRunning(modules.M("builtin.workers_invalid", "min", modules.MinAgentWorkers, "max", modules.MaxAgentWorkers), err.Error())
+		} else {
+			c.setBuiltinStatus(false, modules.M("builtin.local_db", "cause", modules.AsMsg(err)))
+		}
 		return none
 	}
 	logger := log.New(c.logger.Writer(), "[builtin-agent] ", log.LstdFlags)

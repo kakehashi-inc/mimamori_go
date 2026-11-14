@@ -76,23 +76,23 @@ func TestAgentSetWorkers(t *testing.T) {
 	dir := t.TempDir()
 	SetDataDir(dir)
 
-	// The argument is read as a decimal number and refused with the words
-	// of central config set workers (no base prefixes: 0x10 is refused).
-	for arg, want := range map[string]string{
-		"0": "workers must be a positive integer", "-1": "workers must be a positive integer",
-		"abc": "workers must be a positive integer", "1.5": "workers must be a positive integer",
-		"0x10": "workers must be a positive integer", "": "workers must be a positive integer",
-		"65": "workers must be 64 or less",
-	} {
+	// The argument is a whole number of the digits 0-9 from 1 to 64
+	// (leading zeros are decimal); every other value is refused with the
+	// agent's own message and exit code 2, before the data directory is
+	// looked at.
+	const refusal = "the agent's worker count must be a whole number from 1 to 64"
+	for _, arg := range []string{"0", "-1", "65", "abc", "1.5", "0x10", "", "+3", " 3", "3 ", "1_0", "1e1", "\uff13", "99999999999999999999"} {
 		for _, builtin := range []bool{false, true} {
 			ee := wantExit(t, AgentSetWorkers(dir, arg, builtin), ExitArgument)
-			if ee.Error() != want {
-				t.Fatalf("message for %q (builtin %v): %q, want %q", arg, builtin, ee.Error(), want)
+			if ee.Error() != refusal {
+				t.Fatalf("message for %q (builtin %v): %q, want %q", arg, builtin, ee.Error(), refusal)
 			}
 		}
 	}
-	if n, err := parseWorkersArg("064"); err != nil || n != 64 {
-		t.Fatalf("064: %d %v, want 64", n, err)
+	for arg, want := range map[string]int{"064": 64, "010": 10, "1": 1} {
+		if n, err := parseWorkersArg(arg); err != nil || n != want {
+			t.Fatalf("%s: %d %v, want %d", arg, n, err, want)
+		}
 	}
 	ee := wantExit(t, AgentSetWorkers(dir, "2", false), ExitConfig)
 	if ee.Error() != ErrAgentNotInitialized.Error() {
@@ -113,7 +113,7 @@ func TestAgentSetWorkers(t *testing.T) {
 	}
 	out, err = workersOutput(t, (&AgentStatusCmd{}).Run)
 	_ = wantExit(t, err, ExitNotRunning)
-	if !strings.Contains(out, "workers:         4\n") {
+	if !strings.Contains(out, "\nagent workers:   4\n") {
 		t.Fatalf("status of a stopped agent:\n%s", out)
 	}
 
@@ -135,7 +135,7 @@ func TestAgentSetWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "workers:         1 (saved: 4, takes effect after restart)\n") {
+	if !strings.Contains(out, "\nagent workers:   1 (saved: 4, takes effect after restart)\n") {
 		t.Fatalf("status of a running agent:\n%s", out)
 	}
 	out, err = workersOutput(t, func() error { return AgentSetWorkers(dir, "3", false) })
@@ -148,8 +148,40 @@ func TestAgentSetWorkers(t *testing.T) {
 	// A value left behind without the lock is not shown.
 	lock.Release()
 	out, _ = workersOutput(t, (&AgentStatusCmd{}).Run)
-	if !strings.Contains(out, "workers:         3\n") {
+	if !strings.Contains(out, "\nagent workers:   3\n") {
 		t.Fatalf("status after the agent ended:\n%s", out)
+	}
+
+	// An invalid stored value is shown once after the label, with the
+	// command that repairs it; while the agent runs, after the count in
+	// use.
+	setLocalStateAt(t, path, stateWorkers, "abc")
+	const stored = `stored value "abc" is not a whole number from 1 to 64; set it with agent set-workers N`
+	out, _ = workersOutput(t, (&AgentStatusCmd{}).Run)
+	if !strings.Contains(out, "\nagent workers:   "+stored+"\n") || strings.Count(out, "workers:") != 1 {
+		t.Fatalf("status with an invalid stored value:\n%s", out)
+	}
+	lock, err = AcquireLock(filepath.Join(dir, AgentLockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	out, _ = workersOutput(t, (&AgentStatusCmd{}).Run)
+	if !strings.Contains(out, "\nagent workers:   1 ("+stored+")\n") || strings.Count(out, "workers:") != 1 {
+		t.Fatalf("status of a running agent with an invalid stored value:\n%s", out)
+	}
+}
+
+// setLocalStateAt sets a state key of the local database at path.
+func setLocalStateAt(t *testing.T, path, key, value string) {
+	t.Helper()
+	db, err := OpenSQLite(path, SchemaAgentLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, key, value) }); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -264,22 +296,28 @@ func TestAgentSetWorkersBuiltinOtherBuild(t *testing.T) {
 	}
 }
 
-// LoadAgentWorkers: a missing row is 1, a stored value outside 1-64 or not
-// a number is an error that names it; agent start refuses to start with it.
+// LoadAgentWorkers: a missing row is 1, a stored value that is not a whole
+// number from 1 to 64 is an error that names it and the command that
+// repairs it (with --builtin for the built-in agent); agent start refuses
+// to start with it.
 func TestAgentStartRejectsBadWorkers(t *testing.T) {
 	rt, done := openAgentDB(t)
-	if n, err := LoadAgentWorkers(rt.DB.Read()); err != nil || n != DefaultAgentWorkers {
+	if n, err := LoadAgentWorkers(rt.DB.Read(), false); err != nil || n != DefaultAgentWorkers {
 		t.Fatalf("missing row: %d %v", n, err)
 	}
-	for _, v := range []string{"abc", "0", "65", ""} {
+	for _, v := range []string{"abc", "0", "65", "", "+3", " 3", "0x10"} {
 		setLocalState(t, rt.DB, stateWorkers, v)
-		_, err := LoadAgentWorkers(rt.DB.Read())
-		if err == nil || !strings.Contains(err.Error(), `stored value "`+v+`" is not 1-64; set it with agent set-workers`) {
-			t.Fatalf("stored %q: %v", v, err)
+		for builtin, command := range map[bool]string{false: "agent set-workers N", true: "agent set-workers N --builtin"} {
+			_, err := LoadAgentWorkers(rt.DB.Read(), builtin)
+			want := `agent workers: stored value "` + v + `" is not a whole number from 1 to 64; set it with ` + command
+			var bad *AgentWorkersInvalidError
+			if err == nil || err.Error() != want || !errors.As(err, &bad) || bad.Value != v {
+				t.Fatalf("stored %q (builtin %v): %v, want %q", v, builtin, err, want)
+			}
 		}
 	}
 	setLocalState(t, rt.DB, stateWorkers, "64")
-	if n, err := LoadAgentWorkers(rt.DB.Read()); err != nil || n != 64 {
+	if n, err := LoadAgentWorkers(rt.DB.Read(), false); err != nil || n != 64 {
 		t.Fatalf("64: %d %v", n, err)
 	}
 	done()
@@ -302,7 +340,7 @@ func TestAgentStartRejectsBadWorkers(t *testing.T) {
 	setLocalState(t, db, stateWorkers, "abc")
 	db.Close()
 	ee := wantExit(t, AgentStart(dir), ExitConfig)
-	if want := `workers: stored value "abc" is not 1-64; set it with agent set-workers`; ee.Error() != want {
+	if want := `agent workers: stored value "abc" is not a whole number from 1 to 64; set it with agent set-workers N`; ee.Error() != want {
 		t.Fatalf("agent start: %q", ee.Error())
 	}
 	// agent set-workers repairs it.

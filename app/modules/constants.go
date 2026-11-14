@@ -64,10 +64,12 @@ const (
 // --- Worker count of an agent ---
 
 // The worker count of an agent (and of the built-in agent): how many units
-// it processes at the same time, stored in that agent's own local database
+// it processes at the same time, a whole number from MinAgentWorkers to
+// MaxAgentWorkers stored in that agent's own local database
 // (agent_workers.go), DefaultAgentWorkers when none is stored.
 const (
 	DefaultAgentWorkers = 1
+	MinAgentWorkers     = 1
 	MaxAgentWorkers     = 64
 )
 

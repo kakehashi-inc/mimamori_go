@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"mimamori/app/models"
 )
@@ -13,8 +12,8 @@ import (
 // The worker count of an agent: how many of its units (the monitoring step,
 // runs of command sets) it processes at the same time. Every agent, the
 // built-in agent included, keeps its own count in its own local database
-// (agent.db, builtin-agent.db) and nowhere else; the central's item workers
-// is a different setting and is never read here.
+// (agent.db, builtin-agent.db) and nowhere else. It is a whole number from
+// MinAgentWorkers to MaxAgentWorkers (parseAgentWorkers).
 const (
 	// stateWorkers is the saved count (absent: DefaultAgentWorkers). It is
 	// changed by agent set-workers and read when the agent starts.
@@ -27,30 +26,61 @@ const (
 	stateRunningWorkers = "running_workers"
 )
 
-// parseAgentWorkers returns the count a stored text names, or false when it
-// is not an integer 1 to MaxAgentWorkers.
+// parseAgentWorkers returns the count a text names (an argument of agent
+// set-workers or a stored value), or false when it is not a whole number
+// (ParseWholeNumber) from MinAgentWorkers to MaxAgentWorkers.
 func parseAgentWorkers(v string) (int, bool) {
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > MaxAgentWorkers {
+	n, err := ParseWholeInt(v)
+	if err != nil || n < MinAgentWorkers || n > MaxAgentWorkers {
 		return 0, false
 	}
 	return n, true
 }
 
-// LoadAgentWorkers returns the saved worker count of the agent whose local
-// database r reads: DefaultAgentWorkers when none is saved, an error when
-// the stored value is not an integer 1 to MaxAgentWorkers.
-func LoadAgentWorkers(r models.Reader) (int, error) {
+// AgentWorkersInvalidError tells that the worker count stored in the local
+// database of an agent is not a whole number from MinAgentWorkers to
+// MaxAgentWorkers. Its text names the stored value and the command that
+// repairs it.
+type AgentWorkersInvalidError struct {
+	Value string // the stored text
+	// Builtin: the database of the built-in agent, repaired with
+	// agent set-workers N --builtin.
+	Builtin bool
+}
+
+func (e *AgentWorkersInvalidError) Error() string {
+	command := "agent set-workers N"
+	if e.Builtin {
+		command += " --builtin"
+	}
+	return fmt.Sprintf("stored value %q is not a whole number from %d to %d; set it with %s", e.Value, MinAgentWorkers, MaxAgentWorkers, command)
+}
+
+// storedAgentWorkers returns the saved worker count of the agent whose
+// local database r reads: DefaultAgentWorkers when none is saved, an
+// *AgentWorkersInvalidError when the stored value is not a valid count
+// (builtin: the database is builtin-agent.db).
+func storedAgentWorkers(r models.Reader, builtin bool) (int, error) {
 	v, found, err := models.FindLocalState(r, stateWorkers)
 	if err != nil {
-		return 0, fmt.Errorf("workers: %w", err)
+		return 0, err
 	}
 	if !found {
 		return DefaultAgentWorkers, nil
 	}
 	n, ok := parseAgentWorkers(v)
 	if !ok {
-		return 0, fmt.Errorf("workers: stored value %q is not 1-%d; set it with agent set-workers", v, MaxAgentWorkers)
+		return 0, &AgentWorkersInvalidError{Value: v, Builtin: builtin}
+	}
+	return n, nil
+}
+
+// LoadAgentWorkers is storedAgentWorkers with errors labelled "agent
+// workers: ", for the start of an agent (builtin: the built-in agent).
+func LoadAgentWorkers(r models.Reader, builtin bool) (int, error) {
+	n, err := storedAgentWorkers(r, builtin)
+	if err != nil {
+		return 0, fmt.Errorf("agent workers: %w", err)
 	}
 	return n, nil
 }
@@ -86,16 +116,13 @@ func clearRunningWorkers(db *DB) error {
 	})
 }
 
-// parseWorkersArg returns the count the argument of agent set-workers names:
-// a decimal number 1 to MaxAgentWorkers, read and refused the way central
-// config set reads and refuses its item workers.
+// parseWorkersArg returns the count the argument of agent set-workers
+// names. Every value that is not a whole number from MinAgentWorkers to
+// MaxAgentWorkers gets the same refusal (exit code 2).
 func parseWorkersArg(v string) (int, error) {
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil || n <= 0 {
-		return 0, NewExitError(ExitArgument, M("config.not_positive_int", "name", "workers").Text())
-	}
-	if n > MaxAgentWorkers {
-		return 0, NewExitError(ExitArgument, M("config.int_max", "name", "workers", "max", MaxAgentWorkers).Text())
+	n, ok := parseAgentWorkers(v)
+	if !ok {
+		return 0, NewExitErrorf(ExitArgument, "the agent's worker count must be a whole number from %d to %d", MinAgentWorkers, MaxAgentWorkers)
 	}
 	return n, nil
 }
@@ -172,19 +199,19 @@ func AgentSetWorkers(dataDir, arg string, builtin bool) error {
 	return nil
 }
 
-// agentWorkersStatus returns the text of the workers: line of agent status:
-// the saved count, or the count in use followed by the saved one when the
-// running agent uses another count. running tells that the agent's process
-// holds its lock.
+// agentWorkersStatus returns the text after the label "agent workers:" of
+// agent status: the saved count, or the count in use followed by the saved
+// one when the running agent uses another count. running tells that the
+// agent's process holds its lock.
 func agentWorkersStatus(r models.Reader, running bool) string {
-	saved, err := LoadAgentWorkers(r)
+	saved, err := storedAgentWorkers(r, false)
 	inUse, hasInUse := 0, false
 	if running {
 		inUse, hasInUse = loadRunningWorkers(r)
 	}
 	switch {
 	case err != nil && hasInUse:
-		return fmt.Sprintf("%d (saved: %v)", inUse, err)
+		return fmt.Sprintf("%d (%v)", inUse, err)
 	case err != nil:
 		return err.Error()
 	case hasInUse && inUse != saved:

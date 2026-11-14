@@ -100,6 +100,10 @@ type core struct {
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg
+	// builtinLog is the reason the central's log gives for a built-in
+	// agent that does not run when it is not the English text of
+	// builtinMessage (it may name a command; the screens never do).
+	builtinLog string
 }
 
 // agentLocks is a lock per agent ID. An entry exists only while a flow
@@ -178,10 +182,19 @@ func (c *core) reloadConfig() {
 }
 
 // setBuiltinStatus records whether the built-in agent runs and why not (an
-// empty Msg when there is nothing to say).
+// empty Msg when there is nothing to say). The central's log gives the
+// English text of msg as the reason.
 func (c *core) setBuiltinStatus(running bool, msg modules.Msg) {
 	c.builtinMu.Lock()
-	c.builtinRunning, c.builtinMessage = running, msg
+	c.builtinRunning, c.builtinMessage, c.builtinLog = running, msg, ""
+	c.builtinMu.Unlock()
+}
+
+// setBuiltinNotRunning records that the built-in agent does not run: msg is
+// the reason the screens show, logText the reason the central's log gives.
+func (c *core) setBuiltinNotRunning(msg modules.Msg, logText string) {
+	c.builtinMu.Lock()
+	c.builtinRunning, c.builtinMessage, c.builtinLog = false, msg, logText
 	c.builtinMu.Unlock()
 }
 
@@ -189,6 +202,17 @@ func (c *core) builtinStatus() (bool, modules.Msg) {
 	c.builtinMu.Lock()
 	defer c.builtinMu.Unlock()
 	return c.builtinRunning, c.builtinMessage
+}
+
+// builtinLogReason returns the reason the central's log gives for the
+// built-in agent's status.
+func (c *core) builtinLogReason() string {
+	c.builtinMu.Lock()
+	defer c.builtinMu.Unlock()
+	if c.builtinLog != "" {
+		return c.builtinLog
+	}
+	return c.builtinMessage.Text()
 }
 
 // targetDB returns the handle of an agent's own database and opens it when

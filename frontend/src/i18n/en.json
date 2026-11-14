@@ -648,7 +648,8 @@
         "builtin": {
             "auditd_unusable": "auditd is not usable: {{cause}}",
             "local_db": "local database: {{cause}}",
-            "stopped": "stopped"
+            "stopped": "stopped",
+            "workers_invalid": "The worker count stored for the built-in agent is not a whole number from {{min}} to {{max}}."
         },
         "command": {
             "run_not_found": "run not found",

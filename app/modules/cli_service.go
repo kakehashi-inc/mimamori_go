@@ -168,7 +168,7 @@ func (c *AgentStatusCmd) Run() error {
 		} else {
 			fmt.Printf("%-16s %v\n", "configuration:", err)
 		}
-		fmt.Printf("%-16s %s\n", "workers:", agentWorkersStatus(rd, running))
+		fmt.Printf("%-16s %s\n", "agent workers:", agentWorkersStatus(rd, running))
 		var rule RuleAssignment
 		if json.Unmarshal([]byte(models.GetLocalState(rd, stateRule)), &rule) == nil && rule.ID > 0 {
 			fmt.Printf("%-16s %s (version %d)\n", "rule:", rule.Name, rule.Version)

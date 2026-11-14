@@ -140,9 +140,8 @@ func startCentral() error {
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen)
 	// Nothing about the built-in agent is logged while it is disabled.
 	builtinEnabled := *c.conf().BuiltinAgent
-	builtinRunning, msg := c.builtinStatus()
-	if builtinEnabled && !builtinRunning {
-		logger.Printf("built-in agent is not running: %s", msg.Text())
+	if builtinRunning, _ := c.builtinStatus(); builtinEnabled && !builtinRunning {
+		logger.Printf("built-in agent is not running: %s", c.builtinLogReason())
 	}
 	// Run until a signal, or until a listener fails for good (the library
 	// retries temporary accept errors itself).

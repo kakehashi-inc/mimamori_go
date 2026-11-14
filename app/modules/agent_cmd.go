@@ -391,7 +391,7 @@ func AgentStart(dataDir string) error {
 	if err != nil {
 		return NewExitErrorf(ExitConfig, "configuration: %v", err)
 	}
-	workers, err := LoadAgentWorkers(db.Read())
+	workers, err := LoadAgentWorkers(db.Read(), false)
 	if err != nil {
 		return NewExitError(ExitConfig, err.Error())
 	}
