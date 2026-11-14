@@ -65,7 +65,7 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	before := centralWorkers()
 
 	// The built-in agent's 2, set on the central's host.
-	if err := modules.AgentSetWorkers(dir, 2, true); err != nil {
+	if err := modules.AgentSetWorkers(dir, "2", true); err != nil {
 		t.Fatal(err)
 	}
 	if got := centralWorkers(); got != before || e.c.conf().Workers != 5 {

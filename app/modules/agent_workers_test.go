@@ -76,20 +76,32 @@ func TestAgentSetWorkers(t *testing.T) {
 	dir := t.TempDir()
 	SetDataDir(dir)
 
-	for _, n := range []int{0, 65} {
-		ee := wantExit(t, AgentSetWorkers(dir, n, false), ExitArgument)
-		if want := "must be 1-64"; !strings.Contains(ee.Error(), want) {
-			t.Fatalf("message for %d: %q", n, ee.Error())
+	// The argument is read as a decimal number and refused with the words
+	// of central config set workers (no base prefixes: 0x10 is refused).
+	for arg, want := range map[string]string{
+		"0": "workers must be a positive integer", "-1": "workers must be a positive integer",
+		"abc": "workers must be a positive integer", "1.5": "workers must be a positive integer",
+		"0x10": "workers must be a positive integer", "": "workers must be a positive integer",
+		"65": "workers must be 64 or less",
+	} {
+		for _, builtin := range []bool{false, true} {
+			ee := wantExit(t, AgentSetWorkers(dir, arg, builtin), ExitArgument)
+			if ee.Error() != want {
+				t.Fatalf("message for %q (builtin %v): %q, want %q", arg, builtin, ee.Error(), want)
+			}
 		}
 	}
-	ee := wantExit(t, AgentSetWorkers(dir, 2, false), ExitConfig)
+	if n, err := parseWorkersArg("064"); err != nil || n != 64 {
+		t.Fatalf("064: %d %v, want 64", n, err)
+	}
+	ee := wantExit(t, AgentSetWorkers(dir, "2", false), ExitConfig)
 	if ee.Error() != ErrAgentNotInitialized.Error() {
 		t.Fatalf("without agent.db: %q", ee.Error())
 	}
 
 	path := filepath.Join(dir, AgentLocalDBFileName)
 	newLocalDB(t, path)
-	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, 4, false) })
+	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, "4", false) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +138,7 @@ func TestAgentSetWorkers(t *testing.T) {
 	if !strings.Contains(out, "workers:         1 (saved: 4, takes effect after restart)\n") {
 		t.Fatalf("status of a running agent:\n%s", out)
 	}
-	out, err = workersOutput(t, func() error { return AgentSetWorkers(dir, 3, false) })
+	out, err = workersOutput(t, func() error { return AgentSetWorkers(dir, "3", false) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +159,7 @@ func TestAgentSetWorkers(t *testing.T) {
 func TestAgentSetWorkersBuiltin(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
-	ee := wantExit(t, AgentSetWorkers(dir, 2, true), ExitConfig)
+	ee := wantExit(t, AgentSetWorkers(dir, "2", true), ExitConfig)
 	if want := "the data directory " + dir + " holds no central (central.db not found); --builtin sets the built-in agent of a central"; ee.Error() != want {
 		t.Fatalf("without central.db: %q", ee.Error())
 	}
@@ -183,8 +195,7 @@ func TestAgentSetWorkersBuiltin(t *testing.T) {
 		return b.String()
 	}
 	before := settings()
-
-	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, 2, true) })
+	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, "2", true) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,12 +232,35 @@ func TestAgentSetWorkersBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	out, err = workersOutput(t, func() error { return AgentSetWorkers(dir, 6, true) })
+	out, err = workersOutput(t, func() error { return AgentSetWorkers(dir, "6", true) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "Workers of the built-in agent set to 6 (was 2). The running built-in agent uses 2 until the central is restarted.\n"; out != want {
 		t.Fatalf("output %q, want %q", out, want)
+	}
+}
+
+// agent set-workers --builtin refuses a central.db of another build, as
+// every other command does, and creates no builtin-agent.db then.
+func TestAgentSetWorkersBuiltinOtherBuild(t *testing.T) {
+	MigrationsFS = os.DirFS("../..")
+	dir := t.TempDir()
+	central := filepath.Join(dir, CentralDBFileName)
+	cdb, err := OpenSQLite(central, SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := execWrite(cdb, `PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	cdb.Close()
+	ee := wantExit(t, AgentSetWorkers(dir, "2", true), ExitConfig)
+	if !strings.Contains(ee.Error(), central+" was created by another build") {
+		t.Fatalf("message: %q", ee.Error())
+	}
+	if _, err := os.Stat(filepath.Join(dir, BuiltinAgentLocalDBName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("builtin-agent.db created in a refused directory: %v", err)
 	}
 }
 
@@ -272,7 +306,7 @@ func TestAgentStartRejectsBadWorkers(t *testing.T) {
 		t.Fatalf("agent start: %q", ee.Error())
 	}
 	// agent set-workers repairs it.
-	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, 2, false) })
+	out, err := workersOutput(t, func() error { return AgentSetWorkers(dir, "2", false) })
 	if err != nil || out != "Workers of the agent set to 2 (was abc). It takes effect when the agent starts.\n" {
 		t.Fatalf("repair: %q %v", out, err)
 	}

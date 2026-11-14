@@ -222,8 +222,10 @@ type AgentCmd struct {
 // AgentSetWorkersCmd sets the worker count of the agent or, with --builtin,
 // of the built-in agent of the central in the data directory.
 type AgentSetWorkersCmd struct {
-	N       int  `arg:"" help:"Worker count (1-64)"`
-	Builtin bool `help:"Set the built-in agent's worker count (on the central's host)"`
+	// N is read as text and parsed as a decimal number by AgentSetWorkers,
+	// the way central config set reads workers.
+	N       string `arg:"" help:"Worker count (1-64)"`
+	Builtin bool   `help:"Set the built-in agent's worker count (on the central's host)"`
 }
 
 func (c *AgentSetWorkersCmd) Run() error {

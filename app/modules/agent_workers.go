@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"mimamori/app/models"
 )
@@ -85,19 +86,41 @@ func clearRunningWorkers(db *DB) error {
 	})
 }
 
-// AgentSetWorkers saves the worker count n of the agent in dataDir (agent
-// set-workers), or with builtin that of the built-in agent of the central in
-// dataDir (builtin-agent.db, created when missing). The agent or the central
-// may be running: the count takes effect at its next start, and the line
-// printed says which count the running process uses until then.
-func AgentSetWorkers(dataDir string, n int, builtin bool) error {
-	if n < 1 || n > MaxAgentWorkers {
-		return NewExitErrorf(ExitArgument, "workers %d must be 1-%d", n, MaxAgentWorkers)
+// parseWorkersArg returns the count the argument of agent set-workers names:
+// a decimal number 1 to MaxAgentWorkers, read and refused the way central
+// config set reads and refuses its item workers.
+func parseWorkersArg(v string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0, NewExitError(ExitArgument, M("config.not_positive_int", "name", "workers").Text())
+	}
+	if n > MaxAgentWorkers {
+		return 0, NewExitError(ExitArgument, M("config.int_max", "name", "workers", "max", MaxAgentWorkers).Text())
+	}
+	return n, nil
+}
+
+// AgentSetWorkers saves the worker count the argument arg names for the
+// agent in dataDir (agent set-workers), or with builtin that of the built-in
+// agent of the central in dataDir (builtin-agent.db, created when missing;
+// central.db must be one of this build). The agent or the central may be
+// running: the count takes effect at its next start, and the line printed
+// says which count the running process uses until then.
+func AgentSetWorkers(dataDir, arg string, builtin bool) error {
+	n, err := parseWorkersArg(arg)
+	if err != nil {
+		return err
 	}
 	var dbPath, lockPath string
 	if builtin {
-		if _, err := os.Stat(filepath.Join(dataDir, CentralDBFileName)); err != nil {
+		centralPath := filepath.Join(dataDir, CentralDBFileName)
+		if _, err := os.Stat(centralPath); err != nil {
 			return NewExitErrorf(ExitConfig, "the data directory %s holds no central (%s not found); --builtin sets the built-in agent of a central", dataDir, CentralDBFileName)
+		}
+		// A data directory of another build is refused before
+		// builtin-agent.db is created in it.
+		if err := CheckSQLiteBuild(centralPath, SchemaCentral); err != nil {
+			return DBOpenFailed(err, ExitConfig, "database")
 		}
 		dbPath, lockPath = filepath.Join(dataDir, BuiltinAgentLocalDBName), filepath.Join(dataDir, CentralLockFileName)
 	} else {
