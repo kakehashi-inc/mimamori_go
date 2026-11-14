@@ -52,6 +52,27 @@ func TestDBInstance(t *testing.T) {
 	}
 }
 
+func TestReceivedReport(t *testing.T) {
+	db := openDB(t, modules.SchemaAgentDB)
+	if got, err := models.LastReceivedReport(db.Read()); err != nil || got != "" {
+		t.Fatalf("empty: %q %v", got, err)
+	}
+	for _, id := range []string{"0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"} {
+		inTx(t, db, func(tx models.Writer) {
+			if err := models.SetLastReceivedReport(tx, id, 1000); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if got, err := models.LastReceivedReport(db.Read()); err != nil || got != id {
+			t.Fatalf("read back: %q %v, want %q", got, err, id)
+		}
+	}
+	var rows int
+	if err := db.Read().QueryRow(`SELECT count(*) FROM received_report`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows: %d %v", rows, err)
+	}
+}
+
 func TestCommandSetModel(t *testing.T) {
 	inTx(t, openDB(t, modules.SchemaAgentDB), func(tx models.Writer) {
 		s := newSet("disk")

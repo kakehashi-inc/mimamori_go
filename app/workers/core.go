@@ -81,6 +81,11 @@ type core struct {
 	// in the order given.
 	queueChecked func(tx models.Reader, now int64, granted []*models.CommandRequest)
 
+	// reportStored, when set (tests only), is called in centralReport after
+	// the part in the agent's database was committed and before the part in
+	// central.db; an error it returns ends the report there.
+	reportStored func(agentID int64) error
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg

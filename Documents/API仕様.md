@@ -713,7 +713,7 @@ interface DetectionReport {
   file_ctime?: number; file_owner?: string; file_mode?: string;   // writable と exec_file の検知
 }
 interface ReportRequest {
-  report_id?: string;                  // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の報告に入れたときに作り、送り直しても変わらない。現在のセントラルは使わない
+  report_id?: string;                  // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の報告に入れたときに作り、送り直しても変わらない。最後に保存した報告と同じなら保存し直さない
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
   host_info?: HostInfo;                // 4 章の HostInfo と同じ項目（workers を含む）に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
@@ -750,5 +750,6 @@ interface CommandRunReport {
 - コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。
 - 報告は、まず `command_request_acks` を、次に `command_runs` を順に指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。最後にセントラルのワーカーの割り当てを行うため、終わった指示のワーカーは同じ報告の中で次の指示に割り当てます。
 - `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
+- `report_id` が、この監視対象で最後に保存した報告と同じ報告は、保存済みとして扱います。何も保存せず、上の指示の状態の変更とセントラルのワーカーの割り当てだけを行い、`{}` で応答します。`report_id` が無いか、16 進数の小文字 32 文字でない報告は、届くたびに保存します（[システム仕様.md](システム仕様.md) の 12.1）。
 - コマンドセットの結果について、メールで通知することはありません。
 - 応答は `{}` です。

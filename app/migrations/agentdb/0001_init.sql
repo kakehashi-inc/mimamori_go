@@ -61,6 +61,14 @@ INSERT INTO db_instance (id, value, created_at) VALUES (1, lower(hex(randomblob(
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+CREATE TABLE received_report (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    report_id   TEXT    NOT NULL,
+    received_at INTEGER NOT NULL
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 CREATE TABLE command_sets (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     name              TEXT    NOT NULL,
@@ -179,6 +187,9 @@ DROP TABLE command_items;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE command_sets;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE received_report;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE db_instance;

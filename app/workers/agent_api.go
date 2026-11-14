@@ -247,8 +247,11 @@ func findSuppression(list []*models.Suppression, agentID int64, typ, user, exe, 
 // every decision is taken on the row the previous report left (two
 // overlapping reports with the same application result record it once).
 // Handlers and the built-in agent call this in any number at the same
-// moment; reports of different agents run at once. Recognising a report
-// that was already stored belongs inside this lock too.
+// moment; reports of different agents run at once. A report whose identity
+// is that of the last report stored for the agent was stored already (the
+// agent did not get the answer and sent it again): it is answered as stored
+// without being stored or counted again; this check runs inside the lock
+// too, so two copies arriving at once are stored once.
 func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) error {
 	unlock := c.reportLocks.lock(agent.ID)
 	defer unlock()
@@ -266,17 +269,67 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
+	// The identity of the report: the last one stored is remembered in the
+	// agent's database in the transaction that stores the report, so a
+	// report the agent sends again because its answer did not arrive is
+	// found here and not stored again. A report without a valid identity is
+	// stored and not remembered.
+	id := req.ReportID
+	if !validReportID(id) {
+		id = ""
+	}
 	var ignored []ignoredRun
+	repeated := false
 	err = tdb.Write(func(tx models.Writer) error {
+		if id != "" {
+			last, err := models.LastReceivedReport(tx)
+			if err != nil {
+				return err
+			}
+			if last == id {
+				repeated = true
+				return nil
+			}
+		}
 		var err error
 		if err = storeDetections(tx, agent, req, sups, now, dedupe); err != nil {
 			return err
 		}
-		ignored, err = storeCommandRuns(tx, req.CommandRuns, now)
-		return err
+		if ignored, err = storeCommandRuns(tx, req.CommandRuns, now); err != nil {
+			return err
+		}
+		if id != "" {
+			return models.SetLastReceivedReport(tx, id, now)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
+	}
+	if c.reportStored != nil {
+		if err := c.reportStored(agent.ID); err != nil {
+			return err
+		}
+	}
+	if repeated {
+		// Only what is safe to apply twice runs again: the transitions of
+		// the run requests (each conditional on the request's state) and
+		// the queue step. A request that changes here was not changed when
+		// the report was stored, so its history row is written now.
+		c.logger.Printf("report %s of %s was already stored; answered without storing it again", id, c.agentDisplayName(agent))
+		var ended []endedRequest
+		err := c.queueWrite(now, func(tx models.Writer) error {
+			var err error
+			ended, err = applyRequestTransitions(tx, agent.ID, requestTransitions(req), now)
+			return err
+		}, nil)
+		if err != nil {
+			return err
+		}
+		for _, e := range ended {
+			c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
+		}
+		return nil
 	}
 	for _, r := range ignored {
 		c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), r.runUID, r.setID)
@@ -463,6 +516,20 @@ func applyResultText(ap *modules.ApplyResult, checked applyI18nJSON) modules.Msg
 		}
 	}
 	return historyParts(parts)
+}
+
+// validReportID reports whether id has the form of a report identity: 32
+// lowercase hexadecimal characters.
+func validReportID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if b := id[i]; (b < '0' || b > '9') && (b < 'a' || b > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func truncate(s string, n int) string {
