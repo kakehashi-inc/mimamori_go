@@ -15,8 +15,8 @@ import (
 )
 
 // The tests of the periodic flows use short intervals instead of
-// PeriodicTick. Times have a generous margin, because other tests may run on
-// the machine at the same time.
+// PeriodicTick. They wait for the runs they need, not for a fixed time,
+// because other tests may run on the machine at the same time.
 
 // stopPeriodicSteps closes stop and waits for the flows (once).
 func stopPeriodicSteps(stop chan struct{}, wait func()) func() {
@@ -71,18 +71,17 @@ func TestPeriodicIndependent(t *testing.T) {
 	for name, n := range counts {
 		before[name] = n.Load()
 	}
-	time.Sleep(15 * every)
-	for name, n := range counts {
-		got := n.Load() - before[name]
-		if name == "mail" {
-			if got != 0 {
-				t.Fatalf("the blocked mail step ran %d more times", got)
+	// Every other step runs five more times while the mail step is blocked.
+	waitFor(t, "five more runs of every step but mail", func() bool {
+		for name, n := range counts {
+			if name != "mail" && n.Load()-before[name] < 5 {
+				return false
 			}
-			continue
 		}
-		if got < 5 {
-			t.Fatalf("step %s ran %d times in %v while the mail step was blocked", name, got, 15*every)
-		}
+		return true
+	})
+	if got := counts["mail"].Load() - before["mail"]; got != 0 {
+		t.Fatalf("the blocked mail step ran %d more times", got)
 	}
 }
 
@@ -90,8 +89,8 @@ func TestPeriodicIndependent(t *testing.T) {
 // right after, because the ticker keeps the tick that fell due during the run.
 func TestPeriodicNoDoubleRun(t *testing.T) {
 	e := newTestEnv(t)
-	const every = 200 * time.Millisecond
-	const work = 300 * time.Millisecond
+	const every = 400 * time.Millisecond
+	const work = 500 * time.Millisecond
 	var active, maxActive atomic.Int32
 	var mu sync.Mutex
 	var starts, ends []time.Time
@@ -114,20 +113,21 @@ func TestPeriodicNoDoubleRun(t *testing.T) {
 	}}
 	stop := make(chan struct{})
 	end := stopPeriodicSteps(stop, e.c.startPeriodic([]periodicStep{step}, stop))
-	time.Sleep(every + 4*work + work/2)
+	waitFor(t, "four runs", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(ends) >= 4
+	})
 	end()
 	if maxActive.Load() != 1 {
 		t.Fatalf("the step ran %d times at once", maxActive.Load())
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(starts) < 3 {
-		t.Fatalf("only %d runs", len(starts))
-	}
 	// Without the kept tick the next run would wait for the next tick of
-	// the grid, 100 ms after the end of the run.
-	for i := 1; i < len(starts); i++ {
-		if gap := starts[i].Sub(ends[i-1]); gap > 60*time.Millisecond {
+	// the grid, 2 x every - work = 300 ms after the end of the run.
+	for i := 1; i < len(ends); i++ {
+		if gap := starts[i].Sub(ends[i-1]); gap > 150*time.Millisecond {
 			t.Fatalf("run %d started %v after the previous one ended", i+1, gap)
 		}
 	}
@@ -149,11 +149,8 @@ func TestPeriodicPanic(t *testing.T) {
 	}
 	stop := make(chan struct{})
 	end := stopPeriodicSteps(stop, e.c.startPeriodic(steps, stop))
-	time.Sleep(600 * time.Millisecond)
+	waitFor(t, "three runs of boom and five of calm", func() bool { return booms.Load() >= 3 && calm.Load() >= 5 })
 	end()
-	if booms.Load() < 3 || calm.Load() < 5 {
-		t.Fatalf("runs: boom %d, calm %d", booms.Load(), calm.Load())
-	}
 	l := logs.String()
 	if strings.Count(l, "periodic boom: panic: test panic\n") != int(booms.Load()) || !strings.Contains(l, "goroutine ") {
 		t.Fatalf("log: %s", l)

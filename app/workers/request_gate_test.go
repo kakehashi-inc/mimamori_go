@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,6 +241,7 @@ func TestGateUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 	tok, _, _ := commandAgent(t, s.e, "busy-host")
 	chunk := bytes.Repeat([]byte("x"), 1<<20)
 	var wg sync.WaitGroup
+	var heads atomic.Int32
 	for i := 0; i < 256; i++ {
 		c := s.dialWeb(t)
 		wg.Add(1)
@@ -247,6 +249,7 @@ func TestGateUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 			defer wg.Done()
 			_ = c.SetWriteDeadline(time.Now().Add(20 * time.Second))
 			_, _ = fmt.Fprintf(c, "POST /api/v1/rules HTTP/1.1\r\nHost: x\r\nX-Mimamori-Request: 1\r\nContent-Length: %d\r\n\r\n", 30<<20)
+			heads.Add(1)
 			_, _ = c.Write(chunk)
 		}()
 	}
@@ -255,7 +258,8 @@ func TestGateUnauthenticatedBodiesDoNotDelayReport(t *testing.T) {
 	// silent that long is rightly cut.
 	report := paddedAgentReport(20 << 20)
 	raw := append([]byte(fmt.Sprintf("POST /agent/v1/report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n%s: m-busy\r\nContent-Length: %d\r\n\r\n", tok, modules.HeaderInstanceID, len(report))), report...)
-	time.Sleep(500 * time.Millisecond)
+	// The report goes when every unauthenticated head has been sent.
+	waitFor(t, "256 heads sent", func() bool { return heads.Load() == 256 })
 	start := time.Now()
 	c := s.dialAgent(t)
 	a, werr := sendWholeThenRead(t, c, raw)

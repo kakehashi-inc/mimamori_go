@@ -59,6 +59,9 @@ func TestConnLimit(t *testing.T) {
 	// 6 places: 2 held by the listeners waiting in accept.
 	s := startServe(t, serveOpts{places: 6})
 	var wg sync.WaitGroup
+	// No handler of the requests below begins before this moment, so no
+	// place is free before 1.5 s after it.
+	ref := time.Now()
 	for i := 0; i < 5; i++ {
 		c := s.dialWeb(t)
 		wg.Add(1)
@@ -70,10 +73,7 @@ func TestConnLimit(t *testing.T) {
 			}
 		}()
 	}
-	time.Sleep(300 * time.Millisecond)
-	if n := s.lim.open(); n != 6 {
-		t.Fatalf("%d places in use, want all 6", n)
-	}
+	waitFor(t, "all 6 places in use", func() bool { return s.lim.open() == 6 })
 	start := time.Now()
 	c := s.dialWeb(t) // the kernel completes the connection
 	if d := time.Since(start); d > time.Second {
@@ -81,8 +81,8 @@ func TestConnLimit(t *testing.T) {
 	}
 	_, _ = io.WriteString(c, getReq("/test/slow?ms=0"))
 	a := readAnswer(c, bufio.NewReader(c), "GET", 20*time.Second)
-	if a.status != http.StatusOK || time.Since(start) < 500*time.Millisecond {
-		t.Fatalf("connection beyond the bound: %d %v after %v, want 200 after a place was free", a.status, a.err, time.Since(start))
+	if a.status != http.StatusOK || time.Since(ref) < 1500*time.Millisecond {
+		t.Fatalf("connection beyond the bound: %d %v after %v, want 200 after a place was free (1.5 s at the earliest)", a.status, a.err, time.Since(ref))
 	}
 	wg.Wait()
 	_ = c.Close()

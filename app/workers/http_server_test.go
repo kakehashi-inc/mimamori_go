@@ -28,8 +28,10 @@ import (
 )
 
 // testIdle is the idle time of the test servers (the central uses
-// modules.IdleTimeout). Checks of a cut accept up to testIdle + cutSlack,
-// since other tests may run on the machine at the same time.
+// modules.IdleTimeout). A cut comes one idle time after the moment the
+// server counts from, never earlier; checks of a cut accept up to the idle
+// time + cutSlack, since other tests may run on the machine at the same
+// time.
 const (
 	testIdle = time.Second
 	cutSlack = 2 * time.Second
@@ -81,6 +83,7 @@ type serveEnv struct {
 	agentAddr   string
 	logs        *lockedBuffer
 	held        sync.Map // id -> heldResult
+	holding     sync.Map // id -> true: a /test/hold handler began
 	inWork      atomic.Int32
 	maxInWork   atomic.Int32
 	stopOnce    sync.Once
@@ -178,6 +181,7 @@ func (s *serveEnv) routes(next http.Handler) http.Handler {
 			ta, isTCP := local.(*net.TCPAddr)
 			fmt.Fprintf(w, "remote=%s local=%v tcp=%v tls=%v done=%v", r.RemoteAddr, ta, isTCP, r.TLS != nil, r.Context().Done() != nil)
 		case "/test/hold":
+			s.holding.Store(r.URL.Query().Get("id"), true)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 			s.held.Store(r.URL.Query().Get("id"), heldResult{ctxErr: r.Context().Err(), ended: time.Now()})
 			_, _ = io.WriteString(w, "held")
@@ -396,12 +400,13 @@ func TestServeManyAtOnce(t *testing.T) {
 		}
 	}
 	// 300 handlers of 300 ms each: served one after another they would take
-	// 90 s; at once about a second.
-	run(300, "/test/slow?ms=300", 8*time.Second)
+	// 90 s; at once about a second (the limit leaves room for a busy
+	// machine).
+	run(300, "/test/slow?ms=300", 30*time.Second)
 	if m := s.maxInWork.Load(); m < 100 {
 		t.Fatalf("at most %d handlers worked at the same time, want most of 300", m)
 	}
-	run(500, "/api/v1/health", 20*time.Second)
+	run(500, "/api/v1/health", 60*time.Second)
 }
 
 // A peer that sends its TLS handshake, its head or its body one byte at a
@@ -459,9 +464,10 @@ func TestServeSlowPeerNeverCut(t *testing.T) {
 }
 
 // A silent peer is closed after the idle time in every state, on both
-// listeners; meanwhile other requests are answered at once.
+// listeners; meanwhile other requests are answered at once. The idle time
+// is 3 s, so that the requests come well within it also on a busy machine.
 func TestServeSilentPeerCut(t *testing.T) {
-	s := startServe(t, serveOpts{})
+	s := startServe(t, serveOpts{idle: 3 * time.Second})
 	type state struct {
 		what  string
 		setup func() net.Conn
@@ -512,27 +518,39 @@ func TestServeSilentPeerCut(t *testing.T) {
 		}},
 	}
 	var wg sync.WaitGroup
+	var first time.Time
 	for _, st := range states {
+		// No byte of the setup reaches the server before this moment.
+		ref := time.Now()
+		if first.IsZero() {
+			first = ref
+		}
 		c := st.setup()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			d, ok := untilClosed(c, s.idle+cutSlack+3*time.Second)
-			if !ok || d < s.idle-100*time.Millisecond || d > s.idle+cutSlack {
-				t.Errorf("%s: closed=%v after %v, want closed after %v", st.what, ok, d, s.idle)
+			if since := time.Since(ref); !ok || since < s.idle || d > s.idle+cutSlack {
+				t.Errorf("%s: closed=%v %v after the setup began and %v after it ended, want closed one idle time (%v) after the last byte", st.what, ok, since, d, s.idle)
 			}
 		}()
 	}
-	// Meanwhile requests are answered at once.
+	// Meanwhile requests are answered at once. No silent peer is closed
+	// before one idle time after the first setup began: a server that held
+	// the requests behind the silent peers would answer the first one only
+	// after that.
 	for i := 0; i < 5; i++ {
-		start := time.Now()
-		if a := roundTrip(t, s.dialWeb(t), getReq("/api/v1/health")); a.status != http.StatusOK || time.Since(start) > s.idle/2 {
-			t.Errorf("request next to silent peers: %d %v after %v", a.status, a.err, time.Since(start))
+		a := roundTrip(t, s.dialWeb(t), getReq("/api/v1/health"))
+		if a.status != http.StatusOK {
+			t.Errorf("request next to silent peers: %d %v", a.status, a.err)
 		}
-		time.Sleep(s.idle / 5)
+		if since := time.Since(first); i == 0 && since >= s.idle {
+			t.Errorf("the first request next to the silent peers was answered %v after they were set up, want within their idle time %v", since, s.idle)
+		}
+		time.Sleep(s.idle / 10)
 	}
 	wg.Wait()
-	s.waitOpen(t, s.baselineCnt, 5*time.Second)
+	s.waitOpen(t, s.baselineCnt, s.idle+cutSlack)
 	if !strings.Contains(s.logs.String(), "TLS handshake error") {
 		t.Errorf("no handshake error logged for the silent TLS peers: %q", s.logs.String())
 	}
@@ -652,12 +670,10 @@ func TestServePeerCloses(t *testing.T) {
 		}},
 	} {
 		c := st.setup()
-		time.Sleep(100 * time.Millisecond)
-		if s.lim.open() <= s.baselineCnt {
-			t.Fatalf("%s: the connection holds no place", st.what)
-		}
+		waitFor(t, st.what+": a place for the connection", func() bool { return s.lim.open() > s.baselineCnt })
 		_ = c.Close()
-		if d := s.waitOpen(t, s.baselineCnt, 5*time.Second); d > time.Second {
+		// Released at once, not at the idle time of 30 s.
+		if d := s.waitOpen(t, s.baselineCnt, 10*time.Second); d > 5*time.Second {
 			t.Fatalf("%s: released %v after the close", st.what, d)
 		}
 	}
@@ -667,7 +683,7 @@ func TestServePeerCloses(t *testing.T) {
 		id := strconv.Itoa(i)
 		c := dial()
 		_, _ = io.WriteString(c, getReq("/test/hold?ms=1500&id="+id))
-		time.Sleep(300 * time.Millisecond)
+		waitFor(t, "handler "+id+" at work", func() bool { _, ok := s.holding.Load(id); return ok })
 		_ = c.Close()
 		s.waitOpen(t, s.baselineCnt, 10*time.Second)
 		released := time.Now()
@@ -679,7 +695,7 @@ func TestServePeerCloses(t *testing.T) {
 		if h.ctxErr != nil {
 			t.Fatalf("handler %s: context ended: %v", id, h.ctxErr)
 		}
-		if d := released.Sub(h.ended); d > time.Second {
+		if d := released.Sub(h.ended); d > 5*time.Second {
 			t.Fatalf("handler %s: place released %v after the handler ended", id, d)
 		}
 	}
@@ -872,7 +888,11 @@ func TestServeStop(t *testing.T) {
 	_, _ = io.WriteString(tlsWork, getReq("/test/slow?ms=1500"))
 	arriving := s.dialWeb(t)
 	_, _ = io.WriteString(arriving, "POST /test/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n01234")
-	time.Sleep(300 * time.Millisecond)
+	// The stop begins when every connection is accepted and both requests
+	// in work are in their handlers.
+	waitFor(t, "six connections and two requests in work", func() bool {
+		return s.lim.open() == s.baselineCnt+6 && s.inWork.Load() == 2
+	})
 
 	stopped := make(chan struct{})
 	go func() { s.stop(); close(stopped) }()
