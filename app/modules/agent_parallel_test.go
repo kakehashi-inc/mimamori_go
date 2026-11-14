@@ -343,7 +343,7 @@ func TestStopWithSeveralSets(t *testing.T) {
 	closed := map[int64]bool{}
 	for _, r := range runReports(queuedReports(t, rt)) {
 		if r.Finished {
-			if r.State != ResultError || len(r.Results) != 1 || r.Results[0].Reason != ReasonInterrupted {
+			if r.State != ResultError || r.Reason != ReasonInterrupted || len(r.Results) != 1 || r.Results[0].Reason != ReasonInterrupted {
 				t.Fatalf("stopped run: %+v", r)
 			}
 			closed[r.SetID] = true

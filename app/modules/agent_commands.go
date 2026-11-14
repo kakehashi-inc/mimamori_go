@@ -223,11 +223,19 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 		if res.Values != nil {
 			values = append(values, *res.Values)
 		}
-		last := i == len(def.Commands)-1 || !c.ContinuesAfter(res.Kind) || res.Reason == ReasonInterrupted
+		interrupted := res.Reason == ReasonInterrupted
+		last := i == len(def.Commands)-1 || !c.ContinuesAfter(res.Kind) || interrupted
 		rep := base
 		rep.Results = []CommandResultReport{*res}
 		if last {
-			finish(&rep, "")
+			// A command the stop ended cut the run: the run's reason is
+			// interrupted too (the time limit and a failed start are
+			// reasons of the command only).
+			reason := ""
+			if interrupted {
+				reason = ReasonInterrupted
+			}
+			finish(&rep, reason)
 			closed = true
 		}
 		rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{rep}})

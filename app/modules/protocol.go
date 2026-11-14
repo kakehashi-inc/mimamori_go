@@ -194,9 +194,10 @@ type CommandRunReport struct {
 	CommandsTotal int    `json:"commands_total"`
 	StartedAt     int64  `json:"started_at"`
 	// Finished is set on the last report of the run, with FinishedAt, State
-	// (the worst result kind of the executed commands), Reason (for a run
-	// that ended without running its commands, such as one found
-	// interrupted) and Display (collect_output only).
+	// (the worst result kind of the executed commands; error when Reason is
+	// set), Reason (interrupted when the stop or the end of the agent cut the
+	// run: during a command, between two commands, or found unfinished at
+	// the next start; "" otherwise) and Display (collect_output only).
 	Finished   bool                  `json:"finished"`
 	FinishedAt int64                 `json:"finished_at"`
 	State      string                `json:"state"`

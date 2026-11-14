@@ -336,7 +336,7 @@ interface CommandRun {
   commands_total?: number;            // A のみ。実行したときのセットのコマンドの数
   started_at: string; finished_at: string | null;   // 実行中は null
   state: 'running' | 'success' | 'failure' | 'error';   // 終わった実行は、実行したコマンドの最も悪い区分
-  reason: string;                     // 実行全体の理由（"interrupted" など。通常は ""）
+  reason: string;                     // 実行全体の理由。停止の指示かエージェントの終了で途中で終わった実行（コマンドの途中、コマンドとコマンドの間、次の起動で終わっていなかった実行）は "interrupted"（state は error）、それ以外は ""（制限時間、起動の失敗、作業ディレクトリの失敗はコマンドの reason だけ）
   display: DisplayValue | null;       // 出力収集の終わった実行だけ
   received_at: string;                // 最初の報告を受け取った日時（保存期間の基準）
   set_revision?: number; purpose?: string; os_user?: string; work_dir?: string;   // A のみ。実行したときの値

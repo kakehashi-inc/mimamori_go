@@ -606,6 +606,10 @@ func TestCommandRunStoppedByAgentStop(t *testing.T) {
 	if last.State != ResultError || n != 1 || last.Results[0].Reason != ReasonInterrupted || string(last.Results[0].Output) != "started\n" {
 		t.Fatalf("stopped run: %+v", last)
 	}
+	// The stop cut the run: the run's own reason is interrupted too.
+	if !last.Finished || last.Reason != ReasonInterrupted {
+		t.Fatalf("reason of the stopped run %q, want %q", last.Reason, ReasonInterrupted)
+	}
 	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
 		t.Fatal("a stopped run is reported, not left unfinished")
 	}
