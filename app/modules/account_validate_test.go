@@ -55,9 +55,9 @@ func TestValidateDisplayName(t *testing.T) {
 		want string
 	}{
 		{"Alice", "Alice"},
-		{"  山田 太郎  ", "山田 太郎"},
-		{strings.Repeat("あ", 64), strings.Repeat("あ", 64)},
-		{strings.Repeat("あ", 65), ""},
+		{"  \u5c71\u7530 \u592a\u90ce  ", "\u5c71\u7530 \u592a\u90ce"},
+		{strings.Repeat("\u3042", 64), strings.Repeat("\u3042", 64)},
+		{strings.Repeat("\u3042", 65), ""},
 		{"", ""},
 		{" \t ", ""},
 		{"a\nb", ""},

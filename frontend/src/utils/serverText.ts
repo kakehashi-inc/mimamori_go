@@ -35,9 +35,9 @@ function isMessage(v: unknown): v is ServerProblem {
     return typeof v === 'object' && v !== null && typeof (v as { code?: unknown }).code === 'string';
 }
 
-// A message that ends a sentence of its own ("。" in Japanese); the next message of a list follows it
+// A message that ends a sentence of its own (the Japanese full stop, U+3002, or a full-width exclamation or question mark); the next message of a list follows it
 // directly instead of after a separator, so no punctuation is doubled. English texts never end so.
-const SENTENCE_END = /[。！？]$/;
+const SENTENCE_END = /[\u3002\uff01\uff1f]$/;
 
 /** Joins the items of a list parameter by the same rule as the server's English. */
 function joinList(tt: DynamicT, name: string, items: unknown[], parts: string[]): string {
