@@ -28,7 +28,8 @@ const IdleTimeout = 60 * time.Second
 //     can take longer than idle although bytes leave all the time.
 //   - R3 When the idle limit passes, the connection closes itself at that
 //     moment and the error (a net.Error whose Timeout is true) is returned;
-//     later reads and writes fail at once.
+//     later reads and writes fail at once. SilenceCut tells afterwards that
+//     this happened.
 //   - R4 A deadline set from above (net/http, crypto/tls) through
 //     SetDeadline, SetReadDeadline or SetWriteDeadline is kept and applied at
 //     once together with the idle limit, also to a read or write in
@@ -55,6 +56,11 @@ type IdleConn struct {
 	rExt   time.Time // read deadline set from above (zero: none)
 	wIdle  time.Time // idle limit of the write in progress (zero: none)
 	wExt   time.Time // write deadline set from above (zero: none)
+	// cut is the error of the read or write the idle limit ended (R3),
+	// cutRead whether it was a read; cut is nil while the connection did
+	// not close itself.
+	cut     error
+	cutRead bool
 
 	closeOnce sync.Once
 	closeErr  error
@@ -177,7 +183,7 @@ func (c *IdleConn) Read(p []byte) (int, error) {
 	c.mu.Unlock()
 	n, err := c.tcp.Read(p)
 	if err != nil && isTimeout(err) && c.readIdlePassed() {
-		_ = c.Close() // silent for the idle time: closed at this moment (R3)
+		c.closeSilent(err, true) // silent for the idle time (R3)
 	}
 	return n, err
 }
@@ -236,7 +242,7 @@ func (c *IdleConn) Write(p []byte) (int, error) {
 			case now.Before(last.Add(c.idle)):
 				continue // ask the kernel again
 			}
-			_ = c.Close() // took nothing for the idle time: closed at this moment (R3)
+			c.closeSilent(err, false) // took nothing for the idle time (R3)
 			return done, err
 		}
 		if werr != nil {
@@ -249,6 +255,28 @@ func (c *IdleConn) Write(p []byte) (int, error) {
 		last = time.Now()
 	}
 	return done, nil
+}
+
+// closeSilent closes the connection at the moment the idle limit passed
+// (R3) and records the error of the read (read) or write it ended.
+func (c *IdleConn) closeSilent(err error, read bool) {
+	c.mu.Lock()
+	if c.cut == nil {
+		c.cut, c.cutRead = err, read
+	}
+	c.mu.Unlock()
+	_ = c.Close()
+}
+
+// SilenceCut tells whether the connection closed itself because the peer
+// was silent for the idle time (R3): cut is the error of the read or write
+// that the limit ended (nil when that did not happen), and read tells which
+// of the two it was (a read: the peer sent nothing; a write: the peer took
+// nothing).
+func (c *IdleConn) SilenceCut() (read bool, cut error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cutRead, c.cut
 }
 
 // isTimeout reports whether err is a timeout of a deadline.

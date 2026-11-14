@@ -386,3 +386,42 @@ func TestSendMailSTARTTLSAndTLS(t *testing.T) {
 		sendSilentAt(t, "tls", cert, stepHandshake, "body")
 	})
 }
+
+// When the mail server is silent for smtp.timeout_sec and the connection is
+// cut, the error says so and gives the error of the read or write that was
+// cut, at every step: also at EHLO, where net/smtp tries HELO on the closed
+// connection and its own error would hide the cut.
+func TestSendMailSilenceErrorText(t *testing.T) {
+	cert := testMailCert(t)
+	for _, tc := range []struct{ security, step, want string }{
+		{"none", stepGreeting, "the mail server sent nothing for 1 second: "},
+		{"none", stepEHLO, "the mail server sent nothing for 1 second: "},
+		{"starttls", stepEHLO, "the mail server sent nothing for 1 second: "},
+		{"starttls", stepSTARTTLS, "the mail server sent nothing for 1 second: "},
+		{"tls", stepHandshake, "the mail server sent nothing for 1 second: "},
+		{"none", stepMail, "the mail server sent nothing for 1 second: "},
+		{"none", stepRcpt, "the mail server sent nothing for 1 second: "},
+		{"none", stepData, "the mail server sent nothing for 1 second: "},
+		{"none", stepMessage, "the mail server took nothing for 1 second: "},
+	} {
+		t.Run(tc.security+" "+tc.step, func(t *testing.T) {
+			t.Parallel()
+			body := "body"
+			if tc.step == stepMessage {
+				body = strings.Repeat("x", 16<<20)
+			}
+			s := startMailServer(t, &testMailServer{security: tc.security, cert: cert, silentAt: tc.step})
+			err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", body)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) || !strings.HasSuffix(err.Error(), "i/o timeout") {
+				t.Fatalf("error %v, want %q followed by the timeout of the cut", err, tc.want)
+			}
+		})
+	}
+	// Another failure is reported as it is.
+	s := startMailServer(t, &testMailServer{security: "none"})
+	cfg := s.cfg()
+	cfg.From = "bad\r\nfrom@example.com"
+	if err := SendMailTo(cfg, []string{"a@example.com"}, "subject", "body"); err == nil || strings.Contains(err.Error(), "the mail server") {
+		t.Fatalf("a refused sender: %v", err)
+	}
+}

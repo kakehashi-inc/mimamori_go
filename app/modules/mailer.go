@@ -23,8 +23,9 @@ var mailRootCAs *x509.CertPool
 // connecting to each address of the server (DialIdle), each answer of the
 // server, and the sending of the message, which is cut only when the server
 // took no byte for that long (IdleConn). There is no limit on the whole
-// mail.
-func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
+// mail. When the connection is cut because the server was silent, the error
+// says so (mailSilenceError).
+func SendMailTo(cfg SMTPConfig, to []string, subject, body string) (err error) {
 	if !cfg.CanSend() {
 		return fmt.Errorf("SMTP is not configured (smtp.host and smtp.from are required)")
 	}
@@ -37,6 +38,11 @@ func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if read, cut := raw.SilenceCut(); err != nil && cut != nil {
+			err = mailSilenceError(cfg.TimeoutSec, read, cut)
+		}
+	}()
 	var conn net.Conn = raw
 	tlsCfg := &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: mailRootCAs}
 	if cfg.Security == "tls" {
@@ -87,6 +93,22 @@ func SendMailTo(cfg SMTPConfig, to []string, subject, body string) error {
 		return err
 	}
 	return c.Quit()
+}
+
+// mailSilenceError is the error of a mail whose connection was cut because
+// the mail server sent nothing (read) or took nothing for sec seconds; cut
+// is the error of the read or write that was cut. It replaces the error the
+// step returned, which can be a later failure on the closed connection
+// (after a failed EHLO, net/smtp tries HELO on it).
+func mailSilenceError(sec int, read bool, cut error) error {
+	what, unit := "sent", "seconds"
+	if !read {
+		what = "took"
+	}
+	if sec == 1 {
+		unit = "second"
+	}
+	return fmt.Errorf("the mail server %s nothing for %d %s: %w", what, sec, unit, cut)
 }
 
 func buildMessage(cfg SMTPConfig, to []string, subject, body string) string {

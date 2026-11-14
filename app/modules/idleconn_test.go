@@ -75,6 +75,9 @@ func TestIdleConnReadCutAfterSilence(t *testing.T) {
 	if closed.Load() != 1 {
 		t.Fatalf("onClose calls: %d", closed.Load())
 	}
+	if read, cut := ic.SilenceCut(); !read || cut != err {
+		t.Fatalf("SilenceCut after the read cut: %v %v, want true and %v", read, cut, err)
+	}
 	start = time.Now()
 	if _, err := ic.Read(make([]byte, 10)); err == nil || time.Since(start) > 100*time.Millisecond {
 		t.Fatalf("a second read must fail at once: %v after %v", err, time.Since(start))
@@ -153,6 +156,9 @@ func TestIdleConnWriteCutFromLastByteTaken(t *testing.T) {
 	within(t, "write cut after the peer stopped reading", cut.Sub(s), idle-200*time.Millisecond, idle+time.Second)
 	if closed.Load() != 1 {
 		t.Fatalf("the cut must close the connection: %d", closed.Load())
+	}
+	if read, c := ic.SilenceCut(); read || c != err {
+		t.Fatalf("SilenceCut after the write cut: %v %v, want false and %v", read, c, err)
 	}
 }
 
@@ -259,6 +265,9 @@ func TestIdleConnDeadlineFromAbove(t *testing.T) {
 	if closed.Load() != 0 {
 		t.Fatal("a deadline from above must not close the connection")
 	}
+	if _, cut := ic.SilenceCut(); cut != nil {
+		t.Fatalf("a deadline from above is no silence cut: %v", cut)
+	}
 	// Set back to zero: usable, and the idle rule holds again.
 	_ = ic.SetReadDeadline(time.Time{})
 	if _, err := peer.Write([]byte{'a'}); err != nil {
@@ -273,6 +282,9 @@ func TestIdleConnDeadlineFromAbove(t *testing.T) {
 	within(t, "idle cut after the reset", time.Since(start), idle, idle+700*time.Millisecond)
 	if !isTimeout(err) || closed.Load() != 1 {
 		t.Fatalf("idle cut: %v, closed %d", err, closed.Load())
+	}
+	if read, cut := ic.SilenceCut(); !read || cut != err {
+		t.Fatalf("SilenceCut after the idle cut: %v %v", read, cut)
 	}
 }
 
