@@ -274,7 +274,7 @@
             },
             "retention_days": {
                 "label": "Retention (days)",
-                "hint": "Detections and records of rejected connections older than this are deleted."
+                "hint": "Detections, records of rejected connections, command runs and ended run requests older than this are deleted."
             },
             "session_remember_days": {
                 "label": "Kept login (days)",

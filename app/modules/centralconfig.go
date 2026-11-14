@@ -142,7 +142,7 @@ var ConfigFields = []ConfigField{
 	cfgIntField("workers", "Run requests in progress at agents at the same time, all agents together", func(c *CentralConfig) *int { return &c.Workers }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
-	cfgIntField("retention_days", "Retention of detections and of the history of rejected connections (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
+	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of ended run requests (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
 	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
 	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", func(c *CentralConfig) *int { return &c.SessionRememberDays }),
 	cfgIntField("two_step_trust_days", "Days a browser marked as trusted at the login code step needs no code", func(c *CentralConfig) *int { return &c.TwoStepTrustDays }),
@@ -572,9 +572,10 @@ func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
 
 // runningConfigKey is the settings row holding the values of the items that
 // take effect at start (restartItems) as the running central uses them. The
-// central writes it when it has opened its listeners and removes it when it
-// stops, so that central status can show what runs while a saved change
-// waits for a restart.
+// central writes it at its start, right after it took the lock, opened the
+// database and read the configuration (before it opens its listeners), and
+// removes it when it stops, so that central status can show what runs while
+// a saved change waits for a restart.
 const runningConfigKey = "running_config"
 
 // SaveRunningConfig records the start values of the running central.
