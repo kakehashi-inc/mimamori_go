@@ -116,13 +116,13 @@ export function TemplateEditor({
     const [validation, setValidation] = useState<CodedText[] | null>(null);
     const [busy, setBusy] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.
-    const [jsonInvalid, setJsonInvalid] = useState(false);
+    // True while the editor shows what it cannot take (see RuleContentEditor): content is then stale, so nothing is sent.
+    const [contentInvalid, setContentInvalid] = useState(false);
 
     if (tpl.builtin) return null;
 
     async function save() {
-        if (jsonInvalid) return;
+        if (contentInvalid) return;
         setBusy(true);
         setSaveError(null);
         try {
@@ -157,7 +157,7 @@ export function TemplateEditor({
                     setValidation(null);
                 }}
                 disabled={busy}
-                onJsonInvalidChange={setJsonInvalid}
+                onInvalidChange={setContentInvalid}
             />
             <ValidationResult errors={validation} />
             {saveError && <Alert tone='danger'>{saveError}</Alert>}
@@ -165,7 +165,7 @@ export function TemplateEditor({
                 <Button onClick={() => onClose()} disabled={busy}>
                     {t('common.cancel')}
                 </Button>
-                <Button variant='primary' icon='save' busy={busy} disabled={jsonInvalid} onClick={() => void save()}>
+                <Button variant='primary' icon='save' busy={busy} disabled={contentInvalid} onClick={() => void save()}>
                     {t('common.save')}
                 </Button>
             </div>

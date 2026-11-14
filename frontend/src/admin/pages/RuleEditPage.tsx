@@ -28,8 +28,8 @@ export function RuleEditPage() {
     const [validation, setValidation] = useState<CodedText[] | null>(null);
     const [busy, setBusy] = useState<'validate' | 'save' | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
-    // True while the JSON tab holds invalid JSON: content is then stale, so nothing is sent.
-    const [jsonInvalid, setJsonInvalid] = useState(false);
+    // True while the editor shows what it cannot take (see RuleContentEditor): content is then stale, so nothing is sent.
+    const [contentInvalid, setContentInvalid] = useState(false);
 
     useEffect(() => {
         if (!rule) return;
@@ -43,7 +43,7 @@ export function RuleEditPage() {
     }
 
     async function validate() {
-        if (!content || jsonInvalid) return;
+        if (!content || contentInvalid) return;
         setBusy('validate');
         setSaveError(null);
         try {
@@ -56,7 +56,7 @@ export function RuleEditPage() {
     }
 
     async function save() {
-        if (!content || !rule || jsonInvalid) return;
+        if (!content || !rule || contentInvalid) return;
         setBusy('save');
         setSaveError(null);
         try {
@@ -115,7 +115,7 @@ export function RuleEditPage() {
                             value={content}
                             onChange={change}
                             disabled={busy === 'save'}
-                            onJsonInvalidChange={setJsonInvalid}
+                            onInvalidChange={setContentInvalid}
                         />
                         <Field label={t('rules.comment')} htmlFor='re-comment' hint={t('rules.commentHint')}>
                             <input
@@ -134,7 +134,7 @@ export function RuleEditPage() {
                             <Button
                                 icon='fact_check'
                                 busy={busy === 'validate'}
-                                disabled={busy !== null || jsonInvalid}
+                                disabled={busy !== null || contentInvalid}
                                 onClick={() => void validate()}
                             >
                                 {t('ruleEditor.validate')}
@@ -143,7 +143,7 @@ export function RuleEditPage() {
                                 variant='primary'
                                 icon='save'
                                 busy={busy === 'save'}
-                                disabled={busy !== null || jsonInvalid}
+                                disabled={busy !== null || contentInvalid}
                                 onClick={() => void save()}
                             >
                                 {t('common.save')}

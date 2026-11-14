@@ -5,7 +5,7 @@ import { getGuide, getRule, listRules } from '../../api/client';
 import { Button } from '../../components/Button';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { CodeBlock } from '../../components/CopyButton';
-import { Field, inputClass } from '../../components/FormControls';
+import { Field, inputClass, invalidInputClass } from '../../components/FormControls';
 import { Modal } from '../../components/Modal';
 import { Alert } from '../../components/StateViews';
 import { Td, Th } from '../../components/Table';
@@ -20,6 +20,10 @@ import { issueToken, reissueToken, revokeToken, unbindToken } from '../api';
 
 // Token names accepted by the server.
 const TOKEN_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+// Validity in days of an issued or reissued token that the server accepts
+// (an empty field leaves it to the default of the system settings).
+const VALID_DAYS = { min: 1, max: 3650 } as const;
 
 /** Header button that issues a token, with its dialogs. */
 export function IssueTokenAction({ reload }: { reload: () => void }) {
@@ -186,10 +190,54 @@ function IssuedTokenHelp({ issued, reissued }: { issued: TokenWithValue; reissue
     );
 }
 
-function parseValidDays(text: string): number | undefined | null {
-    if (text.trim() === '') return undefined;
-    const n = Number(text);
-    return Number.isInteger(n) && n > 0 ? n : null;
+/** What the valid days input holds: its value and whether it holds text that is no number. */
+interface DaysInput {
+    text: string;
+    bad: boolean;
+}
+
+const noDays: DaysInput = { text: '', bad: false };
+
+/** The days to send: undefined for the default, null when the input is not a whole number in the range. */
+function parseValidDays(d: DaysInput): number | undefined | null {
+    if (d.bad) return null;
+    if (d.text === '') return undefined;
+    if (!/^[0-9]+$/.test(d.text)) return null;
+    const n = Number(d.text);
+    return n >= VALID_DAYS.min && n <= VALID_DAYS.max ? n : null;
+}
+
+/** The valid days input of the issue and reissue dialogs. */
+function ValidDaysField({
+    id,
+    value,
+    invalid,
+    onChange,
+}: {
+    id: string;
+    value: DaysInput;
+    invalid: boolean;
+    onChange: (d: DaysInput) => void;
+}) {
+    const { t } = useTranslation();
+    return (
+        <Field label={t('tokens.validDays')} htmlFor={id} hint={t('tokens.validDaysHint', VALID_DAYS)}>
+            <input
+                id={id}
+                type='number'
+                min={VALID_DAYS.min}
+                max={VALID_DAYS.max}
+                step={1}
+                inputMode='numeric'
+                className={`${inputClass} ${invalid ? invalidInputClass : ''}`}
+                aria-invalid={invalid}
+                value={value.text}
+                // onInput, not onChange: React reports no change while text that is no
+                // number keeps the value empty, and an empty field means the default.
+                onInput={e => onChange({ text: e.currentTarget.value, bad: e.currentTarget.validity.badInput })}
+            />
+        </Field>
+    );
 }
 
 function IssueTokenModal({
@@ -203,7 +251,8 @@ function IssueTokenModal({
 }) {
     const { t } = useTranslation();
     const [name, setName] = useState('');
-    const [validDays, setValidDays] = useState('');
+    const [validDays, setValidDays] = useState<DaysInput>(noDays);
+    const [daysInvalid, setDaysInvalid] = useState(false);
     const [rules, setRules] = useState<RuleSummary[]>([]);
     const [ruleId, setRuleId] = useState('');
     const [versions, setVersions] = useState<RuleVersionInfo[]>([]);
@@ -214,7 +263,8 @@ function IssueTokenModal({
     useEffect(() => {
         if (!open) return;
         setName('');
-        setValidDays('');
+        setValidDays(noDays);
+        setDaysInvalid(false);
         setRuleId('');
         setVersion('');
         setError(null);
@@ -251,7 +301,8 @@ function IssueTokenModal({
             return;
         }
         if (days === null) {
-            setError(t('tokens.validDaysInvalid'));
+            setError(t('tokens.validDaysInvalid', VALID_DAYS));
+            setDaysInvalid(true);
             return;
         }
         setBusy(true);
@@ -289,7 +340,7 @@ function IssueTokenModal({
                 </>
             }
         >
-            <form id='issue-token-form' onSubmit={e => void submit(e)} className='flex flex-col gap-4'>
+            <form id='issue-token-form' noValidate onSubmit={e => void submit(e)} className='flex flex-col gap-4'>
                 <Field label={t('tokens.name')} htmlFor='tk-name' hint={t('tokens.nameHint')} required>
                     <input
                         id='tk-name'
@@ -300,16 +351,15 @@ function IssueTokenModal({
                         onChange={e => setName(e.target.value)}
                     />
                 </Field>
-                <Field label={t('tokens.validDays')} htmlFor='tk-days' hint={t('tokens.validDaysHint')}>
-                    <input
-                        id='tk-days'
-                        type='number'
-                        min={1}
-                        className={inputClass}
-                        value={validDays}
-                        onChange={e => setValidDays(e.target.value)}
-                    />
-                </Field>
+                <ValidDaysField
+                    id='tk-days'
+                    value={validDays}
+                    invalid={daysInvalid}
+                    onChange={d => {
+                        setValidDays(d);
+                        setDaysInvalid(false);
+                    }}
+                />
                 <Field label={t('tokens.rule')} htmlFor='tk-rule' hint={t('tokens.ruleHint')}>
                     <select
                         id='tk-rule'
@@ -358,13 +408,15 @@ function ReissueTokenModal({
     onIssued: (r: TokenWithValue) => void;
 }) {
     const { t } = useTranslation();
-    const [validDays, setValidDays] = useState('');
+    const [validDays, setValidDays] = useState<DaysInput>(noDays);
+    const [daysInvalid, setDaysInvalid] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (token) {
-            setValidDays('');
+            setValidDays(noDays);
+            setDaysInvalid(false);
             setError(null);
         }
     }, [token]);
@@ -374,7 +426,8 @@ function ReissueTokenModal({
         if (!token) return;
         const days = parseValidDays(validDays);
         if (days === null) {
-            setError(t('tokens.validDaysInvalid'));
+            setError(t('tokens.validDaysInvalid', VALID_DAYS));
+            setDaysInvalid(true);
             return;
         }
         setBusy(true);
@@ -407,18 +460,17 @@ function ReissueTokenModal({
                 </>
             }
         >
-            <form id='reissue-token-form' onSubmit={e => void submit(e)} className='flex flex-col gap-4'>
+            <form id='reissue-token-form' noValidate onSubmit={e => void submit(e)} className='flex flex-col gap-4'>
                 <Alert tone='warning'>{t('tokens.reissueNote')}</Alert>
-                <Field label={t('tokens.validDays')} htmlFor='rtk-days' hint={t('tokens.validDaysHint')}>
-                    <input
-                        id='rtk-days'
-                        type='number'
-                        min={1}
-                        className={inputClass}
-                        value={validDays}
-                        onChange={e => setValidDays(e.target.value)}
-                    />
-                </Field>
+                <ValidDaysField
+                    id='rtk-days'
+                    value={validDays}
+                    invalid={daysInvalid}
+                    onChange={d => {
+                        setValidDays(d);
+                        setDaysInvalid(false);
+                    }}
+                />
                 {error && <Alert tone='danger'>{error}</Alert>}
             </form>
         </Modal>

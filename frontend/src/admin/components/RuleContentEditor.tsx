@@ -5,7 +5,7 @@ import type { DetectionType, LegitLocation, RuleContent } from '../../types';
 import { enabledTypes, normalizeRuleContent } from '../../utils/ruleContent';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
+import { inputClass, inputSmAutoClass, inputSmClass, invalidInputClass } from '../../components/FormControls';
 import { CategorySelect, CommaListInput, ElementListEditor, RemoveButton, StringListEditor } from './ListEditors';
 import { Tabs } from '../../components/Tabs';
 import { ruleContentProblems, type ContentProblem } from './ruleContentCheck';
@@ -15,28 +15,41 @@ interface RuleContentEditorProps {
     onChange: (v: RuleContent) => void;
     disabled?: boolean;
     /**
-     * Called with true while the JSON tab holds text that is not valid rule
-     * content (it does not parse, or it has unknown keys, values of the wrong
-     * type or unknown categories), and with false once it is valid again.
-     * While it is invalid, `value` is the last valid content, not what the
-     * tab shows, and the tab cannot be left.
+     * Called with true while the editor shows what it cannot take into
+     * `value`: text of the JSON tab that is not valid rule content (it does
+     * not parse, or it has unknown keys, values of the wrong type or unknown
+     * categories), or a number of the form that is not 0 or in its range; and
+     * with false once all is valid again. While it is true, `value` is the
+     * last valid content, not what is shown, and the tab cannot be left.
      */
-    onJsonInvalidChange?: (invalid: boolean) => void;
+    onInvalidChange?: (invalid: boolean) => void;
+}
+
+/** Props of a tab of the editor: onInvalidChange tells whether the tab shows what it cannot take. */
+interface TabProps {
+    value: RuleContent;
+    onChange: (v: RuleContent) => void;
+    disabled?: boolean;
+    onInvalidChange: (invalid: boolean) => void;
 }
 
 /** Structured form editor for RuleContent, with a raw JSON tab. */
-export function RuleContentEditor({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
+export function RuleContentEditor({ value, onChange, disabled, onInvalidChange }: RuleContentEditorProps) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<'form' | 'json'>('form');
-    // Invalid text of the JSON tab is kept until it is corrected: leaving the
-    // tab would drop it silently.
-    const [jsonInvalid, setJsonInvalid] = useState(false);
+    // What a tab cannot take is kept until it is corrected: leaving the tab
+    // would drop it silently.
+    const [invalid, setInvalid] = useState(false);
+    const report = (v: boolean) => {
+        setInvalid(v);
+        onInvalidChange?.(v);
+    };
     return (
         <div className='flex flex-col gap-4'>
             <Tabs
                 value={tab}
                 onChange={v => {
-                    if (jsonInvalid) return;
+                    if (invalid) return;
                     setTab(v);
                 }}
                 items={[
@@ -45,21 +58,19 @@ export function RuleContentEditor({ value, onChange, disabled, onJsonInvalidChan
                 ]}
             />
             {tab === 'form' ? (
-                <RuleContentForm value={value} onChange={onChange} disabled={disabled} />
+                <RuleContentForm value={value} onChange={onChange} disabled={disabled} onInvalidChange={report} />
             ) : (
-                <RuleContentJson
-                    value={value}
-                    onChange={onChange}
-                    disabled={disabled}
-                    onJsonInvalidChange={invalid => {
-                        setJsonInvalid(invalid);
-                        onJsonInvalidChange?.(invalid);
-                    }}
-                />
+                <RuleContentJson value={value} onChange={onChange} disabled={disabled} onInvalidChange={report} />
             )}
         </div>
     );
 }
+
+// The intervals the server accepts besides 0, which is "not specified"
+// (MinCheckInterval to MaxCheckInterval, MinScanInterval to MaxScanInterval
+// of app/modules/constants.go).
+const CHECK_INTERVAL = { min: 10, max: 3600 } as const;
+const SCAN_INTERVAL = { min: 60, max: 604800 } as const;
 
 function EditorSection({
     title,
@@ -100,11 +111,19 @@ function Row({ label, htmlFor, children }: { label: ReactNode; htmlFor?: string;
     );
 }
 
-function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProps) {
+function RuleContentForm({ value: c, onChange, disabled, onInvalidChange }: TabProps) {
     const { t } = useTranslation();
     const enabled = enabledTypes(c);
     const set = (patch: Partial<RuleContent>) => onChange({ ...c, ...patch });
     const typeTitle = (type: DetectionType) => t(`detectionType.${type}`);
+    // Number fields whose text is not taken into the content.
+    const [invalidFields, setInvalidFields] = useState<string[]>([]);
+    const markInvalid = (field: string, invalid: boolean) =>
+        setInvalidFields(prev =>
+            prev.includes(field) === invalid ? prev : invalid ? [...prev, field] : prev.filter(f => f !== field)
+        );
+    const formInvalid = invalidFields.length > 0;
+    useEffect(() => onInvalidChange(formInvalid), [formInvalid]);
 
     function setLegit(i: number, patch: Partial<LegitLocation>) {
         set({
@@ -117,6 +136,7 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
 
     return (
         <div className='flex flex-col gap-4'>
+            {formInvalid && <p className='text-xs text-danger'>{t('ruleEditor.formBlocked')}</p>}
             <EditorSection title={t('ruleEditor.general')}>
                 <Row label={t('rule.users')}>
                     <ElementListEditor
@@ -146,19 +166,23 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
                     <NumberInput
                         id='re-check'
                         value={c.check_interval_sec}
+                        range={CHECK_INTERVAL}
                         onChange={v => set({ check_interval_sec: v })}
+                        onValidChange={valid => markInvalid('check', !valid)}
                         disabled={disabled}
                     />
-                    <p className='mt-1 text-xs text-muted'>{t('ruleEditor.checkIntervalHint')}</p>
+                    <p className='mt-1 text-xs text-muted'>{t('ruleEditor.checkIntervalHint', CHECK_INTERVAL)}</p>
                 </Row>
                 <Row label={t('rule.scanInterval')} htmlFor='re-scan'>
                     <NumberInput
                         id='re-scan'
                         value={c.scan_interval_sec}
+                        range={SCAN_INTERVAL}
                         onChange={v => set({ scan_interval_sec: v })}
+                        onValidChange={valid => markInvalid('scan', !valid)}
                         disabled={disabled}
                     />
-                    <p className='mt-1 text-xs text-muted'>{t('ruleEditor.scanIntervalHint')}</p>
+                    <p className='mt-1 text-xs text-muted'>{t('ruleEditor.scanIntervalHint', SCAN_INTERVAL)}</p>
                 </Row>
             </EditorSection>
 
@@ -350,31 +374,62 @@ function RuleContentForm({ value: c, onChange, disabled }: RuleContentEditorProp
     );
 }
 
+/**
+ * A number of the rule content: 0 (not specified) or a whole number in the
+ * range. The text stays as typed; the content gets the number only while
+ * the text is valid, and onValidChange tells whether it is (also for a value
+ * that comes from the JSON tab).
+ */
 function NumberInput({
     id,
     value,
+    range,
     onChange,
+    onValidChange,
     disabled,
 }: {
     id?: string;
     value: number;
+    range: { min: number; max: number };
     onChange: (v: number) => void;
+    onValidChange: (valid: boolean) => void;
     disabled?: boolean;
 }) {
+    const { t } = useTranslation();
+    const [text, setText] = useState(String(value));
+    const valid = (s: string) => {
+        if (!/^[0-9]+$/.test(s)) return false;
+        const n = Number(s);
+        return n === 0 || (n >= range.min && n <= range.max);
+    };
+    // A value set from outside (the JSON tab) replaces the text; the text of
+    // the same valid value is kept as typed ("010").
+    useEffect(() => {
+        setText(prev => (valid(prev) && Number(prev) === value ? prev : String(value)));
+    }, [value]);
+    const ok = valid(text);
+    useEffect(() => onValidChange(ok), [ok]);
     return (
-        <input
-            id={id}
-            type='number'
-            min={0}
-            step={1}
-            className={`${inputSmClass} w-40`}
-            value={value}
-            disabled={disabled}
-            onChange={ev => {
-                const n = Number(ev.target.value);
-                onChange(Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0);
-            }}
-        />
+        <>
+            <input
+                id={id}
+                type='number'
+                min={0}
+                max={range.max}
+                step={1}
+                inputMode='numeric'
+                className={`${inputSmClass} w-40 ${ok ? '' : invalidInputClass}`}
+                aria-invalid={!ok}
+                value={text}
+                disabled={disabled}
+                onChange={ev => {
+                    const s = ev.target.value;
+                    setText(s);
+                    if (valid(s)) onChange(Number(s));
+                }}
+            />
+            {!ok && <p className='mt-1 text-xs text-danger'>{t('ruleEditor.intervalInvalid', range)}</p>}
+        </>
     );
 }
 
@@ -387,7 +442,7 @@ function problemText(t: TFunction, p: ContentProblem): string {
     return t('ruleEditor.jsonWrongValue', { path, expected: t(`ruleEditor.jsonExpected.${p.expected}`) });
 }
 
-function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: RuleContentEditorProps) {
+function RuleContentJson({ value, onChange, disabled, onInvalidChange }: TabProps) {
     const { t } = useTranslation();
     const [text, setText] = useState(() => JSON.stringify(value, null, 2));
     const [parseError, setParseError] = useState<string | null>(null);
@@ -416,7 +471,7 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
         } catch (e) {
             setParseError(e instanceof Error ? e.message : String(e));
             setProblems([]);
-            onJsonInvalidChange?.(true);
+            onInvalidChange(true);
             return;
         }
         setParseError(null);
@@ -424,11 +479,11 @@ function RuleContentJson({ value, onChange, disabled, onJsonInvalidChange }: Rul
         const found = ruleContentProblems(next, parsed);
         setProblems(found);
         if (found.length > 0) {
-            onJsonInvalidChange?.(true);
+            onInvalidChange(true);
             return;
         }
         onChange(normalizeRuleContent(parsed));
-        onJsonInvalidChange?.(false);
+        onInvalidChange(false);
     }
 
     return (
