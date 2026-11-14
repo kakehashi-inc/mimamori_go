@@ -17,16 +17,10 @@ import (
 // reports. Nothing about command results is mailed.
 
 // commandSync adds the command set definitions to a sync response (only
-// when the agent's signature differs) and keeps the signature the agent
-// reported. It runs for the built-in agent too. The run requests are handed
-// over by centralSync.
+// when the agent's signature differs). It only reads; centralSync records
+// the signature the agent reported in the sync's transaction. It runs for
+// the built-in agent too. The run requests are handed over by centralSync.
 func (c *core) commandSync(agent *models.Agent, req *modules.SyncRequest, resp *modules.SyncResponse) error {
-	if req.CommandSig != agent.CommandSig {
-		if err := c.db.Write(func(tx models.Writer) error { return models.RecordAgentCommandSig(tx, agent.ID, req.CommandSig) }); err != nil {
-			return err
-		}
-		agent.CommandSig = req.CommandSig
-	}
 	tdb, err := c.targetDB(agent)
 	if err != nil {
 		return err

@@ -92,37 +92,25 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 // entered is when the handling of the request began, before any waiting: the
 // agent read its running_requests before that, so the list ends only the
 // requests that became running before it.
+//
+// Everything the answer needs that can fail (the assigned rule version, the
+// command set definitions) is read first: when a read fails, the sync is
+// answered with an error and nothing of it was recorded or handed over.
+// Then one transaction of the central database records the sync (so the
+// agent is responding again in it) and the signature of the definitions the
+// agent holds, ends the running requests the agent no longer lists (only
+// when it sent the list), stores a new token renewal value with its history
+// row, runs the queue step and hands the agent's pending requests over; the
+// delivered ones are sent with the answer (again with every sync until the
+// agent answers them; the agent runs a request at most once and answers it
+// again).
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest, entered int64) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
+	cfg := c.conf()
 	fps, _ := json.Marshal(req.CAFingerprints)
-	// One transaction of the central database records the sync (so the
-	// agent is responding again in it), ends the running requests the agent
-	// no longer lists (only when it sent the list), runs the queue step and
-	// hands the agent's pending requests over; the delivered ones are sent
-	// with the answer (again with every sync until the agent answers them;
-	// the agent runs a request at most once and answers it again).
-	var handed []*models.CommandRequest
-	err := c.queueWrite(now, func(tx models.Writer) error {
-		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
-			return err
-		}
-		if req.RunningRequests != nil {
-			if _, err := models.EndUnheldCommandRequests(tx, agent.ID, req.RunningRequests, entered, now); err != nil {
-				return err
-			}
-		}
-		return nil
-	}, func(tx models.Writer) error {
-		var err error
-		handed, err = models.HandOverCommandRequests(tx, agent.ID, now)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
 	resp := &modules.SyncResponse{
 		AgentName:          modules.BuiltinAgentName,
-		DefaultIntervalSec: c.conf().DefaultCheckIntervalSec,
+		DefaultIntervalSec: cfg.DefaultCheckIntervalSec,
 	}
 	// The assigned version is always sent, so the agent can tell whether it
 	// runs the assigned version (it applies only a different one).
@@ -136,6 +124,62 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	if err := c.commandSync(agent, req, resp); err != nil {
 		return nil, err
 	}
+	cas := c.trustedCAs()
+	// A token close to its expiry is offered a renewal value; a new one is
+	// made when none was handed out or the one handed out expired, and
+	// stored in the sync's transaction only while the token is unchanged
+	// since it was read (at authentication): when it was revoked, reissued or
+	// renewed meanwhile, no value is handed out this time.
+	offer, store := false, false
+	var prevPending string
+	var prevCounter int
+	if tok != nil && tok.ExpiresAt-now < int64(cfg.TokenRenewBeforeDays)*86400 {
+		offer = true
+		if tok.PendingHash == "" || tok.PendingExpiresAt <= now {
+			store = true
+			prevPending, prevCounter = tok.PendingHash, tok.RenewCounter
+			tok.RenewCounter++
+			tok.PendingHash = modules.HashSecret(modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter))
+			tok.PendingExpiresAt = now + int64(cfg.TokenValidDays)*86400
+		}
+	}
+	var handed []*models.CommandRequest
+	err := c.queueWrite(now, func(tx models.Writer) error {
+		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
+			return err
+		}
+		if req.CommandSig != agent.CommandSig {
+			if err := models.RecordAgentCommandSig(tx, agent.ID, req.CommandSig); err != nil {
+				return err
+			}
+		}
+		if req.RunningRequests != nil {
+			if _, err := models.EndUnheldCommandRequests(tx, agent.ID, req.RunningRequests, entered, now); err != nil {
+				return err
+			}
+		}
+		if store {
+			switch err := models.SetTokenRenewal(tx, tok, prevPending, prevCounter); {
+			case errors.Is(err, sql.ErrNoRows):
+				offer = false
+			case err != nil:
+				return err
+			default:
+				if err := models.InsertHistory(tx, c.historyRow(nil, models.HistToken, "renewal_issued", modules.Raw(tok.Name),
+					modules.M("history.detail.token_renewal_issued", "expires", time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339)))); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}, func(tx models.Writer) error {
+		var err error
+		handed, err = models.HandOverCommandRequests(tx, agent.ID, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range handed {
 		resp.CommandRequests = append(resp.CommandRequests, modules.CommandRunRequest{
 			ID: r.ID, SetID: r.SetID, RequestedAt: r.RequestedAt, ExpiresAt: r.ExpiresAt,
@@ -146,49 +190,21 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	}
 	resp.AgentName = tok.Name
 	resp.TokenExpiresAt = tok.ExpiresAt
-	renewBefore := int64(c.conf().TokenRenewBeforeDays) * 86400
-	if tok.ExpiresAt-now < renewBefore {
-		offer := true
-		if tok.PendingHash == "" || tok.PendingExpiresAt <= now {
-			prevPending, prevCounter := tok.PendingHash, tok.RenewCounter
-			tok.RenewCounter++
-			v := modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter)
-			tok.PendingHash = modules.HashSecret(v)
-			tok.PendingExpiresAt = now + int64(c.conf().TokenValidDays)*86400
-			// Stored only while the token is unchanged since it was read (at
-			// authentication; the key derivation lies between): when it was
-			// revoked, reissued or renewed meanwhile, no value is handed out
-			// this time. The history row is written with it.
-			err := c.db.Write(func(tx models.Writer) error {
-				if err := models.SetTokenRenewal(tx, tok, prevPending, prevCounter); err != nil {
-					return err
-				}
-				return models.InsertHistory(tx, c.historyRow(nil, models.HistToken, "renewal_issued", modules.Raw(tok.Name),
-					modules.M("history.detail.token_renewal_issued", "expires", time.Unix(tok.PendingExpiresAt, 0).UTC().Format(time.RFC3339))))
-			})
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				offer = false
-			case err != nil:
-				return nil, err
-			}
-		}
-		// The same value is handed out again until the agent uses it.
-		if offer {
-			resp.TokenRenewal = &modules.TokenRenewal{
-				Token:     modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter),
-				ExpiresAt: tok.PendingExpiresAt,
-			}
+	// The same value is handed out again until the agent uses it.
+	if offer {
+		resp.TokenRenewal = &modules.TokenRenewal{
+			Token:     modules.DeriveRenewalToken(c.serverKey, tok.ID, tok.RenewCounter),
+			ExpiresAt: tok.PendingExpiresAt,
 		}
 	}
 	missing := false
-	for _, ca := range c.trustedCAs() {
+	for _, ca := range cas {
 		if !slices.Contains(req.CAFingerprints, ca.Fingerprint) {
 			missing = true
 		}
 	}
 	if missing {
-		for _, ca := range c.trustedCAs() {
+		for _, ca := range cas {
 			resp.CAPEMs = append(resp.CAPEMs, ca.CertPEM)
 		}
 	}
