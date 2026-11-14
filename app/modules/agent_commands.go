@@ -200,7 +200,6 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	}
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
-	hooks := CommandExecHooks{MonitorHere: rt.monitorHere, Stop: rt.stop, Logf: rt.logf}
 	collect := def.Purpose == PurposeCollectOutput
 	var kinds []string
 	var values []CommandValues
@@ -251,7 +250,8 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			break
 		}
 		res := ExecuteCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
-			CollectOutput: collect, KillGrace: rt.cmdKillGrace}, hooks)
+			CollectOutput: collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add,
+			monitorHere: rt.monitorHere})
 		kinds = append(kinds, res.Kind)
 		if res.Values != nil {
 			values = append(values, *res.Values)

@@ -1,0 +1,251 @@
+package modules
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// processAlive reports whether the process exists and is not a zombie (the
+// tests read /proc; the program does not).
+func processAlive(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// The state follows the command name in parentheses.
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	return i > 0 && len(s) > i+2 && s[i+2] != 'Z'
+}
+
+// pidFrom waits until the file holds a process ID and returns it.
+func pidFrom(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && n > 0 {
+				return n
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no process ID in %s", path)
+	return 0
+}
+
+// endedAt watches a process and returns a function that gives the time it
+// was seen gone (zero while it lives).
+func endedAt(t *testing.T, pid int) func() time.Time {
+	t.Helper()
+	var at atomic.Int64
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if !processAlive(pid) {
+				at.Store(time.Now().UnixNano())
+				return
+			}
+			select {
+			case <-quit:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(quit)
+		<-done
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	})
+	return func() time.Time {
+		if v := at.Load(); v > 0 {
+			return time.Unix(0, v)
+		}
+		return time.Time{}
+	}
+}
+
+// executeWithin runs ExecuteCommand and fails when it has not returned
+// within d.
+func executeWithin(t *testing.T, in CommandExecInput, d time.Duration) *CommandResultReport {
+	t.Helper()
+	res := make(chan *CommandResultReport, 1)
+	go func() { res <- ExecuteCommand(in) }()
+	select {
+	case r := <-res:
+		return r
+	case <-time.After(d):
+		t.Fatalf("the command has not ended %s after its start", d)
+		return nil
+	}
+}
+
+// TestCommandGroupGetsTheGrace (STOP-1): after SIGTERM the grace belongs to
+// the whole process group. A member that needs 5 s for its TERM handler
+// after the main process ended gets them and its output is read; nothing
+// is killed before the grace is over.
+func TestCommandGroupGetsTheGrace(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	done := filepath.Join(dir, "done")
+	line := fmt.Sprintf(`( trap 'sleep 5; echo member done; touch %s; exit 0' TERM; while :; do sleep 0.1; done ) &
+echo started; wait`, done)
+	start := time.Now()
+	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
+		KillGrace: 8 * time.Second, Stop: closedAfter(300 * time.Millisecond)}, 20*time.Second)
+	took := time.Since(start)
+	if _, err := os.Stat(done); err != nil {
+		t.Fatalf("the member did not get the 5 s it needed after SIGTERM (result after %s): %+v %q", took, r, r.Output)
+	}
+	if r.Kind != ResultError || r.Reason != ReasonInterrupted || !strings.Contains(string(r.Output), "member done") {
+		t.Fatalf("result: %+v %q", r, r.Output)
+	}
+	// The reading went on until the group was gone or the grace over.
+	if took < 5*time.Second || took > 8*time.Second+3*time.Second {
+		t.Fatalf("the command ended after %s", took)
+	}
+}
+
+// TestCommandGroupKilledAtTheGrace (STOP-1): a group member that ignores
+// SIGTERM lives on after the main process ended and gets SIGKILL only when
+// the grace is over (here 2 s after the time limit of 1 s).
+func TestCommandGroupKilledAtTheGrace(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	cmd := testCommand(fmt.Sprintf(`( trap '' TERM; exec sleep 30 ) & echo $! > %s; wait`, pidFile))
+	cmd.TimeoutSec = 1
+	start := time.Now()
+	type outcome struct {
+		r    *CommandResultReport
+		took time.Duration
+	}
+	res := make(chan outcome, 1)
+	go func() {
+		r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: cmd, KillGrace: 2 * time.Second})
+		res <- outcome{r, time.Since(start)}
+	}()
+	gone := endedAt(t, pidFrom(t, pidFile))
+	o := <-res
+	ended := gone()
+	if ended.IsZero() {
+		time.Sleep(200 * time.Millisecond)
+		ended = gone()
+	}
+	if ended.IsZero() {
+		t.Fatal("the member that ignores SIGTERM is still alive after the grace")
+	}
+	// SIGTERM at about 1 s, SIGKILL at about 3 s.
+	if d := ended.Sub(start); d < 2900*time.Millisecond || d > 6*time.Second {
+		t.Fatalf("the member ended %s after the start, want about 3 s (time limit 1 s, grace 2 s)", d)
+	}
+	if o.r.Kind != ResultError || o.r.Reason != ReasonTimeout || o.took > 6*time.Second {
+		t.Fatalf("result after %s: %+v", o.took, o.r)
+	}
+}
+
+// TestCommandReadingAfterEndObeysStop (TO-1): a process left behind that
+// keeps writing holds the reading after the main process ended; the stop
+// ends it like during the run (SIGTERM to the group) and the command keeps
+// the result of its main process.
+func TestCommandReadingAfterEndObeysStop(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	line := fmt.Sprintf(`( while :; do echo x; sleep 0.3; done ) & echo $! > %s; echo main done`, pidFile)
+	start := time.Now()
+	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
+		KillGrace: time.Second, Stop: closedAfter(1500 * time.Millisecond)}, 15*time.Second)
+	took := time.Since(start)
+	writer := pidFrom(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(writer, syscall.SIGKILL) })
+	// The group is gone soon after the SIGTERM; a group whose ended members
+	// are not reaped yet keeps the reading until the grace of 1 s is over.
+	if took < 1400*time.Millisecond || took > 4500*time.Millisecond {
+		t.Fatalf("the reading ended %s after the start, want soon after the stop at 1.5 s", took)
+	}
+	if r.Kind != ResultSuccess || r.ExitCode == nil || *r.ExitCode != 0 || !strings.HasPrefix(string(r.Output), "main done\nx\n") {
+		t.Fatalf("the result is the main process's: %+v %q", r, r.Output)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if processAlive(writer) {
+		t.Fatal("the writer left behind did not get SIGTERM at the stop")
+	}
+}
+
+// TestCommandReadingAfterEndObeysTimeLimit (TO-1): the time limit applies
+// while the output of a process left behind is read; the result stays the
+// one of the main process.
+func TestCommandReadingAfterEndObeysTimeLimit(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	cmd := testCommand(fmt.Sprintf(`( while :; do echo x; sleep 0.3; done ) & echo $! > %s; exit 0`, pidFile))
+	cmd.TimeoutSec = 2
+	start := time.Now()
+	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: cmd, KillGrace: time.Second}, 15*time.Second)
+	took := time.Since(start)
+	writer := pidFrom(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(writer, syscall.SIGKILL) })
+	if took < 1900*time.Millisecond || took > 5*time.Second {
+		t.Fatalf("the reading ended %s after the start, want soon after the time limit of 2 s", took)
+	}
+	if r.Kind != ResultSuccess || r.Reason != "" || r.ExitCode == nil || *r.ExitCode != 0 {
+		t.Fatalf("result: %+v", r)
+	}
+}
+
+// TestCommandReadingAfterEndWithoutLimit: without a time limit and without
+// a stop, the output of a process left behind is read for as long as it
+// keeps arriving (gaps below 2 s).
+func TestCommandReadingAfterEndWithoutLimit(t *testing.T) {
+	requireBash(t)
+	r := runTestCommand(t, testCommand(`( for i in 1 2 3 4 5; do sleep 1; echo line$i; done ) & echo main`), agentUserName(), "/", nil)
+	if r.Kind != ResultSuccess || string(r.Output) != "main\nline1\nline2\nline3\nline4\nline5\n" {
+		t.Fatalf("result: %+v %q", r, r.Output)
+	}
+}
+
+// TestCommandLeftoverKeepsThePipe (TO-2): a process left behind that is
+// silent for more than 2 s ends the reading, but it is not ended by it: the
+// pipe is handed over instead of closed, so its later write does not get
+// SIGPIPE; tend reads and drops what it wrote and closes the pipe once it
+// ended.
+func TestCommandLeftoverKeepsThePipe(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	after := filepath.Join(dir, "after")
+	var held leftoverPipes
+	line := fmt.Sprintf(`( sleep 3; echo late; touch %s ) & echo early`, after)
+	r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line), Leftover: held.add})
+	if r.Kind != ResultSuccess || string(r.Output) != "early\n" {
+		t.Fatalf("result: %+v %q", r, r.Output)
+	}
+	if held.held() != 1 {
+		t.Fatalf("pipes held: %d, want the one the process left behind holds", held.held())
+	}
+	waitFile(t, after)
+	// The process ended after its write: the pipe reaches its end.
+	deadline := time.Now().Add(5 * time.Second)
+	for held.held() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the pipe was not closed after the process left behind ended")
+		}
+		held.tend()
+		time.Sleep(20 * time.Millisecond)
+	}
+	// A command whose output ended with it leaves nothing.
+	if r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand("echo x"), Leftover: held.add}); r.Kind != ResultSuccess || held.held() != 0 {
+		t.Fatalf("a command without processes left behind: %+v, %d held", r, held.held())
+	}
+}

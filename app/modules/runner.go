@@ -185,6 +185,29 @@ func drain(f *os.File, dst *limitedBuffer) {
 	}
 }
 
+// drainAvailable reads what is in the pipe now, at most limit bytes more
+// than it had read, waiting at most a millisecond for each read. It reports
+// whether the pipe reached its end (nothing holds it open any more).
+func drainAvailable(f *os.File, dst *limitedBuffer, limit int64) bool {
+	buf := make([]byte, 64<<10)
+	var read int64
+	for read < limit {
+		_ = f.SetReadDeadline(time.Now().Add(time.Millisecond))
+		n, err := f.Read(buf)
+		if n > 0 {
+			dst.Write(buf[:n])
+			read += int64(n)
+		}
+		if err != nil {
+			return !errors.Is(err, os.ErrDeadlineExceeded)
+		}
+		if n == 0 {
+			return false
+		}
+	}
+	return false
+}
+
 // pipeDrainSilence is how long drainAll waits for the next byte after the
 // program has ended: a child of the program that still holds the pipe open
 // and writes nothing for this long ends the reading.

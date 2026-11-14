@@ -24,9 +24,11 @@ func testCommand(line string) *CommandSpec {
 	return &s.Commands[0]
 }
 
-func runTestCommand(t *testing.T, c *CommandSpec, user, dir string, hooks CommandExecHooks) *CommandResultReport {
+// runTestCommand runs a command with a grace of 300 ms; stop is the agent's
+// stop (nil: none).
+func runTestCommand(t *testing.T, c *CommandSpec, user, dir string, stop <-chan struct{}) *CommandResultReport {
 	t.Helper()
-	return ExecuteCommand(CommandExecInput{OSUser: user, WorkDir: dir, Command: c, KillGrace: 300 * time.Millisecond}, hooks)
+	return ExecuteCommand(CommandExecInput{OSUser: user, WorkDir: dir, Command: c, KillGrace: 300 * time.Millisecond, Stop: stop})
 }
 
 func requireBash(t *testing.T) {
@@ -44,7 +46,7 @@ func TestExecuteCommandMarkersAndCodes(t *testing.T) {
 	}
 	dir := t.TempDir()
 
-	r := runTestCommand(t, testCommand("echo hello; echo err >&2"), user, dir, CommandExecHooks{})
+	r := runTestCommand(t, testCommand("echo hello; echo err >&2"), user, dir, nil)
 	if r.Kind != ResultSuccess || r.ExitCode == nil || *r.ExitCode != 0 {
 		t.Fatalf("success: %+v", r)
 	}
@@ -63,7 +65,7 @@ func TestExecuteCommandMarkersAndCodes(t *testing.T) {
 		{"true", ResultSuccess, "", 0},
 	}
 	for _, c := range cases {
-		r := runTestCommand(t, testCommand(c.line), user, dir, CommandExecHooks{})
+		r := runTestCommand(t, testCommand(c.line), user, dir, nil)
 		if r.Kind != c.kind || r.Reason != c.reason || r.ExitCode == nil || *r.ExitCode != c.code {
 			t.Errorf("%q: %+v", c.line, r)
 		}
@@ -72,7 +74,7 @@ func TestExecuteCommandMarkersAndCodes(t *testing.T) {
 	// A code in neither spec is an error with its exit code.
 	cmd := testCommand("exit 3")
 	cmd.Failure = CodeSpec{Kind: CodeSingle, A: 1}
-	r = runTestCommand(t, cmd, user, dir, CommandExecHooks{})
+	r = runTestCommand(t, cmd, user, dir, nil)
 	if r.Kind != ResultError || r.Reason != ReasonUnexpectedCode || r.ExitCode == nil || *r.ExitCode != 3 {
 		t.Fatalf("unexpected code: %+v", r)
 	}
@@ -80,16 +82,16 @@ func TestExecuteCommandMarkersAndCodes(t *testing.T) {
 	cmd = testCommand("exit 2")
 	cmd.Success = CodeSpec{Kind: CodeRange, A: 0, B: 2}
 	cmd.Failure = CodeSpec{Kind: CodeMin, A: 3}
-	if r = runTestCommand(t, cmd, user, dir, CommandExecHooks{}); r.Kind != ResultSuccess {
+	if r = runTestCommand(t, cmd, user, dir, nil); r.Kind != ResultSuccess {
 		t.Fatalf("range: %+v", r)
 	}
 	// A signal that ends the command is an error without exit code.
-	r = runTestCommand(t, testCommand("kill -KILL $$"), user, dir, CommandExecHooks{})
+	r = runTestCommand(t, testCommand("kill -KILL $$"), user, dir, nil)
 	if r.Kind != ResultError || r.Reason != ReasonSignaled || r.ExitCode != nil {
 		t.Fatalf("signaled: %+v", r)
 	}
 	// Standard input is /dev/null.
-	if r = runTestCommand(t, testCommand("cat; echo done"), user, dir, CommandExecHooks{}); string(r.Output) != "done\n" {
+	if r = runTestCommand(t, testCommand("cat; echo done"), user, dir, nil); string(r.Output) != "done\n" {
 		t.Fatalf("stdin: %+v", r)
 	}
 }
@@ -102,28 +104,28 @@ func TestExecuteCommandDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := runTestCommand(t, testCommand("pwd"), user, dir, CommandExecHooks{})
+	r := runTestCommand(t, testCommand("pwd"), user, dir, nil)
 	if strings.TrimSpace(string(r.Output)) != dir {
 		t.Fatalf("working directory: %q", r.Output)
 	}
 	// cd inside a command affects only that command.
-	r = runTestCommand(t, testCommand("cd sub && pwd"), user, dir, CommandExecHooks{})
+	r = runTestCommand(t, testCommand("cd sub && pwd"), user, dir, nil)
 	if r.Kind != ResultSuccess || strings.TrimSpace(string(r.Output)) != filepath.Join(dir, "sub") {
 		t.Fatalf("cd x && y: %+v %q", r, r.Output)
 	}
-	r = runTestCommand(t, testCommand("pwd"), user, dir, CommandExecHooks{})
+	r = runTestCommand(t, testCommand("pwd"), user, dir, nil)
 	if strings.TrimSpace(string(r.Output)) != dir {
 		t.Fatalf("the next command must start in the working directory again: %q", r.Output)
 	}
 	// Several lines, passed byte for byte (quotes, $ and a here document).
 	line := "x='a b'\necho \"$x\"\ncat <<'EOF'\n$HOME `x`\nEOF\nprintf '%s\\n' \"$0\""
-	r = runTestCommand(t, testCommand(line), user, dir, CommandExecHooks{})
+	r = runTestCommand(t, testCommand(line), user, dir, nil)
 	if r.Kind != ResultSuccess || !strings.HasPrefix(string(r.Output), "a b\n$HOME `x`\n") {
 		t.Fatalf("several lines: %+v %q", r, r.Output)
 	}
 
 	// A working directory that cannot be entered.
-	r = runTestCommand(t, testCommand("echo never"), user, filepath.Join(dir, "missing"), CommandExecHooks{})
+	r = runTestCommand(t, testCommand("echo never"), user, filepath.Join(dir, "missing"), nil)
 	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed || r.ExitCode != nil || strings.Contains(string(r.Output), "never") {
 		t.Fatalf("missing working directory: %+v %q", r, r.Output)
 	}
@@ -178,18 +180,18 @@ func TestExecuteCommandHomeDirectory(t *testing.T) {
 	}
 	other := t.TempDir()
 	t.Setenv("HOME", other)
-	r := runTestCommand(t, testCommand("pwd; echo \"$HOME\""), user, "", CommandExecHooks{})
+	r := runTestCommand(t, testCommand("pwd; echo \"$HOME\""), user, "", nil)
 	if r.Kind != ResultSuccess || string(r.Output) != home+"\n"+other+"\n" {
 		t.Fatalf("home directory of /etc/passwd, environment unchanged: %+v %q", r, r.Output)
 	}
 	unsetEnv(t, "HOME")
-	r = runTestCommand(t, testCommand("pwd; echo \"[$HOME]\""), user, "", CommandExecHooks{})
+	r = runTestCommand(t, testCommand("pwd; echo \"[$HOME]\""), user, "", nil)
 	if r.Kind != ResultSuccess || string(r.Output) != home+"\n[]\n" {
 		t.Fatalf("without HOME: %+v %q", r, r.Output)
 	}
 	// A home directory that cannot be entered.
 	withPasswd(t, user, filepath.Join(home, "missing"))
-	r = runTestCommand(t, testCommand("echo never"), user, "", CommandExecHooks{})
+	r = runTestCommand(t, testCommand("echo never"), user, "", nil)
 	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed {
 		t.Fatalf("missing home: %+v %q", r, r.Output)
 	}
@@ -212,13 +214,13 @@ func TestExecuteCommandHomeFallback(t *testing.T) {
 		if !IsAgentUser(osUser) {
 			t.Fatalf("passwd home %q: %q must be the agent's user", passwdHome, osUser)
 		}
-		r := runTestCommand(t, testCommand("pwd"), osUser, "", CommandExecHooks{})
+		r := runTestCommand(t, testCommand("pwd"), osUser, "", nil)
 		if r.Kind != ResultSuccess || strings.TrimSpace(string(r.Output)) != home {
 			t.Fatalf("passwd home %q: %+v %q", passwdHome, r, r.Output)
 		}
 	}
 	unsetEnv(t, "HOME")
-	r := runTestCommand(t, testCommand("echo never"), strconv.Itoa(os.Geteuid()), "", CommandExecHooks{})
+	r := runTestCommand(t, testCommand("echo never"), strconv.Itoa(os.Geteuid()), "", nil)
 	if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed {
 		t.Fatalf("no home at all: %+v %q", r, r.Output)
 	}
@@ -227,7 +229,7 @@ func TestExecuteCommandHomeFallback(t *testing.T) {
 func TestExecuteCommandStartFailed(t *testing.T) {
 	requireBash(t)
 	t.Setenv("PATH", t.TempDir())
-	r := runTestCommand(t, testCommand("echo x"), agentUserName(), "/", CommandExecHooks{})
+	r := runTestCommand(t, testCommand("echo x"), agentUserName(), "/", nil)
 	if r.Kind != ResultError || r.Reason != ReasonStartFailed || !strings.Contains(string(r.Output), "bash") {
 		t.Fatalf("no bash in PATH: %+v %q", r, r.Output)
 	}
@@ -241,7 +243,7 @@ func TestExecuteCommandTimeLimitAndOutputCap(t *testing.T) {
 	cmd := testCommand("echo before; sleep 30")
 	cmd.TimeoutSec = 1
 	start := time.Now()
-	r := runTestCommand(t, cmd, user, dir, CommandExecHooks{})
+	r := runTestCommand(t, cmd, user, dir, nil)
 	if r.Kind != ResultError || r.Reason != ReasonTimeout || string(r.Output) != "before\n" || time.Since(start) > 5*time.Second {
 		t.Fatalf("time limit: %+v %q after %s", r, r.Output, time.Since(start))
 	}
@@ -249,12 +251,12 @@ func TestExecuteCommandTimeLimitAndOutputCap(t *testing.T) {
 	cmd = testCommand("trap '' TERM; sleep 30")
 	cmd.TimeoutSec = 1
 	start = time.Now()
-	r = runTestCommand(t, cmd, user, dir, CommandExecHooks{})
+	r = runTestCommand(t, cmd, user, dir, nil)
 	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 5*time.Second {
 		t.Fatalf("SIGKILL after the grace: %+v after %s", r, time.Since(start))
 	}
 
-	r = runTestCommand(t, testCommand("head -c 2000000 /dev/zero; exit 1"), user, dir, CommandExecHooks{})
+	r = runTestCommand(t, testCommand("head -c 2000000 /dev/zero; exit 1"), user, dir, nil)
 	if r.Kind != ResultFailure || len(r.Output) != MaxCommandOutputBytes || r.OutputBytes != 2000000 || !r.Truncated {
 		t.Fatalf("output cap: kind %s len %d total %d truncated %v", r.Kind, len(r.Output), r.OutputBytes, r.Truncated)
 	}
@@ -276,34 +278,26 @@ func TestCommandWithoutTimeLimit(t *testing.T) {
 	if cmd.TimeoutSec != 0 {
 		t.Fatalf("an omitted time limit was filled in: %d", cmd.TimeoutSec)
 	}
-	r := runTestCommand(t, cmd, agentUserName(), t.TempDir(), CommandExecHooks{})
+	r := runTestCommand(t, cmd, agentUserName(), t.TempDir(), nil)
 	if r.Kind != ResultSuccess || r.Reason != "" || r.ExitCode == nil || *r.ExitCode != 0 || string(r.Output) != "done\n" {
 		t.Fatalf("command without a time limit: %+v %q", r, r.Output)
 	}
 }
 
-func TestExecuteCommandHooks(t *testing.T) {
+// closedAfter returns a channel that is closed after d (a stop of the agent).
+func closedAfter(d time.Duration) <-chan struct{} {
+	ch := make(chan struct{})
+	time.AfterFunc(d, func() { close(ch) })
+	return ch
+}
+
+func TestExecuteCommandStop(t *testing.T) {
 	requireBash(t)
 	user := agentUserName()
-	// MonitorHere is offered on every pass of the wait loop; the agent's
-	// scheduler decides whether the step runs there.
-	offered, monitored := 0, 0
-	hooks := CommandExecHooks{MonitorHere: func() {
-		offered++
-		if offered == 1 {
-			monitored++
-		}
-	}}
-	r := runTestCommand(t, testCommand("sleep 0.3; echo ok"), user, "/", hooks)
-	if r.Kind != ResultSuccess || monitored != 1 || offered < 3 || string(r.Output) != "ok\n" {
-		t.Fatalf("monitoring while the command runs: %+v offered %d", r, offered)
-	}
-
 	// The stop comes when the command has written its output.
 	marker := "mimamori-test-stop-" + strconv.Itoa(os.Getpid())
 	stop, stoppedAt := closeWhen(processNamed(marker))
-	hooks = CommandExecHooks{Stop: stop}
-	r = runTestCommand(t, testCommand("echo started; exec -a "+marker+" sleep 30"), user, "/", hooks)
+	r := runTestCommand(t, testCommand("echo started; exec -a "+marker+" sleep 30"), user, "/", stop)
 	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || time.Since(stoppedAt()) > 5*time.Second {
 		t.Fatalf("stop: %+v %q", r, r.Output)
 	}
@@ -376,7 +370,7 @@ func TestExecuteCommandValues(t *testing.T) {
 	requireBash(t)
 	cmd := testCommand("printf 'disk / 40%%\\ndisk /var 75%%\\n'; exit 1")
 	cmd.Patterns = []string{`^disk (?P<mount>\S+) (?<use>\d+)%$`}
-	r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: cmd, CollectOutput: true}, CommandExecHooks{})
+	r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: cmd, CollectOutput: true})
 	if r.Kind != ResultFailure || r.Values == nil {
 		t.Fatalf("values: %+v", r)
 	}
@@ -388,11 +382,11 @@ func TestExecuteCommandValues(t *testing.T) {
 		t.Fatalf("values of a failed command: %v", got)
 	}
 	// Without patterns the output is the value; a run-only set has none.
-	r = ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: testCommand("echo a; echo b"), CollectOutput: true}, CommandExecHooks{})
+	r = ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: testCommand("echo a; echo b"), CollectOutput: true})
 	if r.Values == nil || len(r.Values.Values) != 1 || r.Values.Values[0].Value != "a\nb" {
 		t.Fatalf("output as value: %+v", r.Values)
 	}
-	r = ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: testCommand("echo a")}, CommandExecHooks{})
+	r = ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: "/", Command: testCommand("echo a")})
 	if r.Values != nil {
 		t.Fatalf("run only: %+v", r.Values)
 	}
@@ -439,24 +433,24 @@ func TestExecuteCommandSudo(t *testing.T) {
 		if IsAgentUser(u) {
 			t.Fatalf("%s is not the agent's user", u)
 		}
-		r := runTestCommand(t, testCommand("id -un; pwd"), u, "/", CommandExecHooks{})
+		r := runTestCommand(t, testCommand("id -un; pwd"), u, "/", nil)
 		if r.Kind != ResultSuccess || string(r.Output) != u+"\n/\n" {
 			t.Fatalf("as %s: %+v %q", u, r, r.Output)
 		}
-		r = runTestCommand(t, testCommand("exit 1"), u, "/", CommandExecHooks{})
+		r = runTestCommand(t, testCommand("exit 1"), u, "/", nil)
 		if r.Kind != ResultFailure || r.ExitCode == nil || *r.ExitCode != 1 {
 			t.Fatalf("exit code through sudo: %+v", r)
 		}
 	}
 	// The home directory of nobody usually does not exist.
 	if home := "/nonexistent"; func() bool { _, err := os.Stat(home); return err != nil }() {
-		r := runTestCommand(t, testCommand("echo x"), "nobody", "", CommandExecHooks{})
+		r := runTestCommand(t, testCommand("echo x"), "nobody", "", nil)
 		if r.Kind != ResultError || r.Reason != ReasonWorkdirFailed {
 			t.Fatalf("missing home: %+v %q", r, r.Output)
 		}
 	}
 	// An unknown user: sudo fails before the wrapper starts.
-	r := runTestCommand(t, testCommand("echo x"), "no-such-user-mimamori", "/", CommandExecHooks{})
+	r := runTestCommand(t, testCommand("echo x"), "no-such-user-mimamori", "/", nil)
 	if r.Kind != ResultError || r.Reason != ReasonStartFailed || len(r.Output) == 0 || r.ExitCode != nil {
 		t.Fatalf("unknown user: %+v %q", r, r.Output)
 	}
@@ -464,7 +458,7 @@ func TestExecuteCommandSudo(t *testing.T) {
 	cmd := testCommand("sleep 30")
 	cmd.TimeoutSec = 1
 	start := time.Now()
-	r = runTestCommand(t, cmd, "nobody", "/", CommandExecHooks{})
+	r = runTestCommand(t, cmd, "nobody", "/", nil)
 	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 5*time.Second {
 		t.Fatalf("time limit through sudo: %+v after %s", r, time.Since(start))
 	}
@@ -503,7 +497,7 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	cmd := testCommand("trap '' TERM; (exec -a " + child + " sleep 31) & exec -a " + marker + " sleep 32")
 	cmd.TimeoutSec = 1
 	start := time.Now()
-	r := runTestCommand(t, cmd, "nobody", "/", CommandExecHooks{})
+	r := runTestCommand(t, cmd, "nobody", "/", nil)
 	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 10*time.Second || refused < 2 || pgid <= 0 {
 		t.Fatalf("time limit through the helper: %+v after %s (%d refused, group %d)", r, time.Since(start), refused, pgid)
 	}
@@ -524,13 +518,10 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	var logged []string
 	marker = "mimamori-test-" + strconv.Itoa(os.Getpid()) + "-stop"
 	stop, stoppedAt := closeWhen(processNamed(marker))
-	hooks := CommandExecHooks{
-		Stop: stop,
-		Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
-	}
 	refused, pgid = 0, 0
 	cmd = testCommand("trap '' TERM; echo started; exec -a " + marker + " sleep 33")
-	r = runTestCommand(t, cmd, "nobody", "/", hooks)
+	r = ExecuteCommand(CommandExecInput{OSUser: "nobody", WorkDir: "/", Command: cmd, KillGrace: 300 * time.Millisecond,
+		Stop: stop, Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }})
 	took := time.Since(stoppedAt())
 	killProcessGroup = syscall.Kill
 	// Clean up what the simulated refusal left running: the group still has

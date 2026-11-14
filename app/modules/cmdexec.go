@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -22,9 +23,13 @@ import (
 // 1, which could not be told from the command's own 1), a first marker
 // without the second means the working directory could not be entered.
 //
-// A command runs on the calling flow (the agent's worker that runs the set):
-// the process is polled with wait4 and its output pipe is drained in the
-// same loop, which also lets the caller run its monitoring step.
+// A command runs on the calling flow (the agent's worker that runs the set)
+// and nothing else runs there meanwhile: the main process is polled with
+// wait4 and the output pipe is drained in the same loop; after the main
+// process ended, the pipe is read on while the processes it left behind
+// write. The time limit and the stop end the whole process group: SIGTERM,
+// then, when something of the group is still there after the grace,
+// SIGKILL to what is left.
 
 // commandWrapper is the script bash runs with the arguments marker ($1),
 // working directory ($2, empty for the home directory) and command line ($3).
@@ -37,7 +42,7 @@ exec "$BASH" -c "$3"`
 const commandPollMax = 50 * time.Millisecond
 
 // pipeSizeCommand is the pipe buffer asked for (F_SETPIPE_SZ), so that a
-// command rarely blocks on its output while the monitoring step runs.
+// command rarely blocks on its output between two reads.
 const pipeSizeCommand = 1 << 20
 
 // fSetPipeSz is the fcntl command F_SETPIPE_SZ of Linux.
@@ -46,21 +51,6 @@ const fSetPipeSz = 1031
 // signalHelperScript is the script the helper's bash runs with the process
 // group ID as $1 and the signal name as $2.
 const signalHelperScript = `kill -s "$2" -- -"$1"`
-
-// CommandExecHooks connect the wait loop of a running command to the agent.
-// Every field may be nil.
-type CommandExecHooks struct {
-	// MonitorHere is called from the wait loop on every pass while the agent
-	// is not stopping. It runs the monitoring step on this flow when the
-	// agent's scheduler gives it to this worker, and returns after it.
-	MonitorHere func()
-	// Stop is closed when the agent stops; the command is then ended
-	// (SIGTERM, grace, SIGKILL) and its result is an error with the reason
-	// interrupted. A nil channel never stops the command.
-	Stop <-chan struct{}
-	// Logf writes to the agent's log.
-	Logf func(format string, a ...any)
-}
 
 // CommandExecInput is one command to run.
 type CommandExecInput struct {
@@ -75,16 +65,362 @@ type CommandExecInput struct {
 	// KillGrace is the time between SIGTERM and SIGKILL (CommandKillGrace
 	// when zero).
 	KillGrace time.Duration
+	// Stop is closed when the agent stops; the process group of the command
+	// is then ended (SIGTERM, grace, SIGKILL to what is left). A command
+	// whose main process was still running gets the result error with the
+	// reason interrupted. A nil channel never stops the command.
+	Stop <-chan struct{}
+	// Logf writes to the agent's log (may be nil).
+	Logf func(format string, a ...any)
+	// Started, when not nil, is called with the process group of the
+	// command once its process runs (not for a command that could not be
+	// started).
+	Started func(pgid int)
+	// Leftover, when not nil, takes the output pipe when the reading ended
+	// while processes the command left behind still hold it open (they
+	// may write on; whoever holds the pipe reads and drops it). Otherwise
+	// the pipe is closed.
+	Leftover func(f *os.File)
+	// monitorHere is called on every pass of the wait for the main process
+	// while the agent is not stopping.
+	monitorHere func()
 }
 
 // ExecuteCommand runs one command and returns its result. It never fails:
 // whatever goes wrong is an error result with a reason.
-func ExecuteCommand(in CommandExecInput, hooks CommandExecHooks) *CommandResultReport {
-	c := in.Command
-	res := &CommandResultReport{Position: in.Position, CommandLine: c.CommandLine, Note: c.Note, StartedAt: time.Now().Unix()}
-	out, raw := runWrapped(in, hooks)
-	res.FinishedAt = time.Now().Unix()
+func ExecuteCommand(in CommandExecInput) *CommandResultReport {
+	p := startCommand(in)
+	p.wait()
+	return p.result(in.CollectOutput)
+}
+
+// rawExit is how the main process ended.
+type rawExit struct {
+	exited      bool // it exited by itself (exitCode is valid)
+	exitCode    int
+	signaled    bool // a signal ended it
+	timedOut    bool // the time limit passed while it ran
+	interrupted bool // the agent stopped while it ran
+}
+
+// wrappedOutput is the console output with the marker lines removed.
+type wrappedOutput struct {
+	started bool // the first marker was seen
+	entered bool // the second marker was seen
+	output  []byte
+	total   int64 // bytes the command (and the wrapper) wrote, without markers
+}
+
+// commandProcess is one command from its start to the end of the reading of
+// its output. Its fields are the state of the wait, so that wait can be
+// called again after it was left by a panic and goes on where it was.
+type commandProcess struct {
+	in      CommandExecInput
+	startAt time.Time
+	endAt   time.Time
+	// failed is the output of a command whose process could not be
+	// started (nothing else is set then).
+	failed *wrappedOutput
+	marker string
+	proc   *os.Process
+	r      *os.File
+	buf    *limitedBuffer
+	// deadline is when the time limit passes (zero: no limit); grace the
+	// time between SIGTERM and SIGKILL.
+	deadline time.Time
+	grace    time.Duration
+	sig      *groupSignaler
+
+	raw rawExit
+	// reaped: the main process was waited for. terminating: SIGTERM went to
+	// the group (at killAt the rest gets SIGKILL; killed when that time
+	// came). done: the reading ended and the pipe was handed over or closed.
+	reaped      bool
+	terminating bool
+	killAt      time.Time
+	killed      bool
+	done        bool
+}
+
+// startCommand starts the wrapper of a command. A command that cannot be
+// started is returned as ended, with the reason as its output.
+func startCommand(in CommandExecInput) *commandProcess {
+	p := &commandProcess{in: in, startAt: time.Now()}
+	marker, err := RandomHex(16)
+	if err != nil {
+		return p.failStart(err)
+	}
+	path, argv, viaSudo, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
+	if err != nil {
+		return p.failStart(err)
+	}
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return p.failStart(err)
+	}
+	defer devnull.Close()
+	r, w, err := os.Pipe()
+	if err != nil {
+		return p.failStart(err)
+	}
+	if sc, err := r.SyscallConn(); err == nil {
+		// Best effort: a larger pipe buffer; a failure keeps the default.
+		_ = sc.Control(func(fd uintptr) {
+			_, _, _ = syscall.Syscall(syscall.SYS_FCNTL, fd, fSetPipeSz, pipeSizeCommand)
+		})
+	}
+	proc, err := os.StartProcess(path, argv, &os.ProcAttr{
+		Dir:   "/",
+		Files: []*os.File{devnull, w, w},
+		Env:   os.Environ(),
+		// A new session: its own process group (ended as a whole) and no
+		// controlling terminal, so sudo never prompts or allocates one.
+		Sys: &syscall.SysProcAttr{Setsid: true},
+	})
+	w.Close()
+	if err != nil {
+		r.Close()
+		// The error names the program's path; the output does not.
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return p.failStart(err)
+	}
+	p.marker, p.proc, p.r = marker, proc, r
+	// The raw buffer also holds the two marker lines and a little of what
+	// the wrapper may write before them.
+	p.buf = &limitedBuffer{limit: MaxCommandOutputBytes + 2*int64(len(marker)+1) + 4096}
+	p.deadline = commandDeadline(p.startAt, in.Command.TimeoutSec)
+	p.grace = in.KillGrace
+	if p.grace <= 0 {
+		p.grace = CommandKillGrace
+	}
+	p.sig = &groupSignaler{pgid: proc.Pid, logf: in.Logf}
+	if viaSudo {
+		p.sig.osUser = in.OSUser
+	}
+	if in.Started != nil {
+		in.Started(proc.Pid)
+	}
+	return p
+}
+
+// failStart ends p as a command whose process could not be started.
+func (p *commandProcess) failStart(err error) *commandProcess {
+	msg := []byte(fmt.Sprintf("%s: the command could not be started: %v\n", AppName, err))
+	p.failed = &wrappedOutput{output: msg, total: int64(len(msg))}
+	p.reaped, p.done, p.endAt = true, true, time.Now()
+	return p
+}
+
+// commandDeadline returns when the time limit of a command started at start
+// passes: timeoutSec seconds later, or the zero time (no limit) when
+// timeoutSec is 0.
+func commandDeadline(start time.Time, timeoutSec int) time.Time {
+	if timeoutSec <= 0 {
+		return time.Time{}
+	}
+	return start.Add(time.Duration(timeoutSec) * time.Second)
+}
+
+// wait waits until the main process ended and the reading of the output
+// ended (see waitMain and readAfterEnd). It goes on where it was when it
+// is called again.
+func (p *commandProcess) wait() {
+	if !p.reaped {
+		p.waitMain()
+	}
+	if !p.done {
+		p.readAfterEnd()
+	}
+}
+
+// stopping reports whether the agent stops.
+func (p *commandProcess) stopping() bool {
+	return isClosed(p.in.Stop)
+}
+
+// limitPassed reports whether the time limit has passed at now.
+func (p *commandProcess) limitPassed(now time.Time) bool {
+	return !p.deadline.IsZero() && now.After(p.deadline)
+}
+
+// terminate sends SIGTERM to the process group and starts the grace.
+func (p *commandProcess) terminate(now time.Time) {
+	p.terminating = true
+	p.killAt = now.Add(p.grace)
+	p.sig.send(syscall.SIGTERM, p.drainPipe)
+}
+
+// killRest sends SIGKILL to what is left of the group when the grace is
+// over: nothing is sent when the group is gone.
+func (p *commandProcess) killRest() {
+	p.killed = true
+	if groupExists(p.sig.pgid) {
+		p.sig.send(syscall.SIGKILL, p.drainPipe)
+	}
+}
+
+func (p *commandProcess) drainPipe() { drain(p.r, p.buf) }
+
+// waitMain polls the main process until it ends, draining the pipe. A stop,
+// or the time limit (a zero deadline never passes), ends the process group:
+// SIGTERM, and SIGKILL to what is left of the group when the grace is over.
+// When the group could not be signalled (a command of another OS user that
+// the helper could not end either) and the agent is stopping, it stops
+// waiting one grace after the SIGKILL, so that the agent's stop never hangs
+// on such a command; the reading of the output ends with it.
+func (p *commandProcess) waitMain() {
+	pid := p.proc.Pid
+	sleep := 2 * time.Millisecond
+	var ws syscall.WaitStatus
+	for {
+		p.drainPipe()
+		wpid, err := wait4(pid, &ws, syscall.WNOHANG, nil)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil {
+			// The process cannot be waited for (it is not a child any
+			// more; should not happen): it counts as ended by a signal.
+			p.raw.signaled = true
+			break
+		}
+		if wpid == pid {
+			switch {
+			case ws.Exited():
+				p.raw.exited, p.raw.exitCode = true, ws.ExitStatus()
+			case ws.Signaled():
+				p.raw.signaled = true
+			}
+			break
+		}
+		now := time.Now()
+		if !p.terminating {
+			// A stop during the grace of a time limit keeps the reason (the
+			// time limit) and the grace.
+			switch {
+			case p.stopping():
+				p.raw.interrupted = true
+			case p.limitPassed(now):
+				p.raw.timedOut = true
+			}
+			if p.raw.interrupted || p.raw.timedOut {
+				p.terminate(now)
+			}
+		}
+		if p.terminating && !p.killed && now.After(p.killAt) {
+			p.killRest()
+		}
+		if !p.stopping() && p.in.monitorHere != nil {
+			p.in.monitorHere()
+			p.drainPipe()
+		}
+		if p.killed && p.stopping() && p.sig.refused && now.After(p.killAt.Add(p.grace)) {
+			p.sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", p.sig.osUser)
+			_ = p.proc.Release()
+			p.reaped = true
+			p.finish(false)
+			return
+		}
+		time.Sleep(sleep)
+		if sleep < commandPollMax {
+			sleep *= 2
+		}
+	}
+	_ = p.proc.Release()
+	p.reaped = true
+}
+
+// readAfterEnd reads the output after the main process ended, while the
+// processes it left behind still write: until end of file (nothing holds
+// the pipe open any more) or pipeDrainSilence without output, counted anew
+// after every read that returned data, so output that keeps arriving is
+// read whatever it takes. The stop and the time limit apply as during the
+// run: SIGTERM to the process group (when the main process did not get it
+// already), and the reading ends when the group is gone or, after the grace,
+// when what is left got SIGKILL. The result of the command stays the one of
+// its main process.
+func (p *commandProcess) readAfterEnd() {
+	buf := make([]byte, 64<<10)
+	lastData := time.Now()
+	eof := false
+	for {
+		now := time.Now()
+		if p.terminating {
+			// The rest of the grace belongs to the whole group, also when
+			// nothing of it holds the pipe any more.
+			if !groupExists(p.sig.pgid) {
+				break
+			}
+			if now.After(p.killAt) {
+				if !p.killed {
+					p.killRest()
+				}
+				break
+			}
+		} else {
+			if eof || now.Sub(lastData) >= pipeDrainSilence {
+				break
+			}
+			if p.stopping() || p.limitPassed(now) {
+				p.terminate(now)
+				continue
+			}
+		}
+		if eof {
+			time.Sleep(commandPollMax)
+			continue
+		}
+		_ = p.r.SetReadDeadline(time.Now().Add(commandPollMax))
+		n, err := p.r.Read(buf)
+		if n > 0 {
+			p.buf.Write(buf[:n])
+			lastData = time.Now()
+		}
+		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+			eof = true
+		}
+	}
+	if !eof && p.terminating {
+		// What the group wrote before it was gone.
+		eof = drainAvailable(p.r, p.buf, pipeSizeCommand)
+	}
+	p.finish(eof)
+}
+
+// finish ends the reading: the pipe is closed when nothing holds it open
+// any more (eof), else handed to Leftover when there is one.
+func (p *commandProcess) finish(eof bool) {
+	p.done = true
+	p.endAt = time.Now()
+	if !eof && p.in.Leftover != nil {
+		_ = p.r.SetReadDeadline(time.Time{})
+		p.in.Leftover(p.r)
+		return
+	}
+	p.r.Close()
+}
+
+// output returns the console output of the command with the markers
+// removed.
+func (p *commandProcess) output() wrappedOutput {
+	if p.failed != nil {
+		return *p.failed
+	}
+	return splitMarkers(p.buf.Bytes(), p.buf.total, p.marker)
+}
+
+// result returns the result of the ended command; with collect, the values
+// are extracted from its output.
+func (p *commandProcess) result(collect bool) *CommandResultReport {
+	c := p.in.Command
+	out := p.output()
+	res := &CommandResultReport{Position: p.in.Position, CommandLine: c.CommandLine, Note: c.Note, StartedAt: p.startAt.Unix(),
+		FinishedAt: p.endAt.Unix()}
 	res.Output, res.OutputBytes, res.Truncated = out.output, out.total, out.total > int64(len(out.output))
+	raw := p.raw
 	switch {
 	case raw.interrupted:
 		res.Kind, res.Reason = ResultError, ReasonInterrupted
@@ -95,6 +431,9 @@ func ExecuteCommand(in CommandExecInput, hooks CommandExecHooks) *CommandResultR
 	case !out.entered:
 		res.Kind, res.Reason = ResultError, ReasonWorkdirFailed
 	case raw.signaled:
+		res.Kind, res.Reason = ResultError, ReasonSignaled
+	case !raw.exited:
+		// Not waited for to its end (see waitMain).
 		res.Kind, res.Reason = ResultError, ReasonSignaled
 	default:
 		code := raw.exitCode
@@ -110,28 +449,11 @@ func ExecuteCommand(in CommandExecInput, hooks CommandExecHooks) *CommandResultR
 	// The values come from the command's own output; when the command line
 	// was never started, the output is the wrapper's (for example sudo's
 	// message) and gives no value.
-	if in.CollectOutput && out.entered {
+	if collect && out.entered {
 		v := ExtractCommandValues(c.Patterns, res.Output, c.LineLimit)
 		res.Values = &v
 	}
 	return res
-}
-
-// rawExit is how the process ended.
-type rawExit struct {
-	exited      bool // it exited by itself (exitCode is valid)
-	exitCode    int
-	signaled    bool // a signal ended it
-	timedOut    bool // the time limit passed
-	interrupted bool // the agent was stopping
-}
-
-// wrappedOutput is the console output with the marker lines removed.
-type wrappedOutput struct {
-	started bool // the first marker was seen
-	entered bool // the second marker was seen
-	output  []byte
-	total   int64 // bytes the command (and the wrapper) wrote, without markers
 }
 
 // commandArgv returns the program and its arguments for a command: bash
@@ -194,154 +516,62 @@ func agentHomeDir() string {
 	return ""
 }
 
-// runWrapped starts the wrapper and waits for it.
-func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, rawExit) {
-	marker, err := RandomHex(16)
-	if err != nil {
-		return failedStart(err)
-	}
-	path, argv, viaSudo, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
-	if err != nil {
-		return failedStart(err)
-	}
-	devnull, err := os.Open(os.DevNull)
-	if err != nil {
-		return failedStart(err)
-	}
-	defer devnull.Close()
-	r, w, err := os.Pipe()
-	if err != nil {
-		return failedStart(err)
-	}
-	defer r.Close()
-	if sc, err := r.SyscallConn(); err == nil {
-		// Best effort: a larger pipe buffer; a failure keeps the default.
-		_ = sc.Control(func(fd uintptr) {
-			_, _, _ = syscall.Syscall(syscall.SYS_FCNTL, fd, fSetPipeSz, pipeSizeCommand)
-		})
-	}
-	proc, err := os.StartProcess(path, argv, &os.ProcAttr{
-		Dir:   "/",
-		Files: []*os.File{devnull, w, w},
-		Env:   os.Environ(),
-		// A new session: its own process group (ended as a whole) and no
-		// controlling terminal, so sudo never prompts or allocates one.
-		Sys: &syscall.SysProcAttr{Setsid: true},
-	})
-	w.Close()
-	if err != nil {
-		// The error names the program's path; the output does not.
-		var pe *os.PathError
-		if errors.As(err, &pe) {
-			err = pe.Err
-		}
-		return failedStart(err)
-	}
-	// The raw buffer also holds the two marker lines and a little of what
-	// the wrapper may write before them.
-	buf := &limitedBuffer{limit: MaxCommandOutputBytes + 2*int64(len(marker)+1) + 4096}
-	deadline := commandDeadline(time.Now(), in.Command.TimeoutSec)
-	grace := in.KillGrace
-	if grace <= 0 {
-		grace = CommandKillGrace
-	}
-	sig := &groupSignaler{pgid: proc.Pid, logf: hooks.Logf}
-	if viaSudo {
-		sig.osUser = in.OSUser
-	}
-	raw := waitProcess(proc, r, buf, deadline, grace, hooks, sig)
-	drainAll(pipeOutput{r, buf})
-	return splitMarkers(buf.Bytes(), buf.total, marker), raw
+// leftoverPipes holds the output pipes of commands whose reading ended while
+// processes they left behind still held the pipe open. Closing such a pipe
+// would end those processes at their next write (SIGPIPE); instead what they
+// write is read and dropped by tend, and a pipe is closed when it reached
+// its end (every process that held it ended). It is safe for use by several
+// flows (its own mutex); the zero value holds nothing.
+type leftoverPipes struct {
+	mu    sync.Mutex
+	pipes []*os.File
 }
 
-// commandDeadline returns when the time limit of a command started at start
-// passes: timeoutSec seconds later, or the zero time (no limit) when
-// timeoutSec is 0.
-func commandDeadline(start time.Time, timeoutSec int) time.Time {
-	if timeoutSec <= 0 {
-		return time.Time{}
-	}
-	return start.Add(time.Duration(timeoutSec) * time.Second)
+// add takes a pipe (CommandExecInput.Leftover).
+func (l *leftoverPipes) add(f *os.File) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pipes = append(l.pipes, f)
 }
 
-// waitProcess polls the process until it ends, draining the pipe, letting the
-// caller run its monitoring step, and ending the process group when the
-// deadline passed (a zero deadline never does) or on a stop (SIGTERM, then
-// SIGKILL after the grace). When the group could not be
-// signalled (a command of another OS user that the helper could not end
-// either) and the agent is stopping, it stops waiting one grace after the
-// SIGKILL, so that the agent's stop never hangs on such a command.
-func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, deadline time.Time, grace time.Duration, hooks CommandExecHooks,
-	sig *groupSignaler) rawExit {
-	drainPipe := func() { drain(r, buf) }
-	pid := proc.Pid
-	defer func() { _ = proc.Release() }()
-	var raw rawExit
-	var killAt time.Time
-	terminating, killed := false, false
-	sleep := 2 * time.Millisecond
-	var ws syscall.WaitStatus
-	for {
-		drain(r, buf)
-		wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
-		if err == syscall.EINTR {
+// tend reads and drops what is in the held pipes now, without waiting, and
+// closes those that reached their end.
+func (l *leftoverPipes) tend() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	kept := l.pipes[:0]
+	for _, f := range l.pipes {
+		if discardAvailable(f) {
+			f.Close()
 			continue
 		}
-		if err != nil {
-			// The process cannot be waited for (should not happen): end it.
-			sig.send(syscall.SIGKILL, drainPipe)
-			raw.signaled = true
-			return raw
-		}
-		if wpid == pid {
-			break
-		}
-		now := time.Now()
-		stopping := isClosed(hooks.Stop)
-		if !terminating {
-			// A stop during the grace of a time limit keeps the reason (the
-			// time limit) and the grace.
-			switch {
-			case stopping:
-				raw.interrupted = true
-			case !deadline.IsZero() && now.After(deadline):
-				raw.timedOut = true
-			}
-			if raw.interrupted || raw.timedOut {
-				terminating = true
-				killAt = now.Add(grace)
-				sig.send(syscall.SIGTERM, drainPipe)
-			}
-		}
-		if terminating && !killed && now.After(killAt) {
-			killed = true
-			sig.send(syscall.SIGKILL, drainPipe)
-		}
-		if killed && stopping && sig.refused && now.After(killAt.Add(grace)) {
-			sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", sig.osUser)
-			return raw
-		}
-		if !stopping && hooks.MonitorHere != nil {
-			hooks.MonitorHere()
-			drain(r, buf)
-		}
-		time.Sleep(sleep)
-		if sleep < commandPollMax {
-			sleep *= 2
-		}
+		kept = append(kept, f)
 	}
-	switch {
-	case ws.Exited():
-		raw.exited, raw.exitCode = true, ws.ExitStatus()
-	case ws.Signaled():
-		raw.signaled = true
+	clear(l.pipes[len(kept):])
+	l.pipes = kept
+}
+
+// closeAll closes every held pipe (the agent ends).
+func (l *leftoverPipes) closeAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range l.pipes {
+		f.Close()
 	}
-	if terminating && !killed {
-		// The command ended within the grace: make sure nothing of its group
-		// is left behind.
-		sig.send(syscall.SIGKILL, drainPipe)
-	}
-	return raw
+	l.pipes = nil
+}
+
+// held returns the number of held pipes.
+func (l *leftoverPipes) held() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.pipes)
+}
+
+// discardAvailable reads and drops what is in the pipe now, at most the
+// pipe's buffer, and reports whether it reached its end.
+func discardAvailable(f *os.File) bool {
+	return drainAvailable(f, &limitedBuffer{}, pipeSizeCommand)
 }
 
 // isClosed reports whether the channel is closed (a nil channel never is).
@@ -389,12 +619,21 @@ func (g *groupSignaler) send(sig syscall.Signal, drainPipe func()) {
 	}
 }
 
-// killProcessGroup and signalGroupAsUser can be replaced by tests (an agent
-// that runs as root is never refused).
+// killProcessGroup, signalGroupAsUser and wait4 can be replaced by tests (an
+// agent that runs as root is never refused).
 var (
 	killProcessGroup  = syscall.Kill
 	signalGroupAsUser = signalGroupAs
+	wait4             = syscall.Wait4
 )
+
+// groupExists reports whether the process group still has a process:
+// signal 0 to the group is answered (EPERM: it exists, but belongs to
+// another OS user).
+func groupExists(pgid int) bool {
+	err := killProcessGroup(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
 
 // signalGroupAs runs "sudo -n -u USER -- BASH -c 'kill -s SIG -- -PGID'" and
 // waits in the calling flow until it ends, without a time limit (it is an
@@ -452,13 +691,6 @@ func signalGroupAs(osUser string, pgid int, sig syscall.Signal, drainPipe func()
 		return fmt.Errorf("the signal could not be sent (status %d)", ws.ExitStatus())
 	}
 	return nil
-}
-
-// failedStart is the result of a command whose process could not be started:
-// the reason is kept as its output.
-func failedStart(err error) (wrappedOutput, rawExit) {
-	msg := []byte(fmt.Sprintf("%s: the command could not be started: %v\n", AppName, err))
-	return wrappedOutput{output: msg, total: int64(len(msg))}, rawExit{}
 }
 
 // splitMarkers removes the two marker lines from the raw output. Text before

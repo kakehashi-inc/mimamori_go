@@ -103,7 +103,7 @@ func (f *parTransport) seen() []syncSeen {
 // running command.
 func inWaitLoop() bool {
 	buf := make([]byte, 64<<10)
-	return strings.Contains(string(buf[:runtime.Stack(buf, false)]), "modules.waitProcess")
+	return strings.Contains(string(buf[:runtime.Stack(buf, false)]), "(*commandProcess).waitMain")
 }
 
 // stopWhen returns a stop channel for Run that is closed once cond holds

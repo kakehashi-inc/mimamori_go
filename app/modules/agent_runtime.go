@@ -71,6 +71,9 @@ type AgentRuntime struct {
 	sched *agentScheduler
 	// out is the outbox, the only owner of the queued reports.
 	out *outbox
+	// leftovers holds the output pipes that processes left behind by
+	// commands still hold open.
+	leftovers leftoverPipes
 
 	// Fixed before Run starts a worker, then only read. workers is the number
 	// of units processed at the same time (SetWorkers; 1 unless set); stop is
@@ -241,6 +244,7 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) (err error) {
 	}
 	rt.safeWork()
 	wg.Wait()
+	rt.leftovers.closeAll()
 	// The last report: the central learns at once that the agent stops (it
 	// then gives the run requests the agent had not started back to its
 	// queue) and that the runs the stop cut ended. Every worker has
@@ -279,6 +283,7 @@ func (rt *AgentRuntime) haltNow() {
 func (rt *AgentRuntime) work() {
 	for {
 		u, acks := rt.sched.next()
+		rt.leftovers.tend()
 		rt.queueAcks(acks)
 		switch {
 		case u == nil && len(acks) == 0:
