@@ -368,6 +368,32 @@ func TestEveryIntValue(t *testing.T) {
 	}
 }
 
+// The program ends with exit code 2 for a refused number in every integer
+// argument and flag (each value gets one of the refused spellings in turn),
+// with the usage of the command and kong's error line.
+func TestEveryIntValueExitCode(t *testing.T) {
+	bad := []string{"+3", " 3", "0x10", "1_0", "1e1", "1.5", "", "\uff13", "-0x10"}
+	i := 0
+	for _, c := range cliValues(t) {
+		var cli CLI
+		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		if k, _ := kindOf(v); k != kindInt {
+			continue
+		}
+		text := bad[i%len(bad)]
+		i++
+		args := argsWith(t, c, text, false)
+		out, errOut, code := runMain(t, args...)
+		if code != 2 || !strings.HasPrefix(out, "Usage: mimamori "+strings.Join(c.path, " ")) ||
+			!strings.HasPrefix(errOut, "mimamori: error: ") || !strings.Contains(errOut, fmt.Sprintf("%q is not a whole number", text)) {
+			t.Errorf("%q: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	if i < 50 {
+		t.Fatalf("only %d int values", i)
+	}
+}
+
 // A text value that begins with '-' and a digit is a value wherever it
 // stands, and it arrives as given (the mark is never part of it).
 func TestEveryStringValue(t *testing.T) {
