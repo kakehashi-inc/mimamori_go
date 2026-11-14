@@ -36,8 +36,9 @@ import (
 //     each one Write.
 //   - Each run (runCommandJob): its definition, run UID, results and its own
 //     rows of command_executions, and last_due of its set in
-//     command_schedules (written before the run). The scheduler's running
-//     sets keep every other worker away from the same set.
+//     command_schedules (written with the start of the run). The
+//     scheduler's running sets keep every other worker away from the same
+//     set.
 //
 // The scheduler never calls Write while it holds its mutex: answers it finds
 // while picking a unit are returned to the worker, which queues them after

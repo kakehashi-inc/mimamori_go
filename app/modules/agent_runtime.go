@@ -81,11 +81,13 @@ type AgentRuntime struct {
 	// stops the agent as if stop had been closed and returns ErrAgentPanic.
 	halt     chan struct{}
 	haltOnce sync.Once
-	// clock, loc and cmdKillGrace replace the time, the host's time zone and
-	// the grace before SIGKILL in tests.
+	// clock, loc, cmdKillGrace and recordRetry replace the time, the host's
+	// time zone, the grace before SIGKILL and the first wait before a run
+	// record is written again (RunRecordRetryFirst) in tests.
 	clock        func() time.Time
 	loc          *time.Location
 	cmdKillGrace time.Duration
+	recordRetry  time.Duration
 	// scanLimit replaces MaxScanEntries and removeAudit replaces
 	// RemoveAuditRules in tests.
 	scanLimit   int

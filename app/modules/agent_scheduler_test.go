@@ -3,6 +3,7 @@ package modules
 import (
 	"bytes"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -98,11 +99,14 @@ func TestSchedulerOrder(t *testing.T) {
 	}
 }
 
-// TestSchedulerNoBusyRetry: a scheduled set whose occurrence cannot be
-// recorded is not started again before the next monitoring step.
+// TestSchedulerNoBusyRetry: a scheduled set whose start cannot be recorded
+// is written again by its worker with a wait that doubles each time (no busy
+// retry), while the monitoring steps go on on the other worker; nothing of
+// the run is recorded, and at the stop the start is given up.
 func TestSchedulerNoBusyRetry(t *testing.T) {
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 2)
+	rt.recordRetry = 100 * time.Millisecond
 	var logBuf bytes.Buffer
 	var logMu sync.Mutex
 	rt.Logger = log.New(lockedWriter{&logMu, &logBuf}, "", 0)
@@ -122,19 +126,28 @@ func TestSchedulerNoBusyRetry(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	start := time.Now()
 	stop, _ := stopWhen(t, func() bool { return len(tr.seen()) >= 3 })
 	if err := rt.Run(stop); err != nil {
 		t.Fatal(err)
 	}
+	took := time.Since(start)
 	logMu.Lock()
-	failures := strings.Count(logBuf.String(), "recording the schedule failed")
+	logged := logBuf.String()
 	logMu.Unlock()
-	steps := len(tr.seen())
-	if failures == 0 || failures > steps+1 {
-		t.Fatalf("%d failed starts for %d monitoring steps", failures, steps)
+	retries := strings.Count(logged, "storing it failed, tried again in")
+	// Waits of 100 ms, 200 ms, 400 ms, ...: about log2 of the time taken.
+	if retries == 0 || retries > 2+int(math.Log2(float64(took/(100*time.Millisecond))+1)) {
+		t.Fatalf("%d repeated starts in %s", retries, took)
+	}
+	if !strings.Contains(logged, "not run: recording its start failed") {
+		t.Fatalf("the start must be given up at the stop: %q", logged)
 	}
 	if all, _ := countRuns(rt.DB); all != 0 {
 		t.Fatalf("runs recorded: %d", all)
+	}
+	if st, _ := models.GetCommandSchedule(rt.DB.Read(), 1); st == nil || st.LastDue != 0 {
+		t.Fatalf("schedule state: %+v", st)
 	}
 }
 
