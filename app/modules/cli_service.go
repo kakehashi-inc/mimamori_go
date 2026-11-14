@@ -74,8 +74,10 @@ func (c *CentralStatusCmd) Run() error {
 			return DBOpenFailed(err, ExitConfig, "database")
 		} else if err == nil {
 			cfg, cfgErr := LoadCentralConfig(db.Read())
-			// While the central runs, the values it started with are shown;
-			// a saved value that differs takes effect after a restart.
+			// While the central runs, the listeners are shown with the
+			// values it started with (a saved value that differs takes
+			// effect after a restart); workers takes effect while running
+			// and is shown as saved.
 			var runningValues map[string]string
 			if running {
 				runningValues = LoadRunningConfig(db.Read())
@@ -101,20 +103,24 @@ func (c *CentralStatusCmd) Run() error {
 	return nil
 }
 
-// statusValue returns the text central status prints for a restart item:
-// the running value when one is recorded (runningValues), marked when the
-// saved value differs, otherwise the saved value. ok is false when neither
-// is known.
+// statusValue returns the text central status prints for an item: for a
+// restart item the running value when one is recorded (runningValues),
+// marked when the saved value differs, otherwise the saved value; for an
+// item that takes effect while running (workers) the saved value. ok is
+// false when neither is known.
 func statusValue(item, prefix string, saved *CentralConfig, runningValues map[string]string) (string, bool) {
+	f, err := FindConfigField(item)
+	if err != nil {
+		return "", false
+	}
 	var savedValue string
 	if saved != nil {
-		f, err := FindConfigField(item)
-		if err != nil {
-			return "", false
-		}
 		savedValue = f.get(saved)
 	}
 	runValue, isRunning := runningValues[item]
+	if !f.Restart {
+		isRunning = false
+	}
 	switch {
 	case isRunning && saved != nil && runValue != savedValue:
 		return prefix + runValue + " (saved: " + savedValue + ", takes effect after restart)", true

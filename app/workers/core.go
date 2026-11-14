@@ -76,6 +76,11 @@ type core struct {
 	// (see centralReport); reports of different agents run at once.
 	reportLocks agentLocks
 
+	// queueChecked, when set (tests only), is called at the end of every
+	// queueStep inside its transaction with the requests it gave a worker,
+	// in the order given.
+	queueChecked func(tx models.Reader, now int64, granted []*models.CommandRequest)
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg

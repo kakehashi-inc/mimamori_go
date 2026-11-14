@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"time"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
@@ -141,57 +140,6 @@ type ignoredRun struct {
 	setID  int64
 }
 
-// endedRequest is a run request the agent answered without running it.
-type endedRequest struct {
-	setID int64
-	why   modules.Msg
-}
-
-// storeRequestAnswers records, inside a transaction of the central
-// database, what a report of an agent says about its run requests: an ack
-// "started" and every run with a request id end the request as done, an
-// ack "expired" or "unknown_set" ends it as expired. Each change is
-// conditional on the request's agent and state, so a request of another
-// agent or one already ended is not changed. It returns the requests that
-// ended without a run (for the history).
-func storeRequestAnswers(tx models.Writer, agentID int64, req *modules.ReportRequest, now int64) ([]endedRequest, error) {
-	var ended []endedRequest
-	for _, a := range req.CommandRequestAcks {
-		switch a.Status {
-		case modules.RequestAckStarted:
-			if _, err := models.MarkCommandRequestDone(tx, agentID, a.RequestID, a.RunUID, now); err != nil {
-				return nil, err
-			}
-		case modules.RequestAckExpired, modules.RequestAckUnknownSet:
-			ok, err := models.MarkCommandRequestExpired(tx, agentID, a.RequestID, now)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-			why := modules.M("history.detail.request_ended_why.expired")
-			if a.Status == modules.RequestAckUnknownSet {
-				why = modules.M("history.detail.request_ended_why.unknown_set")
-			}
-			r, err := models.GetCommandRequest(tx, agentID, a.RequestID)
-			if err != nil {
-				return nil, err
-			}
-			ended = append(ended, endedRequest{setID: r.SetID, why: modules.M("history.detail.request_ended", "request", a.RequestID, "why", why)})
-		}
-	}
-	for _, run := range req.CommandRuns {
-		if run.RequestID <= 0 || run.RunUID == "" || len(run.RunUID) > 128 {
-			continue
-		}
-		if _, err := models.MarkCommandRequestDone(tx, agentID, run.RequestID, run.RunUID, now); err != nil {
-			return nil, err
-		}
-	}
-	return ended, nil
-}
-
 // recordCommandApply keeps the outcome the agent reported for storing
 // delivered definitions (shown with the sets it refused). It runs in the
 // transaction of the report's central part; agent is the row read there.
@@ -280,34 +228,6 @@ func agentCommandProblems(agent *models.Agent) map[int64]*setProblems {
 		}
 	}
 	return out
-}
-
-// expireCommandRequests ends the run requests of all agents that were not
-// handed over within their expiry and records them in the history (the
-// set's name is read from the agent's database after the transaction).
-func (c *core) expireCommandRequests(now time.Time) {
-	var list []*models.CommandRequest
-	err := c.db.Write(func(tx models.Writer) error {
-		var err error
-		list, err = models.ExpireCommandRequests(tx, now.Unix())
-		return err
-	})
-	if err != nil {
-		c.logger.Printf("command requests: %v", err)
-		return
-	}
-	for _, r := range list {
-		a, err := models.GetAgent(c.db.Read(), r.AgentID)
-		if err != nil {
-			continue
-		}
-		tdb, err := c.targetDB(a)
-		if err != nil {
-			continue
-		}
-		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(a, tdb, r.SetID),
-			modules.M("history.detail.request_not_delivered", "request", r.ID, "expiry", modules.CommandRequestExpiry.String()))
-	}
 }
 
 // commandRetention removes, inside a transaction of a target database, the

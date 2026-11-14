@@ -239,7 +239,7 @@ interface HostInfo {
 | PUT | `/agents/{id}/command-sets/{set}` | A（再認証） | `CommandSetSpec` | `CommandSet`（変更。`os_user` を省略すると、そのセットの現在の値） |
 | DELETE | `/agents/{id}/command-sets/{set}` | A（再認証） | - | `{}`（論理削除） |
 | POST | `/agents/{id}/command-sets/{set}/run` | A | - | `CommandRequest`（手動の実行指示） |
-| DELETE | `/agents/{id}/command-requests/{req}` | A | - | `CommandRequest`（まだ配信していない指示の破棄） |
+| DELETE | `/agents/{id}/command-requests/{req}` | A | - | `CommandRequest`（まだエージェントに渡していない指示（`queued` / `pending`）の破棄） |
 | GET | `/agents/{id}/command-results` | V | - | `{"agent_id","agent_name","results":CommandLatest[],"sets":CommandLatest[]}` |
 | GET | `/command-results?name=` | V | - | `{"names":string[],"name":string,"results":CommandLatest[]}` |
 | GET | `/agents/{id}/command-sets/{set}/runs?limit=&before=` | V | - | `CommandRunList` |
@@ -250,8 +250,8 @@ interface HostInfo {
 - 名前が、その監視対象の削除されていない別のセットと同じ場合は 409 です。
 - `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にしません）。JSON として解釈できない場合も 200 で、`errors` に 1 件、`definition` は `null` です。`definition` は既定値を補った定義です。
 - インポートは、`source_agent_id` の監視対象（`{id}` と同じでもよい）の削除されていないセットを、OS のユーザーと作業ディレクトリを含めてすべて写します。`name` を省略するか空にすると元の名前です。写し先の削除されていないセットの名前、またはインポートの中で名前が重なると 409 で、本文は `{"error":"...","conflicts":["<名前>", ...]}`、何も作りません。存在しない、または削除されたセットと、不正な新しい名前は 400 で、本文は作成と同じ形（`errors` の各問題の前に `item <番号>: `）です。作ったセットの `imported_from` は「<元の監視対象名> / <元のセット名>」です。
-- 実行指示は、そのセットにまだ応答の無い指示（`pending` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、まだ配信していない指示は破棄します。
-- 破棄は `pending`（まだエージェントに渡していない）の指示だけで、それ以外は 409 です。
+- 実行指示は `queued` で作り、同じ処理の中でセントラルのワーカー（設定 `workers`、すべてのエージェントの合計）の空きがあり、エージェントが応答していれば `pending` にします（応答の `state` は `queued` か `pending`。規則は [システム仕様.md](システム仕様.md) の 12.5.5）。そのセットにまだ応答の無い指示（`queued`、`pending` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、まだエージェントに渡していない指示（`queued` / `pending`）は破棄します。
+- 破棄は、まだエージェントに渡していない指示（`queued` / `pending`）だけで、それ以外は 409 です。`pending` の指示を破棄すると、そのワーカーを同じ処理の中で次の指示に割り当てます。
 - `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（`name` が空なら空の配列）。
 - 実行の一覧は新しい順で、`limit` は既定 50、最大 500、`before` はその ID より前の実行だけを返します（次のページは `next_before` を `before` に指定。最後のページでは `null`）。削除したセットの実行も、保存期間の間は見られます。
 - 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）、実行の始まり方（`trigger`、`scheduled_for`、`request_id`）とコマンドの数（`commands_total`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
@@ -295,7 +295,7 @@ interface CommandSet extends CommandSetSpec {
   schedule_summary: string;           // スケジュールの英語の 1 行の要約（"manual"、"daily at 03:00 (host time JST, UTC+09:00)" など）
   imported_from: string;              // インポートしたセットの元。それ以外は ""
   created_at: string; created_by: string; updated_at: string; updated_by: string;
-  request: CommandRequest | null;     // まだ応答の無い実行指示（pending / delivered）
+  request: CommandRequest | null;     // まだ応答の無い実行指示（queued / pending / delivered）
   last_run: CommandRun | null;        // 最後に終わった実行
   running: boolean;                   // 実行中の実行がある
   agent_problems: string[];           // エージェントがこのセットを受け取らなかった理由（現在の定義について報告されたもの）
@@ -307,15 +307,20 @@ interface CommandSetList {
   time_zone: string;                  // ホストのタイムゾーンの略称（"JST" など）。報告が無ければ ""
   utc_offset_sec: number;             // ホストの UTC からのずれ（秒）
   definitions_delivered: boolean;     // エージェントが現在の定義を受け取ったと報告している
+  agent_responding: boolean;          // 確認の間隔の 3 倍と 600 秒以内に同期したか。false の間、この監視対象の実行の指示はセントラルのワーカーを使わずに待つ
   sets: CommandSet[];                 // 削除されていないセット（名前の順）
 }
 interface CommandRequest {
   id: number; set_id: number;
-  state: 'pending' | 'delivered' | 'done' | 'expired' | 'discarded';
+  // queued: セントラルのワーカーの空き待ち。pending: ワーカーを割り当て、エージェントの次の同期を待っている。
+  // delivered: エージェントに渡し、応答を待っている。running: エージェントが実行を始めた。done: 実行が終わった。
+  // expired: 24 時間以内に渡せなかった、またはエージェントが実行しなかった。discarded: 渡す前に破棄した
+  state: 'queued' | 'pending' | 'delivered' | 'running' | 'done' | 'expired' | 'discarded';
   requested_at: string; requested_by: string;
-  expires_at: string;                 // requested_at の 24 時間後。それまでに配信しなければ expired
-  delivered_at: string | null; done_at: string | null;
-  run_uid: string;                    // done のとき、エージェントが始めた実行の一意な ID
+  expires_at: string;                 // requested_at の 24 時間後。それまでにエージェントに渡さなければ expired
+  delivered_at: string | null;
+  done_at: string | null;             // done または expired になった日時
+  run_uid: string;                    // running 以降、エージェントが始めた実行の一意な ID
   discarded_at: string | null; discarded_by: string;
 }
 interface DisplayValue {
@@ -674,7 +679,7 @@ interface SyncRequest {
   ca_fingerprints: string[];               // 信頼している独自 CA の SHA-256 フィンガープリント
   last_apply: ApplyResult | null;          // 最後の適用の結果
   command_sig: string;                     // 保持しているコマンドセットの定義の署名（無ければ ""）
-  running_requests: number[];              // 開始して終わっていない手動の実行の指示の ID（無ければ []。null にはしない）。現在のセントラルは使わない
+  running_requests: number[];              // 開始して終わっていない手動の実行の指示の ID（無ければ []。null にはしない）。キーが無いか null なら、セントラルは何も終わらせない
 }
 interface RuleAssignment { id: number; name: string; version: number; content: RuleContent }   // RuleContent は 6 章
 interface TokenRenewal { token: string; expires_at: number }
@@ -694,6 +699,7 @@ interface SyncResponse {
 ```
 
 - 定義の署名は、監視対象の DB を作ったときの乱数と、削除されていない各セットの ID と版から作ります（DB を作り直すと署名が変わり、定義を送り直します）。セントラルは、エージェントが送った `command_sig` を監視対象ごとに記録します（4.1 章の `definitions_delivered`）。
+- 同期は 1 つのトランザクションで、同期の記録、`running_requests` に無いこの監視対象の `running` の指示を `done` にすること（`running_requests` があるときだけ。`delivered` の指示は変えない）、セントラルのワーカーの割り当て（[システム仕様.md](システム仕様.md) の 12.5.5）、指示を渡すことを行います。同期を記録するため、しばらく同期していなかったエージェントも、この同期で応答しているものとして割り当てを受けます。
 - 実行指示は、`pending` のうち期限（`expires_at`）前のものと、`delivered` のもの（エージェントが応答するまで毎回）を送ります。`pending` の指示は最初に送ったときに `delivered` にします。内蔵エージェントにも同じものを渡します。
 
 ### 14.2 報告（`POST /agent/v1/report`）
@@ -741,8 +747,8 @@ interface CommandRunReport {
 - `*_i18n` のフィールド（`message_i18n`、`warnings_i18n`、`problems_i18n`）は省略できます。古いエージェントは送らず、古いセントラルは無視します。セントラルは、英語にすると英文と一致するものだけを保存し、1 件の JSON が 16 KiB を超えるものは保存しません。
 - `apply.status` が `none` の報告は、適用中の監視ルールを無し（`reported_version` も無し）として記録します。`error` の報告は、それまでに報告された適用中の監視ルールを変えません。
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
-- コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。`request_id` のある実行を作ると、その指示を `done` にします。
-- `command_request_acks` の `started` は指示を `done` に、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `expired` にします（後の 2 つは履歴に残す）。
+- コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。
+- 報告は、まず `command_request_acks` を、次に `command_runs` を順に指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。最後にセントラルのワーカーの割り当てを行うため、終わった指示のワーカーは同じ報告の中で次の指示に割り当てます。
 - `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
 - コマンドセットの結果について、メールで通知することはありません。
 - 応答は `{}` です。

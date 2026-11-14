@@ -254,7 +254,7 @@
             },
             "workers": {
                 "label": "Workers",
-                "hint": "Worker count of the central (up to 64). Requests and the periodic work never wait for it."
+                "hint": "Run requests in progress at the agents at the same time, all agents together (up to 64)."
             },
             "builtin_agent": {
                 "label": "Built-in agent",

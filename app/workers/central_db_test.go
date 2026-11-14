@@ -322,7 +322,7 @@ func TestHandlersOfDifferentKindsAtOnce(t *testing.T) {
 	run(1, func(flow, round int) {
 		now := time.Now()
 		e.c.processTokenExpiry(now)
-		e.c.expireCommandRequests(now)
+		e.c.runRequestsStep(now)
 		e.c.retention(now)
 		if err := e.exec(`UPDATE settings SET value = '0' WHERE key = ?`, settingLastRetentionAt); err != nil {
 			fail("retention gate: "+err.Error(), 0, "")

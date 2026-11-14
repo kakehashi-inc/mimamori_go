@@ -1,9 +1,6 @@
 package models
 
-import (
-	"errors"
-	"strings"
-)
+import "errors"
 
 // States of a manual run request.
 const (
@@ -153,21 +150,33 @@ func MarkCommandRequestExpired(db Writer, agentID, id, now int64) (bool, error) 
 }
 
 // EndUnheldCommandRequests ends the running requests of an agent whose id
-// is not in held (the agent no longer runs them) and returns how many.
+// is not in held (the agent no longer runs them) and returns how many. An
+// empty held ends every running request of the agent.
 func EndUnheldCommandRequests(db Writer, agentID int64, held []int64, now int64) (int64, error) {
-	q := `UPDATE command_requests SET state = 'done', done_at = ? WHERE agent_id = ? AND state = 'running'`
-	args := []any{now, agentID}
-	if len(held) > 0 {
-		q += ` AND id NOT IN (?` + strings.Repeat(`, ?`, len(held)-1) + `)`
-		for _, id := range held {
-			args = append(args, id)
-		}
-	}
-	res, err := db.Exec(q, args...)
+	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE agent_id = ? AND state = 'running' ORDER BY id`, agentID)
+	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	keep := make(map[int64]bool, len(held))
+	for _, id := range held {
+		keep[id] = true
+	}
+	var n int64
+	for _, r := range list {
+		if keep[r.ID] {
+			continue
+		}
+		ok, err := execChanged(db, `UPDATE command_requests SET state = 'done', done_at = ? WHERE id = ? AND agent_id = ? AND state = 'running'`,
+			now, r.ID, agentID)
+		if err != nil {
+			return n, err
+		}
+		if ok {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // ExpireCommandRequests ends the queued and pending requests whose expiry

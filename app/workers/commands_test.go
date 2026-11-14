@@ -219,9 +219,10 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	setID := int64(e.admin("POST", path+"/command-sets", body)["id"].(float64))
 	sp := path + "/command-sets/" + itoa64(setID)
 
-	// pending, refused twice, discarded
+	// queued (the agent never synced, so it is not responding and the
+	// request takes no worker), refused twice, discarded
 	q := e.admin("POST", sp+"/run", nil)
-	if q["state"] != models.RequestPending || q["expires_at"] == nil {
+	if q["state"] != models.RequestQueued || q["expires_at"] == nil {
 		t.Fatalf("request: %v", q)
 	}
 	if rec := e.cli("POST", sp+"/run", nil); rec.Code != 409 {
@@ -241,7 +242,8 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		t.Fatalf("discard unknown: %d", rec.Code)
 	}
 
-	// pending -> delivered (cannot be discarded, delivered again) -> done
+	// queued -> (granted and handed over in the agent's first sync)
+	// delivered (cannot be discarded, delivered again) -> running -> done
 	q = e.admin("POST", sp+"/run", nil)
 	qid2 := int64(q["id"].(float64))
 	resp := syncAgent(t, e, tok, "")
@@ -282,11 +284,20 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		CommandRuns:        []modules.CommandRunReport{runReport("run-1", setID, "s", qid2, []modules.CommandResultReport{}, false, "")},
 		CommandRequestAcks: []modules.CommandRequestAck{{RequestID: qid2, Status: modules.RequestAckStarted, RunUID: "run-1", At: 1000}},
 	})
-	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestDone || r.RunUID != "run-1" {
-		t.Fatalf("done: %+v", r)
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestRunning || r.RunUID != "run-1" {
+		t.Fatalf("running: %+v", r)
+	}
+	if got := e.admin("GET", sp, nil)["request"]; got != nil {
+		t.Fatalf("request of the set while its run runs: %v", got)
 	}
 	if resp = syncAgent(t, e, tok, sig); len(resp.CommandRequests) != 0 {
 		t.Fatalf("answered request delivered: %+v", resp.CommandRequests)
+	}
+	reportAgent(t, e, tok, modules.ReportRequest{
+		CommandRuns: []modules.CommandRunReport{runReport("run-1", setID, "s", qid2, []modules.CommandResultReport{}, true, modules.ResultSuccess)},
+	})
+	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, qid2); r.State != models.RequestDone || r.RunUID != "run-1" || r.DoneAt == 0 {
+		t.Fatalf("done: %+v", r)
 	}
 
 	// answered "expired" and "unknown_set"
@@ -309,7 +320,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	if resp = syncAgent(t, e, tok, ""); len(resp.CommandRequests) != 0 {
 		t.Fatalf("expired request delivered: %+v", resp.CommandRequests)
 	}
-	e.c.expireCommandRequests(time.Now())
+	e.c.runRequestsStep(time.Now())
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, id); r.State != models.RequestExpired {
 		t.Fatalf("expired: %+v", r)
 	}

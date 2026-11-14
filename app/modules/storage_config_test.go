@@ -339,7 +339,7 @@ func TestRemovedConfigItemIgnored(t *testing.T) {
 			if err := db.Write(func(tx models.Writer) error { return SaveRunningConfig(tx, cfg) }); err != nil {
 				t.Fatalf("start values with a stored %s: %v", c.name, err)
 			}
-			if running := LoadRunningConfig(db.Read()); running == nil || running["workers"] == "" {
+			if running := LoadRunningConfig(db.Read()); running == nil || running["web_listen"] == "" {
 				t.Fatalf("start values: %v", running)
 			} else if _, ok := running[c.name]; ok {
 				t.Fatalf("start values name %s: %v", c.name, running)
@@ -362,7 +362,7 @@ func TestRemovedConfigItemIgnored(t *testing.T) {
 			if err != nil || !strings.Contains(out, "retention_days") || strings.Contains(out, c.name) {
 				t.Fatalf("central config list: %v\n%s", err, out)
 			}
-			if out, err := workersOutput(t, (&CentralConfigGetCmd{Name: "workers"}).Run); err != nil || strings.TrimSpace(out) != "1" {
+			if out, err := workersOutput(t, (&CentralConfigGetCmd{Name: "workers"}).Run); err != nil || strings.TrimSpace(out) != "2" {
 				t.Fatalf("central config get workers: %q %v", out, err)
 			}
 			if _, err := workersOutput(t, (&CentralConfigGetCmd{Name: c.name}).Run); err == nil {
@@ -403,7 +403,7 @@ func TestRunningConfigStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := LoadRunningConfig(db.Read())
-	if run["web_listen"] != "127.0.0.1:19610" || run["workers"] != "2" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
+	if _, ok := run["workers"]; ok || run["web_listen"] != "127.0.0.1:19610" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
 		t.Fatalf("record: %v", run)
 	}
 	for _, tc := range []struct {
@@ -414,9 +414,11 @@ func TestRunningConfigStatus(t *testing.T) {
 	}{
 		{"web_listen", "http://", saved, run, "http://127.0.0.1:19610 (saved: 127.0.0.1:19612, takes effect after restart)"},
 		{"agent_listen", "https://", saved, run, "https://127.0.0.1:19611"},
-		{"workers", "", saved, run, "2 (saved: 3, takes effect after restart)"},
+		// workers takes effect while running: always the saved value, also
+		// against a recorded start value.
+		{"workers", "", saved, run, "3"},
 		{"workers", "", saved, nil, "3"},
-		{"workers", "", nil, run, "2"},
+		{"workers", "", saved, map[string]string{"workers": "2"}, "3"},
 	} {
 		if got, ok := statusValue(tc.item, tc.prefix, tc.saved, tc.run); !ok || got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.item, got, tc.want)
@@ -424,6 +426,12 @@ func TestRunningConfigStatus(t *testing.T) {
 	}
 	if _, ok := statusValue("workers", "", nil, nil); ok {
 		t.Error("value without saved or running configuration")
+	}
+	if _, ok := statusValue("workers", "", nil, map[string]string{"workers": "2"}); ok {
+		t.Error("workers from a recorded start value")
+	}
+	if DefaultWorkers != 2 || restartItems["workers"] {
+		t.Errorf("workers: default %d, restart item %v", DefaultWorkers, restartItems["workers"])
 	}
 	if err := db.Write(ClearRunningConfig); err != nil || LoadRunningConfig(db.Read()) != nil {
 		t.Fatalf("clear: %v", err)

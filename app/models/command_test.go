@@ -407,6 +407,9 @@ func TestCommandRequestModel(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(ids, []int64{rb.ID, r4.ID, r5.ID, r6.ID}) {
 			t.Fatalf("open: %v %v", err, ids)
 		}
+		if ags, err := models.ListAgentsWithOpenCommandRequests(tx); err != nil || len(ags) != 2 || ags[0].ID != A || ags[1].ID != B {
+			t.Fatalf("agents with open requests: %v %+v", err, ags)
+		}
 
 		// running requests the agent no longer holds end; delivered ones
 		// and listed ones are not touched.

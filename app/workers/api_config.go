@@ -125,6 +125,8 @@ func (c *core) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		c.history(principalFrom(r), models.HistConfig, "updated", strings.Join(changed, ", "), historyParts(parts))
 		c.reloadConfig()
+		// A raised worker count gives workers to queued run requests at once.
+		c.queueAfterConfig()
 	}
 	out, err := c.configOut()
 	if err != nil {

@@ -40,7 +40,7 @@ Commands for the central. Run them on the central host.
 | --- | --- |
 | `central start` | Start the central (browser screens, agent API, management API and the built-in agent). Stops with SIGTERM or SIGINT |
 | `central stop [--timeout DURATION]` | Stop the running central and wait until it has stopped (default 120s) |
-| `central status` | Show whether the central is running, its listen addresses and workers. While it runs, the values it started with are shown, and a saved value that differs is marked, for example `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)`. When it is not running, the saved values are shown. Exit code 3 when it is not running |
+| `central status` | Show whether the central is running, its listen addresses and workers. While it runs, the listen addresses it started with are shown, and a saved value that differs is marked, for example `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)`. When it is not running, the saved values are shown. `workers` takes effect while the central runs and is always shown with its saved value. Exit code 3 when it is not running |
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. `ADDRESS` is the e-mail address used to log in; `NAME` is the name shown on the screens. `--language` defaults to `auto`. Only while no administrator exists. The password is read from the terminal or the first line of standard input |
 | `central reset-password --email ADDRESS` | Reset the password of the administrator with this e-mail address (case is ignored), enable the account and invalidate its sessions, trusted browsers and pending verification codes |
 | `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
@@ -48,7 +48,7 @@ Commands for the central. Run them on the central host.
 | `central config set NAME [VALUE]` | Set one item. Lists are comma separated. `smtp.password` is read from the terminal or standard input |
 | `central config unset NAME` | Remove one item so its default applies again |
 
-A running central applies a change made with `central config` at its next periodic check (every 30 seconds); a change made on the configuration screen is applied at once. `web_listen`, `agent_listen`, `workers` and `builtin_agent` take effect when the central restarts.
+A running central applies a change made with `central config` at its next periodic check (every 30 seconds); a change made on the configuration screen is applied at once. `web_listen`, `agent_listen` and `builtin_agent` take effect when the central restarts.
 
 While `smtp.host` is set, logging in on the browser screens needs a verification code sent by e-mail. When nobody can log in because the code mail cannot be sent, fix the SMTP settings with `central config set smtp.*`, or stop asking for codes with `central config unset smtp.host` (both work while the central is stopped). Fix a wrong account address with `ctl accounts email ID ADDRESS` and a password with `central reset-password --email ADDRESS`.
 

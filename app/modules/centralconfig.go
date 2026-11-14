@@ -76,8 +76,8 @@ type ConfigField struct {
 	Kind string // "string", "int", "bool", "list" (comma separated) or "secret"
 	Help string
 	// Restart is true for items read only when the central starts (the
-	// listeners, the workers and the built-in agent); the others take effect
-	// while the central is running.
+	// listeners and the built-in agent); the others take effect while the
+	// central is running.
 	Restart bool
 	get     func(c *CentralConfig) string
 	set     func(c *CentralConfig, v string) error
@@ -86,7 +86,7 @@ type ConfigField struct {
 
 // restartItems lists the items that take effect when the central restarts.
 var restartItems = map[string]bool{
-	"web_listen": true, "agent_listen": true, "workers": true, "builtin_agent": true,
+	"web_listen": true, "agent_listen": true, "builtin_agent": true,
 }
 
 func init() {
@@ -139,7 +139,7 @@ var ConfigFields = []ConfigField{
 			}
 			return nil
 		}},
-	cfgIntField("workers", "Worker count of the central (not used for requests or periodic work)", func(c *CentralConfig) *int { return &c.Workers }),
+	cfgIntField("workers", "Run requests in progress at agents at the same time, all agents together", func(c *CentralConfig) *int { return &c.Workers }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
 	cfgIntField("retention_days", "Retention of detections and of the history of rejected connections (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
@@ -567,7 +567,6 @@ func ApplyCentralConfigChanges(tx models.Writer, set map[string]string, unset []
 // running into c, so a configuration reloaded while running keeps them.
 func (c *CentralConfig) KeepRestartItems(running *CentralConfig) {
 	c.WebListen, c.AgentListen = running.WebListen, running.AgentListen
-	c.Workers = running.Workers
 	c.BuiltinAgent = running.BuiltinAgent
 }
 

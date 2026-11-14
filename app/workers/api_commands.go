@@ -139,13 +139,16 @@ type commandSetJSON struct {
 }
 
 type commandSetListJSON struct {
-	AgentID       int64            `json:"agent_id"`
-	AgentName     string           `json:"agent_name"`
-	DefaultOSUser string           `json:"default_os_user"`
-	TimeZone      string           `json:"time_zone"`
-	UTCOffsetSec  int              `json:"utc_offset_sec"`
-	Delivered     bool             `json:"definitions_delivered"`
-	Sets          []commandSetJSON `json:"sets"`
+	AgentID       int64  `json:"agent_id"`
+	AgentName     string `json:"agent_name"`
+	DefaultOSUser string `json:"default_os_user"`
+	TimeZone      string `json:"time_zone"`
+	UTCOffsetSec  int    `json:"utc_offset_sec"`
+	Delivered     bool   `json:"definitions_delivered"`
+	// AgentResponding is the central's judgement whether the agent syncs
+	// (agentResponding): while false its run requests wait without a worker.
+	AgentResponding bool             `json:"agent_responding"`
+	Sets            []commandSetJSON `json:"sets"`
 }
 
 // commandLatestJSON is the latest finished run of a set (any account).
@@ -284,7 +287,8 @@ func (c *core) handleListCommandSets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := commandSetListJSON{AgentID: a.ID, AgentName: c.agentDisplayName(a), DefaultOSUser: a.HostOSUser, TimeZone: a.TimeZone,
-		UTCOffsetSec: a.UTCOffsetSec, Delivered: a.CommandSig == sig, Sets: []commandSetJSON{}}
+		UTCOffsetSec: a.UTCOffsetSec, Delivered: a.CommandSig == sig, Sets: []commandSetJSON{},
+		AgentResponding: agentResponding(c.db.Read(), a, c.conf().DefaultCheckIntervalSec, time.Now().Unix())}
 	problems := agentCommandProblems(a)
 	for _, row := range rows {
 		s, err := c.commandSetOut(r, a, tdb, row, problems, latest, running, requests)
@@ -476,15 +480,16 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A request not yet handed over goes with the set (in the central
-	// database, after the set's deletion); a delivered one is answered by
-	// the agent (it no longer holds the set). The set is deleted even when
-	// this fails, so the failure is logged and the deletion answered.
+	// database, after the set's deletion), and the queue step gives its
+	// worker to the next request; a delivered one is answered by the agent
+	// (it no longer holds the set). The set is deleted even when this
+	// fails, so the failure is logged and the deletion answered.
 	var discarded []int64
-	err = c.db.Write(func(tx models.Writer) error {
+	err = c.queueWrite(now, func(tx models.Writer) error {
 		var err error
 		discarded, err = models.DiscardCommandRequestsOfSet(tx, a.ID, stored.ID, p.operator(), now)
 		return err
-	})
+	}, nil)
 	if err != nil {
 		c.logger.Printf("run requests of the deleted command set %d of %s: %v", stored.ID, c.agentDisplayName(a), err)
 	}
@@ -693,20 +698,17 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 	q := &models.CommandRequest{AgentID: a.ID, SetID: stored.ID, RequestedAt: now, RequestedBy: p.operator(),
 		ExpiresAt: now + int64(modules.CommandRequestExpiry/time.Second)}
 	target := modules.Raw(c.agentDisplayName(a) + " / " + stored.Name)
-	// The request is inserted, made ready for the agent's next sync and
-	// recorded in the history in one transaction of the central database,
-	// and read again in it for the answer.
-	err := c.db.Write(func(tx models.Writer) error {
+	// The request is inserted as queued and recorded in the history, the
+	// queue step gives it a worker when one is free and its agent is
+	// responding, and the row is read again for the answer: all in one
+	// transaction of the central database.
+	err := c.queueWrite(now, func(tx models.Writer) error {
 		if err := models.InsertCommandRequest(tx, q); err != nil {
 			return err
 		}
-		if _, err := models.GrantCommandRequest(tx, q.ID); err != nil {
-			return err
-		}
-		if err := models.InsertHistory(tx, c.historyRow(p, models.HistCommand, "run_requested", target,
-			modules.M("history.detail.command_request", "request", q.ID))); err != nil {
-			return err
-		}
+		return models.InsertHistory(tx, c.historyRow(p, models.HistCommand, "run_requested", target,
+			modules.M("history.detail.command_request", "request", q.ID)))
+	}, func(tx models.Writer) error {
 		var err error
 		q, err = models.GetCommandRequest(tx, a.ID, q.ID)
 		return err
@@ -736,15 +738,18 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	p := principalFrom(r)
-	// The request is read, discarded and read again in one transaction.
+	// The request is read, discarded and read again in one transaction,
+	// whose queue step gives the worker of a pending one to the next
+	// request at once.
 	var q *models.CommandRequest
 	missing, notDiscardable := false, false
-	err := c.db.Write(func(tx models.Writer) error {
+	now := time.Now().Unix()
+	err := c.queueWrite(now, func(tx models.Writer) error {
 		if _, err := models.GetCommandRequest(tx, a.ID, id); err != nil {
 			missing = errors.Is(err, sql.ErrNoRows)
 			return err
 		}
-		ok, err := models.DiscardCommandRequest(tx, a.ID, id, p.operator(), time.Now().Unix())
+		ok, err := models.DiscardCommandRequest(tx, a.ID, id, p.operator(), now)
 		if err != nil {
 			return err
 		}
@@ -752,6 +757,9 @@ func (c *core) handleDiscardCommandRequest(w http.ResponseWriter, r *http.Reques
 			notDiscardable = true
 			return errNotDiscardable
 		}
+		return nil
+	}, func(tx models.Writer) error {
+		var err error
 		q, err = models.GetCommandRequest(tx, a.ID, id)
 		return err
 	})

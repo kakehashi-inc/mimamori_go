@@ -107,6 +107,15 @@ func ListAgents(db Reader) ([]*Agent, error) {
 	return collect(rows, err, scanAgent)
 }
 
+// ListAgentsWithOpenCommandRequests returns the agents that have a run
+// request in queued, pending, delivered or running (the agents the queue
+// step judges), by id.
+func ListAgentsWithOpenCommandRequests(db Reader) ([]*Agent, error) {
+	rows, err := db.Query(`SELECT ` + agentCols + ` FROM agents WHERE id IN
+		(SELECT agent_id FROM command_requests WHERE state IN ('queued', 'pending', 'delivered', 'running')) ORDER BY id`)
+	return collect(rows, err, scanAgent)
+}
+
 // AssignRule sets the rule version an agent should apply.
 func AssignRule(db Writer, id, ruleID int64, version int) error {
 	return execOne(db, `UPDATE agents SET assigned_rule_id = ?, assigned_rule_version = ?, assigned_at = ?,

@@ -30,7 +30,7 @@ func (c *core) periodicSteps() []periodicStep {
 			}
 		}},
 		{name: "tokens", every: modules.PeriodicTick, run: c.processTokenExpiry},
-		{name: "run requests", every: modules.PeriodicTick, run: c.expireCommandRequests},
+		{name: "run requests", every: modules.PeriodicTick, run: c.runRequestsStep},
 		{name: "retention", every: modules.PeriodicTick, run: c.retention},
 		{name: "mail", every: modules.PeriodicTick, run: c.notify},
 	}

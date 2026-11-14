@@ -89,16 +89,24 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	fps, _ := json.Marshal(req.CAFingerprints)
-	// The sync is recorded and the agent's pending run requests are handed
-	// over in one transaction of the central database; the delivered ones
-	// are sent with the answer (again with every sync until the agent
-	// answers them; the agent runs a request at most once and answers it
-	// again).
+	// One transaction of the central database records the sync (so the
+	// agent is responding again in it), ends the running requests the agent
+	// no longer lists (only when it sent the list), runs the queue step and
+	// hands the agent's pending requests over; the delivered ones are sent
+	// with the answer (again with every sync until the agent answers them;
+	// the agent runs a request at most once and answers it again).
 	var handed []*models.CommandRequest
-	err := c.db.Write(func(tx models.Writer) error {
+	err := c.queueWrite(now, func(tx models.Writer) error {
 		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
 			return err
 		}
+		if req.RunningRequests != nil {
+			if _, err := models.EndUnheldCommandRequests(tx, agent.ID, req.RunningRequests, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, func(tx models.Writer) error {
 		var err error
 		handed, err = models.HandOverCommandRequests(tx, agent.ID, now)
 		return err
@@ -299,14 +307,16 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	// The central part of the report is one transaction that reads the
 	// agent row again and decides from it, so each history row is written
-	// together with the row or not at all. The answers to run requests are
-	// recorded in it too; a request that ended without a run is recorded
-	// in the history after it, with the set's name read from the agent's
-	// database.
+	// together with the row or not at all. What the report says about run
+	// requests is applied in it and the queue step runs at its end (a
+	// request that ended frees its worker); a request that ended without a
+	// run is recorded in the history after it, with the set's name read
+	// from the agent's database.
 	var ended []endedRequest
-	err = c.db.Write(func(tx models.Writer) error {
+	transitions := requestTransitions(req)
+	err = c.queueWrite(now, func(tx models.Writer) error {
 		var err error
-		if ended, err = storeRequestAnswers(tx, agent.ID, req, now); err != nil {
+		if ended, err = applyRequestTransitions(tx, agent.ID, transitions, now); err != nil {
 			return err
 		}
 		cur, err := models.GetAgent(tx, agent.ID)
@@ -348,7 +358,7 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			}
 		}
 		return models.RecordAgentReport(tx, cur.ID, f)
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}
