@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"runtime/debug"
 	"strconv"
 	"sync"
@@ -894,13 +895,14 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	// scan) and roots that appear after the scan configuration changed
 	// (scanned like the roots of a first scan: the files already in them are
 	// reported).
+	//
+	// What a walk's transaction decides (its findings to report and its
+	// changes of these times) is computed on copies and taken over only
+	// when the transaction committed: nothing of a rolled back one is
+	// reported or saved.
 	rootSince := map[string]int64{}
 	loadJSONState(rd, stateRootSince, &rootSince)
-	setRootSince := func(r string, v int64) {
-		if old, ok := rootSince[r]; !ok || v < old {
-			rootSince[r] = v
-		}
-	}
+	rootSinceChanged := false
 	// touchFindings records the fingerprints of a walk inside tx and returns
 	// the reports of those not known before.
 	touchFindings := func(tx models.Writer, found []FileFinding) ([]DetectionReport, error) {
@@ -929,15 +931,23 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 		if err != nil {
 			rt.logf("writable scan of %s failed: %v", c.Writable.Base, err)
 		} else {
-			// As before the transaction, a failure to store the result is not
-			// logged: the next check walks again.
-			_ = rt.DB.Write(func(tx models.Writer) error {
+			var fresh []DetectionReport
+			var newSince map[string]int64
+			newPass := pass
+			err := rt.DB.Write(func(tx models.Writer) error {
+				fresh = nil
+				newSince = maps.Clone(rootSince)
+				setRootSince := func(r string, v int64) {
+					if old, ok := newSince[r]; !ok || v < old {
+						newSince[r] = v
+					}
+				}
+				pass := newPass
 				if c.WritableEnabled() {
-					fresh, err := touchFindings(tx, wr.Findings)
-					if err != nil {
+					var err error
+					if fresh, err = touchFindings(tx, wr.Findings); err != nil {
 						return err
 					}
-					out = append(out, fresh...)
 				}
 				known := map[string]bool{}
 				if old, err := models.ListScanRoots(tx); err == nil {
@@ -982,6 +992,7 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 				}
 				pass.Roots = passRoots
+				newPass = pass
 				if wr.Truncated {
 					// The roots of the previous pass stay until this one is complete.
 					all := passRoots
@@ -1014,11 +1025,20 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 				}
 				return models.DeleteLocalState(tx, stateWritableResume, stateWritablePass)
 			})
-			if wr.Truncated {
+			switch {
+			case err != nil:
+				// Nothing of the walk was stored: the next check walks the
+				// same part again.
+				rt.logf("writable scan of %s: storing the result failed: %v", c.Writable.Base, err)
+			case wr.Truncated:
 				rt.logf("writable scan of %s stopped after %d entries; the next check continues at %s", c.Writable.Base, limit, wr.ResumeAt)
-			} else if wResume != "" {
+			case wResume != "":
 				rt.logf("writable scan of %s completed the pass started at %s", c.Writable.Base,
-					time.Unix(pass.StartedAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
+					time.Unix(newPass.StartedAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
+			}
+			if err == nil {
+				out = append(out, fresh...)
+				rootSince, rootSinceChanged = newSince, true
 			}
 		}
 	}
@@ -1055,17 +1075,18 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 				segs = markScanned(segs, eResume, stop, now-ctimeMargin)
 				// A root walked to its end in this check needs no own since
 				// time any more.
-				for r := range rootSince {
+				newSince := maps.Clone(rootSince)
+				for r := range newSince {
 					if (eResume == "" || !entirelyBefore(r, eResume)) && (stop == "" || entirelyBefore(r, stop)) {
-						delete(rootSince, r)
+						delete(newSince, r)
 					}
 				}
-				_ = rt.DB.Write(func(tx models.Writer) error {
-					fresh, err := touchFindings(tx, found)
-					if err != nil {
+				var fresh []DetectionReport
+				err := rt.DB.Write(func(tx models.Writer) error {
+					var err error
+					if fresh, err = touchFindings(tx, found); err != nil {
 						return err
 					}
-					out = append(out, fresh...)
 					// Files of a first scan that are not reported are
 					// remembered, so the next scan (which also looks at the
 					// second of this one) does not report them either.
@@ -1093,15 +1114,28 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					}
 					return models.PruneFindings(tx, TypeExecFile+"|", now-7*24*3600)
 				})
-				if stop != "" {
+				switch {
+				case err != nil:
+					// Nothing of the walk was stored: the next check walks
+					// the same part again.
+					rt.logf("executed-file scan: storing the result failed: %v", err)
+				case stop != "":
 					rt.logf("executed-file scan stopped after %d entries; the next check continues at %s", limit, stop)
-				} else if eResume != "" {
+				case eResume != "":
 					rt.logf("executed-file scan completed its pass")
+				}
+				if err == nil {
+					out = append(out, fresh...)
+					rootSince, rootSinceChanged = newSince, true
 				}
 			}
 		}
 	}
-	_ = rt.DB.Write(func(tx models.Writer) error { return saveJSONState(tx, stateRootSince, rootSince) })
+	if rootSinceChanged {
+		if err := rt.DB.Write(func(tx models.Writer) error { return saveJSONState(tx, stateRootSince, rootSince) }); err != nil {
+			rt.logf("file scans: storing the since times of the roots failed: %v", err)
+		}
+	}
 	return out
 }
 
