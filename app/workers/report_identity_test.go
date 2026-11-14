@@ -198,10 +198,11 @@ func TestReportWithoutID(t *testing.T) {
 
 // The order of failures: the part in the agent's database is committed
 // before the part in central.db runs. When the central fails between the
-// two, the agent gets no success and sends the report again; the repeat is
-// not stored again, but it applies the transitions of the run requests, so
-// the request ends. The report's dropped count is lost (it was to be
-// recorded in the central part).
+// two, the agent gets no success and sends the report again; the repeat
+// does not store the part in the agent's database again, but stores the
+// part in central.db that was lost: the transitions of the run requests,
+// the dropped count with its history row and the outcome of storing the
+// command set definitions. A third copy stores nothing more.
 func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 	e := newTestEnv(t)
 	tok, a, tdb, setID, logs := identityAgent(t, e, "host-lost")
@@ -214,6 +215,8 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 	rep.CommandRuns[0].RequestID, rep.CommandRuns[0].Trigger = reqID, modules.TriggerManual
 	rep.CommandRuns[0].RunUID = "lost-run"
 	rep.CommandRequestAcks = []modules.CommandRequestAck{{RequestID: reqID, Status: modules.RequestAckStarted, RunUID: "lost-run", At: 1000}}
+	rep.CommandApply = &modules.CommandApplyResult{Signature: "sig-lost", At: 1000,
+		Problems: []modules.CommandApplyProblem{{SetID: 99, SetName: "broken", Problems: []string{"broken"}}}}
 
 	failed := false
 	e.c.reportStored = func(int64) error {
@@ -232,11 +235,24 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 	if n := detectionCount(t, tdb); n != 3 {
 		t.Fatalf("detections after the lost central part: %d", n)
 	}
+	if cur, _ := models.GetAgent(e.c.db.Read(), a.ID); cur.DroppedTotal != 0 || cur.CommandProblems != "" || cur.LastCentralReportID != "" {
+		t.Fatalf("agent row after the lost central part: %+v", cur)
+	}
 	reportAgent(t, e, tok, rep)
 	if st := reqState(t, e, a.ID, reqID); st != models.RequestDone {
 		t.Fatalf("request after the repeat: %s", st)
 	}
-	wantStoredOnce(t, e, a, tdb, 3, 0, 0)
+	wantStoredOnce(t, e, a, tdb, 3, 2, 1)
+	cur, _ := models.GetAgent(e.c.db.Read(), a.ID)
+	if cur.CommandSig != "sig-lost" || !strings.Contains(cur.CommandProblems, `"broken"`) || cur.LastCentralReportID != reportID1 {
+		t.Fatalf("agent row after the repeat: sig %q problems %q id %q", cur.CommandSig, cur.CommandProblems, cur.LastCentralReportID)
+	}
+	if !strings.Contains(logs(), "report "+reportID1+" of host-lost was stored in the agent's database only") {
+		t.Fatalf("log: %q", logs())
+	}
+	// A third copy: both parts were stored, nothing is stored again.
+	reportAgent(t, e, tok, rep)
+	wantStoredOnce(t, e, a, tdb, 3, 2, 1)
 	if !strings.Contains(logs(), "report "+reportID1+" of host-lost was already stored") {
 		t.Fatalf("log: %q", logs())
 	}

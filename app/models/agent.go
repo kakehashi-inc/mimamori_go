@@ -47,19 +47,24 @@ type Agent struct {
 	UTCOffsetSec    int
 	CommandSig      string
 	CommandProblems string
-	CreatedAt       int64
+	// LastCentralReportID is the report_id of the last report whose part
+	// in the central database was stored ("" when that report had none).
+	LastCentralReportID string
+	CreatedAt           int64
 }
 
 const agentCols = `id, kind, token_id, db_file, hostname, os_name, os_version, agent_version, assigned_rule_id, assigned_rule_version,
 	assigned_at, reported_rule_id, reported_rule_version, apply_status, apply_message, apply_warnings, apply_i18n, apply_version, apply_at,
-	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, command_problems, created_at`
+	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, command_problems,
+	last_central_report_id, created_at`
 
 func scanAgent(s rowScanner) (*Agent, error) {
 	a := &Agent{}
 	if err := s.Scan(&a.ID, &a.Kind, &a.TokenID, &a.DBFile, &a.Hostname, &a.OSName, &a.OSVersion, &a.AgentVersion,
 		&a.AssignedRuleID, &a.AssignedRuleVersion, &a.AssignedAt, &a.ReportedRuleID, &a.ReportedRuleVersion, &a.ApplyStatus,
 		&a.ApplyMessage, &a.ApplyWarnings, &a.ApplyI18n, &a.ApplyVersion, &a.ApplyAt, &a.CAFingerprints, &a.AuditdJSON, &a.LastSyncAt,
-		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems, &a.CreatedAt); err != nil {
+		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems,
+		&a.LastCentralReportID, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -167,6 +172,7 @@ type AgentReportFields struct {
 	HasHost, HasApply                                     bool
 	Dropped                                               int64
 	Now                                                   int64
+	ReportID                                              string // the report's report_id ("" when none)
 }
 
 // RecordAgentReport stores the summary of a report on the agent row.
@@ -185,7 +191,8 @@ func RecordAgentReport(db Writer, id int64, f AgentReportFields) error {
 			return err
 		}
 	}
-	_, err := db.Exec(`UPDATE agents SET last_report_at = ?, dropped_total = dropped_total + ? WHERE id = ?`, f.Now, f.Dropped, id)
+	_, err := db.Exec(`UPDATE agents SET last_report_at = ?, dropped_total = dropped_total + ?, last_central_report_id = ? WHERE id = ?`,
+		f.Now, f.Dropped, f.ReportID, id)
 	return err
 }
 

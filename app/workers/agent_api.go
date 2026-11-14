@@ -251,11 +251,13 @@ func findSuppression(list []*models.Suppression, agentID int64, typ, user, exe, 
 // every decision is taken on the row the previous report left (two
 // overlapping reports with the same application result record it once).
 // Handlers and the built-in agent call this in any number at the same
-// moment; reports of different agents run at once. A report whose identity
-// is that of the last report stored for the agent was stored already (the
-// agent did not get the answer and sent it again): it is answered as stored
-// without being stored or counted again; this check runs inside the lock
-// too, so two copies arriving at once are stored once.
+// moment; reports of different agents run at once. A report is stored in
+// two parts, in the agent's database and in central.db, and each part
+// remembers the identity of the last report it stored: a report sent again
+// (the agent did not get the answer) is answered as stored, and each part
+// it already stored is not stored or counted again, while a part that was
+// lost (the central failed between the two) is stored now. This check runs
+// inside the lock too, so two copies arriving at once are stored once.
 func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) error {
 	unlock := c.reportLocks.lock(agent.ID)
 	defer unlock()
@@ -274,10 +276,11 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
 	// The identity of the report: the last one stored is remembered in the
-	// agent's database in the transaction that stores the report, so a
-	// report the agent sends again because its answer did not arrive is
-	// found here and not stored again. A report without a valid identity is
-	// stored and not remembered.
+	// agent's database in the transaction that stores the report's part
+	// there, and on the agent's row in the transaction that stores its part
+	// in central.db, so a report the agent sends again because its answer
+	// did not arrive is found and each part is stored once. A report
+	// without a valid identity is stored and not remembered.
 	id := req.ReportID
 	if !validReportID(id) {
 		id = ""
@@ -315,30 +318,10 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 			return err
 		}
 	}
-	if repeated {
-		// Only what is safe to apply twice runs again: the transitions of
-		// the run requests (each conditional on the request's state) and
-		// the queue step. A request that changes here was not changed when
-		// the report was stored, so its history row is written now.
-		c.logger.Printf("report %s of %s was already stored; answered without storing it again", id, c.agentDisplayName(agent))
-		var ended []endedRequest
-		err := c.queueWrite(now, func(tx models.Writer) error {
-			var err error
-			ended, err = applyRequestTransitions(tx, agent.ID, requestTransitions(req), now)
-			return err
-		}, nil)
-		if err != nil {
-			return err
-		}
-		for _, e := range ended {
-			c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
-		}
-		return nil
-	}
 	for _, r := range ignored {
 		c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), r.runUID, r.setID)
 	}
-	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0))}
+	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0)), ReportID: id}
 	if hi := req.HostInfo; hi != nil {
 		f.HasHost = true
 		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
@@ -368,8 +351,14 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	// requests is applied in it and the queue step runs at its end (a
 	// request that ended frees its worker); a request that ended without a
 	// run is recorded in the history after it, with the set's name read
-	// from the agent's database.
+	// from the agent's database. When the agent's row names this report as
+	// the last one whose central part was stored, only what is safe to
+	// apply twice runs again: the transitions of the run requests (each
+	// conditional on the request's state) and the queue step; a request
+	// that changes here was not changed before, so its history row is
+	// written now.
 	var ended []endedRequest
+	centralRepeated := false
 	transitions := requestTransitions(req)
 	err = c.queueWrite(now, func(tx models.Writer) error {
 		var err error
@@ -379,6 +368,10 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		cur, err := models.GetAgent(tx, agent.ID)
 		if err != nil {
 			return err
+		}
+		if id != "" && cur.LastCentralReportID == id {
+			centralRepeated = true
+			return nil
 		}
 		if req.CommandApply != nil {
 			if err := recordCommandApply(tx, cur, req.CommandApply); err != nil {
@@ -418,6 +411,12 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}, nil)
 	if err != nil {
 		return err
+	}
+	switch {
+	case repeated && centralRepeated:
+		c.logger.Printf("report %s of %s was already stored; answered without storing it again", id, c.agentDisplayName(agent))
+	case repeated:
+		c.logger.Printf("report %s of %s was stored in the agent's database only; its part in the central database was stored now", id, c.agentDisplayName(agent))
 	}
 	for _, e := range ended {
 		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
