@@ -25,7 +25,6 @@ type AgentTransport interface {
 const (
 	stateRule           = "rule"
 	stateApply          = "apply"
-	stateExecWatermark  = "exec_watermark"
 	stateLastFullScan   = "last_full_scan"
 	stateScanSignature  = "scan_signature"
 	stateScanPrevRoots  = "scan_prev_roots"
@@ -1049,9 +1048,8 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 			var segs []sinceSegment
 			loadJSONState(rd, stateExecSince, &segs)
 			if len(segs) == 0 {
-				// The watermark of earlier versions covers everything.
-				wm, _ := strconv.ParseInt(models.GetLocalState(rd, stateExecWatermark), 10, 64)
-				segs = []sinceSegment{{From: "", Since: wm}}
+				// Nothing scanned yet: every part is new.
+				segs = []sinceSegment{{From: "", Since: 0}}
 			}
 			eResume := models.GetLocalState(rd, stateExecResume)
 			since := func(root, p string) int64 {

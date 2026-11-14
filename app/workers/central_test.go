@@ -468,7 +468,7 @@ func TestConfigUpdate(t *testing.T) {
 			t.Fatalf("smtp.to is listed: %v", it)
 		}
 	}
-	// smtp.to no longer exists: setting it fails like any unknown name.
+	// smtp.to is not an item: setting it fails like any unknown name.
 	if rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"smtp.to": "a@example.com"}},
 		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("smtp.to set: status %d", rec.Code)

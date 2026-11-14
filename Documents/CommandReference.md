@@ -69,6 +69,8 @@ Commands for the agent. Run them on each monitored host.
 
 Management commands. Run them on the central host while the central is running. They connect to the address of `agent_listen` (to `127.0.0.1` for an empty host or `0.0.0.0`, to `::1` for `::`) and its port, and verify the central's certificate with `ca.crt` of the data directory; the management API answers only connections from the central host itself. `--json` prints the raw JSON (`ctl rules export` and `ctl command-sets export` always print JSON, and `ctl rules edit` prints only its messages). Tables show times in local time and print other values as they are; long values are shortened to 60 characters (except in `ctl tokens list`). A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
 
+A request of `ctl` is cut only when nothing arrives from the central for 60 seconds. A cut after the request was sent prints `Error: the central sent nothing for 60 seconds; it may still carry out the request: <error>` and exits with code 5; the central finishes a request it is processing, so the request may have been carried out. A cut while connecting, during the TLS handshake or while the request is sent prints the error itself and also exits with code 5 (the request did not reach the central).
+
 ### agents
 
 | Command | Description |
@@ -204,6 +206,6 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value, and values the central refuses, such as a duplicate name or a change to a built-in template) |
 | 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use), `agent init` or `agent set-central` while the agent is running, and a `central.db`, `agent.db` or `builtin-agent.db` (`agent set-workers --builtin`) in the data directory that was created by another build of the program (every command that opens it, `status` included, fails with a message that names the file; the data directory has to be created again); for `status`, not running |
 | 4 | Authentication or authorization failure (for `ctl`, `cli.secret` that does not match the running central, or a central certificate that `ca.crt` cannot verify) |
-| 5 | Execution error (external command or the central) |
+| 5 | Execution error (external command or the central), including a `ctl` request cut after 60 seconds without anything from the central |
 | 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read, or a `ca.crt` without a certificate) |
-| 7 | Timeout |
+| 7 | Timeout: `central stop` or `agent stop` waited longer than `--timeout` |

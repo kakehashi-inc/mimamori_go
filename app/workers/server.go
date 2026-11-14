@@ -36,6 +36,16 @@ func startCentral() error {
 	if err := modules.EnsureDataDir(filepath.Join(dataDir, modules.TargetDBDirName)); err != nil {
 		return modules.NewExitErrorf(modules.ExitFileIO, "data directory: %v", err)
 	}
+	// "stopped" is logged last, after the target databases and central.db
+	// were closed, the start values cleared and the lock released (the
+	// deferred steps below), so that whoever waits for the line finds
+	// nothing open any more.
+	running := false
+	defer func() {
+		if running {
+			logger.Printf("stopped")
+		}
+	}()
 	dbPath := filepath.Join(dataDir, modules.CentralDBFileName)
 	// A central.db of another build is refused before central.lock is
 	// written, so that the refused data directory is left as it is.
@@ -125,6 +135,7 @@ func startCentral() error {
 	defer signal.Stop(sigCh)
 	stopPeriodic := make(chan struct{})
 	waitPeriodic := c.startPeriodic(c.periodicSteps(), stopPeriodic)
+	running = true
 	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, central workers %d",
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen, cfg.Workers)
 	// Nothing about the built-in agent is logged while it is disabled.
@@ -142,7 +153,7 @@ func startCentral() error {
 		failed = err
 		logger.Printf("listener failed: %v", err)
 	}
-	if running, _ := c.builtinStatus(); running {
+	if builtinNow, _ := c.builtinStatus(); builtinNow {
 		logger.Printf("shutting down; the built-in agent ends its running commands and waits for all its workers to finish their units")
 	} else {
 		logger.Printf("shutting down")
@@ -170,7 +181,6 @@ func startCentral() error {
 	stopped.Wait()
 	waitPeriodic()
 	waitBuiltin()
-	logger.Printf("stopped")
 	if failed != nil {
 		return modules.NewExitErrorf(modules.ExitGeneral, "listener failed: %v", failed)
 	}

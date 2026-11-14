@@ -415,10 +415,6 @@ func (c *CentralConfig) validationProblems() []Problem {
 	return errs
 }
 
-// removedConfigItems lists items that earlier versions stored and that no
-// longer exist. Their rows in an existing database are ignored.
-var removedConfigItems = map[string]bool{"smtp.to": true, "queue_timeout_sec": true}
-
 // storedCentralConfig reads the stored items (without defaults) and returns
 // the configuration and the names of the stored items.
 func storedCentralConfig(db models.Reader) (*CentralConfig, map[string]bool, error) {
@@ -430,7 +426,7 @@ func storedCentralConfig(db models.Reader) (*CentralConfig, map[string]bool, err
 	stored := map[string]bool{}
 	for _, r := range rows {
 		name, ok := strings.CutPrefix(r.Key, configKeyPrefix)
-		if !ok || removedConfigItems[name] {
+		if !ok {
 			continue
 		}
 		f, err := FindConfigField(name)

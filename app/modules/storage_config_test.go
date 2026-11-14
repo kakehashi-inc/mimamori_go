@@ -307,68 +307,35 @@ func TestSendMailLoginWithoutEncryption(t *testing.T) {
 	}
 }
 
-// TestRemovedConfigItemIgnored checks that a value of a removed item
-// (smtp.to, queue_timeout_sec) saved by an earlier version is ignored
-// without error, by the central's start (load and the record of the start
-// values) and by central config list and get, and that the name is refused
-// like any unknown name.
-func TestRemovedConfigItemIgnored(t *testing.T) {
+// TestNoRecipientOrQueueTimeoutItem checks that smtp.to and
+// queue_timeout_sec are not configuration items: the names are refused like
+// any unknown name, and central config list does not show them.
+func TestNoRecipientOrQueueTimeoutItem(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	prevDir := dataDirOverride
 	t.Cleanup(func() { SetDataDir(prevDir) })
-	for _, c := range []struct{ name, stored string }{
-		{"smtp.to", "not a mail address"},
-		{"queue_timeout_sec", "5"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			SetDataDir(dir)
-			db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Write(func(tx models.Writer) error {
-				return models.SetSetting(tx, configKeyPrefix+c.name, c.stored)
-			}); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := LoadCentralConfig(db.Read())
-			if err != nil {
-				t.Fatalf("stored %s not ignored: %v", c.name, err)
-			}
-			if err := db.Write(func(tx models.Writer) error { return SaveRunningConfig(tx, cfg) }); err != nil {
-				t.Fatalf("start values with a stored %s: %v", c.name, err)
-			}
-			if running := LoadRunningConfig(db.Read()); running == nil || running["web_listen"] == "" {
-				t.Fatalf("start values: %v", running)
-			} else if _, ok := running[c.name]; ok {
-				t.Fatalf("start values name %s: %v", c.name, running)
-			}
-			if _, stored, err := CentralConfigState(db.Read()); err != nil || stored[c.name] {
-				t.Fatalf("state: %v %v", stored, err)
-			}
-			if _, err := applyConfig(db, map[string]string{"retention_days": "30"}, nil); err != nil {
-				t.Fatalf("change with a stored %s: %v", c.name, err)
-			}
-			if _, err := applyConfig(db, map[string]string{c.name: c.stored}, nil); err == nil {
-				t.Fatalf("%s accepted", c.name)
-			}
-			if _, err := FindConfigField(c.name); err == nil {
-				t.Fatalf("%s still defined", c.name)
-			}
-			// The commands open central.db themselves.
-			db.Close()
-			out, err := workersOutput(t, (&CentralConfigListCmd{}).Run)
-			if err != nil || !strings.Contains(out, "retention_days") || strings.Contains(out, c.name) {
-				t.Fatalf("central config list: %v\n%s", err, out)
-			}
-			if out, err := workersOutput(t, (&CentralConfigGetCmd{Name: "workers"}).Run); err != nil || strings.TrimSpace(out) != "2" {
-				t.Fatalf("central config get workers: %q %v", out, err)
-			}
-			if _, err := workersOutput(t, (&CentralConfigGetCmd{Name: c.name}).Run); err == nil {
-				t.Fatalf("central config get %s succeeded", c.name)
-			}
-		})
+	dir := t.TempDir()
+	SetDataDir(dir)
+	db, err := OpenSQLite(filepath.Join(dir, CentralDBFileName), SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, value string }{{"smtp.to", "a@example.com"}, {"queue_timeout_sec", "5"}} {
+		if _, err := FindConfigField(c.name); err == nil {
+			t.Fatalf("%s is defined", c.name)
+		}
+		if _, err := applyConfig(db, map[string]string{c.name: c.value}, nil); err == nil {
+			t.Fatalf("%s accepted", c.name)
+		}
+	}
+	// The commands open central.db themselves.
+	db.Close()
+	out, err := workersOutput(t, (&CentralConfigListCmd{}).Run)
+	if err != nil || !strings.Contains(out, "retention_days") || strings.Contains(out, "smtp.to") || strings.Contains(out, "queue_timeout_sec") {
+		t.Fatalf("central config list: %v\n%s", err, out)
+	}
+	if _, err := workersOutput(t, (&CentralConfigGetCmd{Name: "smtp.to"}).Run); err == nil {
+		t.Fatal("central config get smtp.to succeeded")
 	}
 }
 
