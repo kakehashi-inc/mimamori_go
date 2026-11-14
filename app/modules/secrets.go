@@ -12,6 +12,8 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"testing"
 )
 
 // GenerateSecret returns prefix + base64url of SecretRandomBytes random bytes.
@@ -63,18 +65,58 @@ func HashAuthCode(serverKey []byte, binding, code string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// HashPassword hashes a password with PBKDF2-SHA256 and a random salt.
+// HashPassword hashes a password with PBKDF2-SHA256, PasswordIterations
+// iterations and a random salt.
 func HashPassword(password string) (string, error) {
+	iter := PasswordIterations
+	if n := testPasswordIterations.Load(); n > 0 {
+		iter = int(n)
+	}
+	return hashPassword(password, iter)
+}
+
+// hashPassword hashes a password with iter iterations in the format that
+// VerifyPassword reads: pbkdf2-sha256$<iterations>$<salt>$<hash>, salt and
+// hash in unpadded standard base64.
+func hashPassword(password string, iter int) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key, err := pbkdf2.Key(sha256.New, password, salt, PasswordIterations, 32)
+	key, err := pbkdf2.Key(sha256.New, password, salt, iter, 32)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", PasswordIterations,
+	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", iter,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
+}
+
+// testPasswordIterations is the iteration count HashPassword uses instead
+// of PasswordIterations when it is above zero. Only UseTestPasswordIterations
+// sets it, and only in a test binary.
+var testPasswordIterations atomic.Int64
+
+// UseTestPasswordIterations is for tests only: it makes HashPassword use n
+// iterations (n = 0: PasswordIterations again), so that tests that create
+// many accounts and log in many times do not spend most of their time in
+// PBKDF2. Verification reads the count from the stored hash, so such hashes
+// are checked like any other. Outside a binary built by go test it panics
+// and changes nothing; no code of the program calls it (the test
+// TestTestHooksOnlyInTests reads the sources).
+func UseTestPasswordIterations(n int) {
+	setTestPasswordIterations(testing.Testing(), n)
+}
+
+// setTestPasswordIterations is UseTestPasswordIterations with the answer of
+// testing.Testing() as inTest.
+func setTestPasswordIterations(inTest bool, n int) {
+	if !inTest {
+		panic("UseTestPasswordIterations is only for tests")
+	}
+	if n < 0 {
+		panic("UseTestPasswordIterations: negative iteration count")
+	}
+	testPasswordIterations.Store(int64(n))
 }
 
 // VerifyPassword checks password against a hash made by HashPassword.
