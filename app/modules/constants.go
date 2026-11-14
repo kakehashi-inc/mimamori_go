@@ -245,8 +245,9 @@ const (
 	// written again; each further wait doubles, up to RunRecordRetryMax.
 	RunRecordRetryFirst = time.Second
 	RunRecordRetryMax   = 30 * time.Second
-	// CommandRequestExpiry is how long a manual run request waits for
-	// delivery before it expires.
+	// CommandRequestExpiry is how long after it was made a manual run
+	// request may wait to be handed to the agent (queued, also after it went
+	// back to queued) before it expires.
 	CommandRequestExpiry = 24 * time.Hour
 	// MaxOutboxCommandBytes bounds the queued reports of command set runs on
 	// the agent (their console output is dropped first, oldest first).

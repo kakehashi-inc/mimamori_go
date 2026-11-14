@@ -368,7 +368,7 @@
         "edit": "Edit",
         "delete": "Delete",
         "deleteTitle": "Delete the command set",
-        "deleteConfirm": "Delete {{name}}? Its run history is kept until the retention period ends. A run request not yet delivered is discarded.",
+        "deleteConfirm": "Delete {{name}}? Its run history is kept until the retention period ends. A run request that waits to be handed to the agent is discarded.",
         "deleted": "Deleted {{name}}",
         "saved": "Saved {{name}}",
         "check": "Check",
@@ -589,7 +589,7 @@
             "import_source_not_found": "source_agent_id: monitored target not found",
             "invalid_set": "invalid command set: {{problems}}",
             "name_taken": "name: another command set of this monitored target has this name",
-            "request_not_discardable": "only a run request that was not yet delivered to the agent can be discarded",
+            "request_not_discardable": "only a run request that waits to be handed to the agent can be discarded",
             "request_not_found": "run request not found",
             "request_pending": "this command set already has a run request that has not been answered",
             "spec": {
@@ -725,7 +725,7 @@
                     "expired": "it reached the agent after its expiry",
                     "unknown_set": "the agent does not hold this command set"
                 },
-                "request_not_delivered": "request {{request}} was not delivered to the agent within {{expiry}}",
+                "request_not_delivered": "request {{request}} was still waiting to be handed to the agent {{expiry}} after it was made",
                 "step_up_code_failed": "the re-authentication code for a request from {{host}} could not be sent: {{cause}}"
             },
             "target": {

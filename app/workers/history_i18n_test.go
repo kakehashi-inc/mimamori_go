@@ -89,7 +89,7 @@ func TestHistoryDetailEnglish(t *testing.T) {
 		{"copied", modules.M("history.detail.command_copied", "source", "web-1 / backup"), "copied from " + "web-1 / backup"},
 		{"request", modules.M("history.detail.command_request", "request", int64(8)), fmt.Sprintf("request %d", 8)},
 		{"not delivered", modules.M("history.detail.request_not_delivered", "request", int64(8), "expiry", modules.CommandRequestExpiry.String()),
-			fmt.Sprintf("request %d was not delivered to the agent within %s", 8, modules.CommandRequestExpiry)},
+			fmt.Sprintf("request %d was still waiting to be handed to the agent %s after it was made", 8, modules.CommandRequestExpiry)},
 		{"ended expired", modules.M("history.detail.request_ended", "request", int64(8), "why", modules.M("history.detail.request_ended_why.expired")),
 			fmt.Sprintf("request %d ended without a run: %s", 8, "it reached the agent after its expiry")},
 		{"ended unknown", modules.M("history.detail.request_ended", "request", int64(8), "why", modules.M("history.detail.request_ended_why.unknown_set")),

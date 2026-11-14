@@ -368,7 +368,7 @@
         "edit": "編集",
         "delete": "削除",
         "deleteTitle": "コマンドセットの削除",
-        "deleteConfirm": "{{name}} を削除しますか？実行履歴は保存期間が過ぎるまで残ります。まだ配信していない実行の指示は破棄します。",
+        "deleteConfirm": "{{name}} を削除しますか？実行履歴は保存期間が過ぎるまで残ります。エージェントに渡すのを待っている実行の指示は破棄します。",
         "deleted": "{{name}} を削除しました",
         "saved": "{{name}} を保存しました",
         "check": "確認",
@@ -589,7 +589,7 @@
             "import_source_not_found": "source_agent_id: インポート元のエージェントが見つかりません。",
             "invalid_set": "コマンドセットの定義に誤りがあります: {{problems}}",
             "name_taken": "name: このエージェントの別のコマンドセットに同じ名前があります。",
-            "request_not_discardable": "破棄できるのは、まだエージェントに届いていない実行の指示だけです。",
+            "request_not_discardable": "破棄できるのは、エージェントに渡すのを待っている実行の指示だけです。",
             "request_not_found": "実行の指示が見つかりません。",
             "request_pending": "このコマンドセットには、まだ結果が届いていない実行の指示があります。",
             "spec": {
@@ -725,7 +725,7 @@
                     "expired": "有効期限の後にエージェントに届きました",
                     "unknown_set": "エージェントがこのコマンドセットを持っていません"
                 },
-                "request_not_delivered": "実行の指示 {{request}} は {{expiry}} 以内にエージェントに届きませんでした",
+                "request_not_delivered": "実行の指示 {{request}} は、指示から {{expiry}} を過ぎてもエージェントに渡すのを待っていました",
                 "step_up_code_failed": "{{host}} からの要求の再認証の確認コードを送れませんでした: {{cause}}"
             },
             "target": {

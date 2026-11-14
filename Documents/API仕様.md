@@ -239,7 +239,7 @@ interface HostInfo {
 | PUT | `/agents/{id}/command-sets/{set}` | A（再認証） | `CommandSetSpec` | `CommandSet`（変更。`os_user` を省略すると、そのセットの現在の値） |
 | DELETE | `/agents/{id}/command-sets/{set}` | A（再認証） | - | `{}`（論理削除） |
 | POST | `/agents/{id}/command-sets/{set}/run` | A | - | `CommandRequest`（手動の実行指示） |
-| DELETE | `/agents/{id}/command-requests/{req}` | A | - | `CommandRequest`（まだエージェントに渡していない指示（`queued`）の破棄） |
+| DELETE | `/agents/{id}/command-requests/{req}` | A | - | `CommandRequest`（エージェントに渡すのを待っている指示（`queued`）の破棄） |
 | GET | `/agents/{id}/command-results` | V | - | `{"agent_id","agent_name","results":CommandLatest[],"sets":CommandLatest[]}` |
 | GET | `/command-results?name=` | V | - | `{"names":string[],"name":string,"results":CommandLatest[]}` |
 | GET | `/agents/{id}/command-sets/{set}/runs?limit=&before=` | V | - | `CommandRunList` |
@@ -250,8 +250,8 @@ interface HostInfo {
 - 名前が、その監視対象の削除されていない別のセットと同じ場合は 409 です。
 - `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にしません）。JSON として解釈できない場合も 200 で、`errors` に 1 件、`definition` は `null` です。`definition` は既定値を補った定義です。
 - インポートは、`source_agent_id` の監視対象（`{id}` と同じでもよい）の削除されていないセットを、OS のユーザーと作業ディレクトリを含めてすべて写します。`name` を省略するか空にすると元の名前です。写し先の削除されていないセットの名前、またはインポートの中で名前が重なると 409 で、本文は `{"error":"...","conflicts":["<名前>", ...]}`、何も作りません。存在しない、または削除されたセットと、不正な新しい名前は 400 で、本文は作成と同じ形（`errors` の各問題の前に `item <番号>: `）です。作ったセットの `imported_from` は「<元の監視対象名> / <元のセット名>」です。
-- 実行指示は `queued` で作ります（応答の `state` は `queued`）。エージェントの同期で、エージェントが指示を受け取れると送ったとき（14 章の `free_worker`）に、そのエージェントの `queued` の指示を古いものから 1 つずつ渡します（規則は [システム仕様.md](システム仕様.md) の 12.5.5）。そのセットにまだ応答の無い指示（`queued` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、まだエージェントに渡していない指示（`queued`）は破棄します。実行指示とセットの削除が同時に届き、指示を保存した後にセットが削除されていた場合は、その指示を破棄して（履歴に残します）404 を返します。
-- 破棄は、まだエージェントに渡していない指示（`queued`）だけで、それ以外は 409 です。
+- 実行指示は `queued` で作ります（応答の `state` は `queued`）。エージェントの同期で、エージェントが指示を受け取れると送ったとき（14 章の `free_worker`）に、そのエージェントの `queued` の指示を古いものから 1 つずつ渡します（規則は [システム仕様.md](システム仕様.md) の 12.5.5）。そのセットにまだ応答の無い指示（`queued` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、エージェントに渡すのを待っている指示（`queued`）は破棄します。実行指示とセットの削除が同時に届き、指示を保存した後にセットが削除されていた場合は、その指示を破棄して（履歴に残します）404 を返します。
+- 破棄は、エージェントに渡すのを待っている指示（`queued`。渡した後に `queued` に戻った指示も含む）だけで、それ以外は 409 です。
 - `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（`name` が空なら空の配列）。
 - 実行の一覧は新しい順で、`limit` は既定 50、最大 500、`before` はその ID より前の実行だけを返します（次のページは `next_before` を `before` に指定。最後のページでは `null`）。削除したセットの実行も、保存期間の間は見られます。
 - 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）、実行の始まり方（`trigger`、`scheduled_for`、`request_id`）とコマンドの数（`commands_total`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
@@ -314,10 +314,10 @@ interface CommandRequest {
   id: number; set_id: number;
   // queued: エージェントの同期を待っている（同期で渡す。応答していないエージェントの delivered の指示もここに戻る）。delivered: 同期の応答でエージェントに渡し、応答を待っている。
   // running: エージェントが実行を始めた。done: 実行が終わった。
-  // expired: 24 時間以内に渡せなかった、またはエージェントが実行しなかった。discarded: 渡す前に破棄した
+  // expired: 指示から 24 時間を過ぎても queued だった、またはエージェントが実行しなかった。discarded: queued の間に破棄した
   state: 'queued' | 'delivered' | 'running' | 'done' | 'expired' | 'discarded';
   requested_at: string; requested_by: string;
-  expires_at: string;                 // requested_at の 24 時間後。それまでにエージェントに渡さなければ expired
+  expires_at: string;                 // requested_at の 24 時間後。このとき queued なら expired（渡した後に queued に戻った指示も）
   delivered_at: string | null;        // 最初にエージェントに渡した日時
   done_at: string | null;             // done または expired になった日時
   run_uid: string;                    // running 以降、エージェントが始めた実行の一意な ID

@@ -25,7 +25,7 @@ type CtlCommandSetsCmd struct {
 	Delete  CtlCommandSetsDeleteCmd  `cmd:"" help:"Delete a command set (its runs are kept until the retention removes them)"`
 	Import  CtlCommandSetsImportCmd  `cmd:"" help:"Copy command sets of an agent (or of the same agent) into an agent"`
 	Run     CtlCommandSetsRunCmd     `cmd:"" help:"Request a run of a command set (it is handed to the agent with one of its next syncs)"`
-	Discard CtlCommandSetsDiscardCmd `cmd:"" help:"Discard a run request that was not yet handed to the agent"`
+	Discard CtlCommandSetsDiscardCmd `cmd:"" help:"Discard a run request that waits to be handed to the agent (queued)"`
 	Runs    CtlCommandSetsRunsCmd    `cmd:"" help:"List the runs of a command set, newest first"`
 	ShowRun CtlCommandSetsShowRunCmd `cmd:"" name:"show-run" help:"Show a run with every command's result and console output"`
 }

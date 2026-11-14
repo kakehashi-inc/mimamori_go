@@ -337,7 +337,7 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, id); r.State != models.RequestExpired {
 		t.Fatalf("expired: %+v", r)
 	}
-	// Deleting a set discards its request that was not delivered.
+	// Deleting a set discards its queued request.
 	q = e.admin("POST", sp+"/run", nil)
 	e.admin("DELETE", sp, nil)
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), a.ID, int64(q["id"].(float64))); r.State != models.RequestDiscarded {

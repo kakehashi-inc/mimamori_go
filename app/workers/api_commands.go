@@ -480,10 +480,11 @@ func (c *core) handleDeleteCommandSet(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, err)
 		return
 	}
-	// A request not yet handed over goes with the set (in the central
-	// database, after the set's deletion); a delivered one is answered by
-	// the agent (it no longer holds the set). The set is deleted even when
-	// this fails, so the failure is logged and the deletion answered.
+	// A queued request (waiting to be handed to the agent) goes with the set
+	// (in the central database, after the set's deletion); a delivered one
+	// is answered by the agent (it no longer holds the set). The set is
+	// deleted even when this fails, so the failure is logged and the
+	// deletion answered.
 	var discarded []int64
 	err = c.db.Write(func(tx models.Writer) error {
 		var err error
