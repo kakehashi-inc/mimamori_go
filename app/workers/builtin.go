@@ -119,7 +119,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	rt.SetWorkers(workers)
 	done := make(chan struct{})
 	c.setBuiltinStatus(true, modules.Msg{})
-	logger.Printf("started (workers %d)", workers)
+	logger.Printf("started (agent workers %d)", workers)
 	go func() {
 		defer close(done)
 		defer db.Close()

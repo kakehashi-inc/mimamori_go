@@ -40,7 +40,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `central start` | セントラルを起動する（ブラウザ画面、エージェント用の API、管理用の API、内蔵エージェント）。SIGTERM または SIGINT で終了する |
 | `central stop [--timeout DURATION]` | 起動中のセントラルを停止し、停止するまで待つ（既定 120s） |
-| `central status` | セントラルが稼働中か、待ち受けとワーカー数を表示する。稼働中は待ち受けの起動時の値（実際に使っている値）を表示し、保存済みの値が違う場合は `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)` のように併記する。停止中は保存済みの値を表示する。`workers` は稼働中に反映するため、常に保存済みの値を表示する。停止中は終了コード 3 |
+| `central status` | セントラルが稼働中か、待ち受けとセントラルのワーカー数（`workers`、`workers:` の行）を表示する。稼働中は待ち受けの起動時の値（実際に使っている値）を表示し、保存済みの値が違う場合は `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)` のように併記する。停止中は保存済みの値を表示する。`workers` は稼働中に反映するため、常に保存済みの値を表示する。停止中は終了コード 3 |
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する。`ADDRESS` はログインに使うメールアドレス、`NAME` は画面に表示する名前。`--language` の既定は `auto`。管理者が 1 人もいない場合だけ。パスワードは端末または標準入力の 1 行目から読む |
 | `central reset-password --email ADDRESS` | このメールアドレス（大文字と小文字は区別しない）の管理者のパスワードを再設定し、アカウントを有効にして、セッション、信頼済みのブラウザ、送信済みの確認コードを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |

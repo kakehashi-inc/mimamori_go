@@ -253,7 +253,7 @@
                 "hint": "Host names and IP addresses the agents use to connect. 127.0.0.1, ::1 and localhost are always included. A new server certificate is issued within a minute."
             },
             "workers": {
-                "label": "Workers",
+                "label": "Workers of the central",
                 "hint": "Run requests in progress at the agents at the same time, all agents together (up to 64)."
             },
             "builtin_agent": {
@@ -385,7 +385,7 @@
         "discarded": "Discarded the run request of {{name}}",
         "request": "Run request",
         "requestState": {
-            "queued": "Waiting for a free worker",
+            "queued": "Waiting for a free worker of the central",
             "queuedAgentSilent": "Waiting for the agent to connect",
             "pending": "Waiting for the agent to fetch it",
             "delivered": "Delivered to the agent"
