@@ -693,6 +693,9 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 	if stored == nil {
 		return
 	}
+	if c.runSetLoaded != nil {
+		c.runSetLoaded()
+	}
 	p := principalFrom(r)
 	now := time.Now().Unix()
 	q := &models.CommandRequest{AgentID: a.ID, SetID: stored.ID, RequestedAt: now, RequestedBy: p.operator(),
@@ -718,6 +721,33 @@ func (c *core) handleRequestCommandRun(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if err != nil {
 		c.internalError(w, r, err)
+		return
+	}
+	// The set may have been deleted between the read above and the insert;
+	// its deletion then discarded the requests before this one existed. The
+	// set is read again after the insert: the deletion is committed before
+	// its own discard runs, so either that discard finds this request or
+	// this read finds the deletion, and the request is discarded here.
+	s, err := models.GetCommandSet(tdb.Read(), stored.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		c.internalError(w, r, err)
+		return
+	}
+	if err != nil || s.DeletedAt > 0 {
+		var discarded []int64
+		err := c.queueWrite(now, func(tx models.Writer) error {
+			var err error
+			discarded, err = models.DiscardCommandRequestsOfSet(tx, a.ID, stored.ID, p.operator(), now)
+			return err
+		}, nil)
+		if err != nil {
+			c.internalError(w, r, err)
+			return
+		}
+		for _, id := range discarded {
+			c.historyMsg(p, models.HistCommand, "request_discarded", target, modules.M("history.detail.command_request", "request", id))
+		}
+		writeError(w, http.StatusNotFound, modules.M("command.set_not_found"))
 		return
 	}
 	writeJSON(w, http.StatusOK, commandRequestOut(q))

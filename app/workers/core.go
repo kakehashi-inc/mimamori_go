@@ -86,6 +86,11 @@ type core struct {
 	// central.db; an error it returns ends the report there.
 	reportStored func(agentID int64) error
 
+	// runSetLoaded, when set (tests only), is called in
+	// handleRequestCommandRun after the set was read and before the
+	// request is inserted.
+	runSetLoaded func()
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg

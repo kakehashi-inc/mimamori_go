@@ -713,6 +713,94 @@ func TestQueueExpiryAndDiscard(t *testing.T) {
 	}
 }
 
+// unansweredOfSet counts the queued, pending and delivered requests of a set
+// of an agent.
+func unansweredOfSet(t *testing.T, e *testEnv, agentID, setID int64) int {
+	t.Helper()
+	var n int
+	if err := e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE agent_id = ? AND set_id = ? AND state IN ('queued', 'pending', 'delivered')`,
+		agentID, setID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A run request and the deletion of its set at the same moment: the set is
+// deleted (with its discard of requests) after the run request read it and
+// before it inserted the request. The run request finds the deletion when it
+// reads the set again, discards its request (recorded in the history), frees
+// the worker and answers 404; at the same moment in any order, no request of
+// a deleted set is left.
+func TestQueueRunVersusSetDeletion(t *testing.T) {
+	e := newTestEnv(t)
+	if err := e.exec(`INSERT INTO settings (key, value) VALUES ('config.workers', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`); err != nil {
+		t.Fatal(err)
+	}
+	e.c.reloadConfig()
+	A := newQueueAgent(t, e, "del", 2)
+	syncWith(t, e, A.tok, modules.SyncRequest{})
+	path := "/agents/" + itoa64(A.a.ID) + "/command-sets/"
+	deleted := false
+	e.c.runSetLoaded = func() {
+		if !deleted {
+			deleted = true
+			if rec := e.cli("DELETE", path+itoa64(A.sets[0]), nil); rec.Code != 200 {
+				t.Errorf("deletion: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if rec := e.cli("POST", path+itoa64(A.sets[0])+"/run", nil); rec.Code != 404 || !strings.Contains(rec.Body.String(), "command.set_not_found") {
+		t.Fatalf("run of the set deleted meanwhile: %d %s", rec.Code, rec.Body.String())
+	}
+	e.c.runSetLoaded = nil
+	if n := unansweredOfSet(t, e, A.a.ID, A.sets[0]); n != 0 {
+		t.Fatalf("unanswered requests of the deleted set: %d", n)
+	}
+	var id int64
+	var by string
+	if err := e.c.db.Read().QueryRow(`SELECT id, discarded_by FROM command_requests WHERE agent_id = ? AND set_id = ? AND state = 'discarded'`, A.a.ID, A.sets[0]).Scan(&id, &by); err != nil {
+		t.Fatal(err)
+	}
+	if by != "cli" {
+		t.Fatalf("discarded by %q", by)
+	}
+	items, _, _ := models.ListHistory(e.c.db.Read(), models.HistCommand, "", nil, 100, 0)
+	found := false
+	for _, h := range items {
+		if h.Action == "request_discarded" && strings.Contains(h.I18n, `"request":`+itoa64(id)) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no history row of the discard of request %d", id)
+	}
+	// The worker is free: the next request gets it at once.
+	if _, st := requestRun(t, e, A.a, A.sets[1]); st != models.RequestPending {
+		t.Fatalf("next request: %s", st)
+	}
+
+	// The two requests sent at the same moment, many times.
+	B := newQueueAgent(t, e, "del-b", 0)
+	syncWith(t, e, B.tok, modules.SyncRequest{})
+	for i := range 100 {
+		body := commandSetBody(fmt.Sprintf("d%d", i), "run_only")
+		body["os_user"] = "svc"
+		setID := int64(e.admin("POST", "/agents/"+itoa64(B.a.ID)+"/command-sets", body)["id"].(float64))
+		set := "/agents/" + itoa64(B.a.ID) + "/command-sets/" + itoa64(setID)
+		var wg sync.WaitGroup
+		var runCode int
+		wg.Go(func() { runCode = e.cli("POST", set+"/run", nil).Code })
+		wg.Go(func() { e.cli("DELETE", set, nil) })
+		wg.Wait()
+		if runCode != 200 && runCode != 404 {
+			t.Fatalf("round %d: run answered %d", i, runCode)
+		}
+		if n := unansweredOfSet(t, e, B.a.ID, setID); n != 0 {
+			t.Fatalf("round %d: %d unanswered requests of the deleted set (run answered %d)", i, n, runCode)
+		}
+	}
+}
+
 // The central closed and opened again on the same data directory: every
 // request keeps its state and the queue goes on from the stored rows.
 func TestQueueRestart(t *testing.T) {
