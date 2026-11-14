@@ -701,7 +701,7 @@ export interface CommandSetList {
     time_zone: string;
     utc_offset_sec: number;
     definitions_delivered: boolean;
-    /** Whether the agent synced within three check intervals and 600 seconds; while false its queued run requests wait for the agent to connect. */
+    /** Whether the agent synced within three check intervals and 600 seconds and has not said since that it is stopping; while false its queued run requests wait for the agent to connect. */
     agent_responding: boolean;
     sets: CommandSet[] | null;
 }
