@@ -121,17 +121,23 @@ func intMapper(bits int) kong.MapperFunc {
 }
 
 // intListMapper reads the value of a list flag of int64 numbers (--agent
-// 1,2, also repeated): each element between the flag's separators is read
-// with parseInt and appended. A value without any element is refused like
-// an empty number.
+// 1,2, also repeated): the value is split at the flag's separators like
+// kong splits a list (a separator after '\' belongs to the element), and
+// each element is read with parseInt and appended. An empty element is
+// refused like an empty number wherever it stands: the empty value is one
+// empty element, and the empty element after a separator at the end ("1,"),
+// which kong.SplitEscaped drops, is read as well.
 func intListMapper(ctx *kong.DecodeContext, target reflect.Value) error {
 	s, err := popValue(ctx, "int")
 	if err != nil {
 		return err
 	}
-	elems := kong.SplitEscaped(s, ctx.Value.Tag.Sep)
-	if len(elems) == 0 {
-		elems = []string{s}
+	sep := ctx.Value.Tag.Sep
+	elems := kong.SplitEscaped(s, sep)
+	// Joined again, the elements give the value unless an empty last
+	// element was dropped.
+	if s == "" || kong.JoinEscaped(elems, sep) != s {
+		elems = append(elems, "")
 	}
 	for _, e := range elems {
 		n, err := parseInt(e, 64)

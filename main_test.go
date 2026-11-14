@@ -368,6 +368,52 @@ func TestEveryIntValue(t *testing.T) {
 	}
 }
 
+// Every element of an integer list flag (--agent 1,2) is read like an
+// integer value: an empty element is refused wherever it stands, also the
+// one after a separator at the end, and a separator after '\' belongs to
+// the element.
+func TestEveryIntListElement(t *testing.T) {
+	good := map[string][]int64{"1,2": {1, 2}, "-1,-2": {-1, -2}, "010,7": {10, 7}}
+	// The refused value and the element the error names.
+	bad := map[string]string{
+		"": "", ",": "", "1,": "", "1,2,": "", ",1": "", "1,,2": "", ",,": "",
+		"1,+2": "+2", "1, 2": " 2", `1\,2`: "1,2", `1\,`: "1,", `1\`: `1\`,
+	}
+	n := 0
+	for _, c := range cliValues(t) {
+		var cli CLI
+		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		if v.Target.Type() != reflect.TypeOf([]int64(nil)) {
+			continue
+		}
+		n++
+		for _, equals := range []bool{false, true} {
+			for text, want := range good {
+				args := argsWith(t, c, text, equals)
+				got, err := parseValue(t, c, args)
+				if err != nil {
+					t.Errorf("%q: %v", args, err)
+					continue
+				}
+				if l, ok := got.Interface().([]int64); !ok || !reflect.DeepEqual(l, want) {
+					t.Errorf("%q: %s = %v, want %v", args, c, got, want)
+				}
+			}
+			for text, elem := range bad {
+				args := argsWith(t, c, text, equals)
+				_, err := parseValue(t, c, args)
+				want := fmt.Sprintf("--%s: %q is not a whole number", c.name, elem)
+				if err == nil || !strings.HasPrefix(err.Error(), want) {
+					t.Errorf("%q: error %v, want %s", args, err, want)
+				}
+			}
+		}
+	}
+	if n < 2 {
+		t.Fatalf("only %d int list flags", n)
+	}
+}
+
 // The program ends with exit code 2 for a refused number in every integer
 // argument and flag (each value gets one of the refused spellings in turn),
 // with the usage of the command and kong's error line.
@@ -526,6 +572,7 @@ func TestCommandLineExitCodes(t *testing.T) {
 		{"ctl", "rules", "diff", "1", "2", "+3"},
 		{"ctl", "detections", "list", "--agent", "1_0"},
 		{"ctl", "rules", "apply", "1", "--agent", "2,1e1"},
+		{"ctl", "rules", "unassign", "--agent", "1,"},
 		{"agent", "set-central", "--host", "h", "--port", "1.5"},
 		{"agent", "init", "--central-host", "h", "--central-port", " 9081"},
 		{"ctl", "command-sets", "runs", "1", "2", "--before", "-0x1"},
