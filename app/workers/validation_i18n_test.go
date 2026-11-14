@@ -107,7 +107,7 @@ func TestValidationListsCarryProblems(t *testing.T) {
 	out = checkProblems(t, "command set validate", e.cli("POST", agent+"/command-sets/validate", badSet), 200)
 	codes = codesOf(out.ErrorsI18n)
 	for _, want := range []string{"loc.field>command.spec.required", "loc.field>command.spec.os_user_dash",
-		"loc.command>loc.field>command.spec.range_1", "loc.command>loc.pattern>pattern.numbered_group"} {
+		"loc.command>loc.field>command.spec.range_0", "loc.command>loc.pattern>pattern.numbered_group"} {
 		if !containsCode(codes, want) {
 			t.Errorf("command set validate: %q missing in %q", want, codes)
 		}

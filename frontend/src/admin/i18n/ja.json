@@ -620,6 +620,7 @@
                 "os_user_space": "空白と制御文字は使えません。",
                 "patterns_run_only": "purpose が collect_output のときだけ使います。",
                 "purpose": "collect_output か run_only にしてください。",
+                "range_0": "0 から {{max}} の間にしてください。",
                 "range_1": "1 から {{max}} の間にしてください。",
                 "required": "必須です。",
                 "run_mode": "manual か schedule にしてください。",

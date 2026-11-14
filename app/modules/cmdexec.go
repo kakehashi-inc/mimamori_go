@@ -240,10 +240,7 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 	// The raw buffer also holds the two marker lines and a little of what
 	// the wrapper may write before them.
 	buf := &limitedBuffer{limit: MaxCommandOutputBytes + 2*int64(len(marker)+1) + 4096}
-	timeout := time.Duration(in.Command.TimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = DefaultCommandSetTimeoutSec * time.Second
-	}
+	deadline := commandDeadline(time.Now(), in.Command.TimeoutSec)
 	grace := in.KillGrace
 	if grace <= 0 {
 		grace = CommandKillGrace
@@ -252,24 +249,34 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 	if viaSudo {
 		sig.osUser = in.OSUser
 	}
-	raw := waitProcess(proc, r, buf, timeout, grace, hooks, sig)
+	raw := waitProcess(proc, r, buf, deadline, grace, hooks, sig)
 	drainAll(pipeOutput{r, buf})
 	return splitMarkers(buf.Bytes(), buf.total, marker), raw
 }
 
+// commandDeadline returns when the time limit of a command started at start
+// passes: timeoutSec seconds later, or the zero time (no limit) when
+// timeoutSec is 0.
+func commandDeadline(start time.Time, timeoutSec int) time.Time {
+	if timeoutSec <= 0 {
+		return time.Time{}
+	}
+	return start.Add(time.Duration(timeoutSec) * time.Second)
+}
+
 // waitProcess polls the process until it ends, draining the pipe, letting the
-// caller run its monitoring step, and ending the process group on the time limit or a
-// stop (SIGTERM, then SIGKILL after the grace). When the group could not be
+// caller run its monitoring step, and ending the process group when the
+// deadline passed (a zero deadline never does) or on a stop (SIGTERM, then
+// SIGKILL after the grace). When the group could not be
 // signalled (a command of another OS user that the helper could not end
 // either) and the agent is stopping, it stops waiting one grace after the
 // SIGKILL, so that the agent's stop never hangs on such a command.
-func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grace time.Duration, hooks CommandExecHooks,
+func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, deadline time.Time, grace time.Duration, hooks CommandExecHooks,
 	sig *groupSignaler) rawExit {
 	drainPipe := func() { drain(r, buf) }
 	pid := proc.Pid
 	defer func() { _ = proc.Release() }()
 	var raw rawExit
-	deadline := time.Now().Add(timeout)
 	var killAt time.Time
 	terminating, killed := false, false
 	sleep := 2 * time.Millisecond
@@ -297,7 +304,7 @@ func waitProcess(proc *os.Process, r *os.File, buf *limitedBuffer, timeout, grac
 			switch {
 			case stopping:
 				raw.interrupted = true
-			case now.After(deadline):
+			case !deadline.IsZero() && now.After(deadline):
 				raw.timedOut = true
 			}
 			if raw.interrupted || raw.timedOut {

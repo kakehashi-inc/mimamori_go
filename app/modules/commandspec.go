@@ -420,7 +420,9 @@ type CommandSpec struct {
 	Success     CodeSpec `json:"success"`
 	Failure     CodeSpec `json:"failure"`
 	OnProblems  string   `json:"on_problems"`
-	TimeoutSec  int      `json:"timeout_sec"`
+	// TimeoutSec is the time limit of the command in seconds; 0 is no
+	// limit (the command is waited for until it ends).
+	TimeoutSec int `json:"timeout_sec"`
 	// LineLimit and Patterns are used only by collect_output sets.
 	LineLimit int      `json:"line_limit"`
 	Patterns  []string `json:"patterns"`
@@ -478,8 +480,8 @@ func ParseCommandSetSpec(data []byte) (*CommandSetSpec, error) {
 }
 
 // Normalize fills defaults (keep count, joiner, run mode, code specs, "on
-// problems", time limit, line limit) and makes the form stable. Command
-// lines are never changed.
+// problems", line limit) and makes the form stable. The time limit is never
+// filled in: an omitted one is 0, no limit. Command lines are never changed.
 func (s *CommandSetSpec) Normalize() {
 	s.Name = strings.TrimSpace(s.Name)
 	s.OSUser = strings.TrimSpace(s.OSUser)
@@ -512,9 +514,6 @@ func (s *CommandSetSpec) Normalize() {
 		}
 		if c.OnProblems == "" {
 			c.OnProblems = OnProblemsStop
-		}
-		if c.TimeoutSec == 0 {
-			c.TimeoutSec = DefaultCommandSetTimeoutSec
 		}
 		if c.LineLimit == 0 {
 			c.LineLimit = DefaultCommandLineLimit
@@ -621,8 +620,8 @@ func (c *CommandSpec) validate(purpose string) []Problem {
 	default:
 		add("on_problems", M("command.spec.on_problems"))
 	}
-	if c.TimeoutSec < 1 || c.TimeoutSec > MaxCommandSetTimeoutSec {
-		add("timeout_sec", M("command.spec.range_1", "max", MaxCommandSetTimeoutSec))
+	if c.TimeoutSec < 0 || c.TimeoutSec > MaxCommandSetTimeoutSec {
+		add("timeout_sec", M("command.spec.range_0", "max", MaxCommandSetTimeoutSec))
 	}
 	if c.LineLimit < 1 || c.LineLimit > MaxCommandLineLimit {
 		add("line_limit", M("command.spec.range_1", "max", MaxCommandLineLimit))

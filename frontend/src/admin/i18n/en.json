@@ -620,6 +620,7 @@
                 "os_user_space": "must not contain white space or control characters",
                 "patterns_run_only": "are used only when purpose is collect_output",
                 "purpose": "must be collect_output or run_only",
+                "range_0": "must be between 0 and {{max}}",
                 "range_1": "must be between 1 and {{max}}",
                 "required": "is required",
                 "run_mode": "must be manual or schedule",

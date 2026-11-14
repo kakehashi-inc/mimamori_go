@@ -259,6 +259,28 @@ func TestExecuteCommandTimeLimitAndOutputCap(t *testing.T) {
 	}
 }
 
+// TestCommandWithoutTimeLimit: a time limit of 0 is no limit: the deadline
+// is the zero time, and the command runs to its own end (with its exit code)
+// whatever it takes; a limit of n seconds ends n seconds after the start.
+func TestCommandWithoutTimeLimit(t *testing.T) {
+	start := time.Unix(1000, 0)
+	if d := commandDeadline(start, 0); !d.IsZero() {
+		t.Fatalf("no limit: deadline %v", d)
+	}
+	if d := commandDeadline(start, 5); !d.Equal(start.Add(5 * time.Second)) {
+		t.Fatalf("5 s: deadline %v", d)
+	}
+	requireBash(t)
+	cmd := testCommand("sleep 1.5; echo done")
+	if cmd.TimeoutSec != 0 {
+		t.Fatalf("an omitted time limit was filled in: %d", cmd.TimeoutSec)
+	}
+	r := runTestCommand(t, cmd, agentUserName(), t.TempDir(), CommandExecHooks{})
+	if r.Kind != ResultSuccess || r.Reason != "" || r.ExitCode == nil || *r.ExitCode != 0 || string(r.Output) != "done\n" {
+		t.Fatalf("command without a time limit: %+v %q", r, r.Output)
+	}
+}
+
 // closedAfter returns a channel that is closed after d (a stop of the agent).
 func closedAfter(d time.Duration) <-chan struct{} {
 	ch := make(chan struct{})

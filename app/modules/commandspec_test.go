@@ -26,8 +26,8 @@ func TestCommandSetDefaults(t *testing.T) {
 	c := s.Commands[0]
 	if s.Name != "x" || s.KeepRuns != 100 || s.Joiner != JoinerComma || s.RunMode != RunModeManual ||
 		c.Success != DefaultSuccessCodes || c.Failure != DefaultFailureCodes || c.OnProblems != OnProblemsStop ||
-		c.TimeoutSec != 300 || c.LineLimit != 20 || c.Patterns == nil {
-		t.Fatalf("defaults: %+v", s)
+		c.TimeoutSec != 0 || c.LineLimit != 20 || c.Patterns == nil {
+		t.Fatalf("defaults (an omitted time limit is 0, no limit): %+v", s)
 	}
 	if errs := s.Validate(time.Now().Unix()); len(errs) != 0 {
 		t.Fatalf("valid set refused: %v", errs)
@@ -105,7 +105,10 @@ func TestCommandSetValidate(t *testing.T) {
 			s.Commands[0].Failure = CodeSpec{Kind: CodeMin, A: 4}
 		}, ""},
 		{"on problems", func(s *CommandSetSpec) { s.Commands[0].OnProblems = "ignore" }, "on_problems: must be"},
-		{"timeout", func(s *CommandSetSpec) { s.Commands[0].TimeoutSec = 86401 }, "timeout_sec: must be between 1 and 86400"},
+		{"timeout", func(s *CommandSetSpec) { s.Commands[0].TimeoutSec = 86401 }, "timeout_sec: must be between 0 and 86400"},
+		{"negative timeout", func(s *CommandSetSpec) { s.Commands[0].TimeoutSec = -1 }, "timeout_sec: must be between 0 and 86400"},
+		{"no time limit", func(s *CommandSetSpec) { s.Commands[0].TimeoutSec = 0 }, ""},
+		{"largest time limit", func(s *CommandSetSpec) { s.Commands[0].TimeoutSec = 86400 }, ""},
 		{"line limit", func(s *CommandSetSpec) { s.Commands[0].LineLimit = 10001 }, "line_limit: must be between 1 and 10000"},
 		{"pattern without name", func(s *CommandSetSpec) { s.Commands[0].Patterns = []string{`(\d+)%`} }, "pattern 1: must have at least one named group"},
 		{"bad pattern", func(s *CommandSetSpec) { s.Commands[0].Patterns = []string{`(?P<a>x`} }, "pattern 1: invalid regular expression"},
@@ -116,7 +119,7 @@ func TestCommandSetValidate(t *testing.T) {
 		{"patterns of run_only", func(s *CommandSetSpec) { s.Purpose = PurposeRunOnly }, "patterns: are used only when purpose is collect_output"},
 		{"second command", func(s *CommandSetSpec) {
 			s.Commands = append(s.Commands, CommandSpec{CommandLine: "x", Success: DefaultSuccessCodes, Failure: DefaultFailureCodes,
-				OnProblems: OnProblemsStop, TimeoutSec: 0, LineLimit: 20})
+				OnProblems: OnProblemsStop, TimeoutSec: -1, LineLimit: 20})
 		}, "command 2: timeout_sec"},
 		{"once past", func(s *CommandSetSpec) {
 			s.RunMode, s.Schedule = RunModeSchedule, &CommandSchedule{Kind: ScheduleOnce, At: "2026-11-12T09:59:00Z"}

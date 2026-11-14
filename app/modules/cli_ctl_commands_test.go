@@ -292,7 +292,7 @@ func TestCommandSetReferenceExample(t *testing.T) {
 	if problems := spec.Validate(time.Now().Unix()); len(problems) > 0 {
 		t.Fatalf("example: %v", problems)
 	}
-	if spec.RunMode != "schedule" || spec.KeepRuns != 100 || spec.Joiner != JoinerComma || spec.Commands[0].TimeoutSec != 300 || spec.Commands[0].LineLimit != 20 {
+	if spec.RunMode != "schedule" || spec.KeepRuns != 100 || spec.Joiner != JoinerComma || spec.Commands[0].TimeoutSec != 0 || spec.Commands[0].LineLimit != 20 {
 		t.Errorf("defaults: %+v", spec)
 	}
 }

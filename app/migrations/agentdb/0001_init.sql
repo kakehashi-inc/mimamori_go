@@ -114,7 +114,7 @@ CREATE TABLE command_items (
     failure_a    INTEGER NOT NULL DEFAULT 1,
     failure_b    INTEGER NOT NULL DEFAULT 0,
     on_problems  TEXT    NOT NULL DEFAULT 'stop' CHECK (on_problems IN ('stop', 'continue_on_failure', 'continue_always')),
-    timeout_sec  INTEGER NOT NULL DEFAULT 300,
+    timeout_sec  INTEGER NOT NULL DEFAULT 0,
     line_limit   INTEGER NOT NULL DEFAULT 20,
     patterns     TEXT    NOT NULL DEFAULT '[]',
     UNIQUE (set_id, position)

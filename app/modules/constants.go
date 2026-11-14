@@ -212,11 +212,10 @@ const (
 	MaxCommandWorkDirBytes = 4096
 	// MaxCommandLineBytes is the largest command line, in bytes.
 	MaxCommandLineBytes = 102400
-	// DefaultCommandSetTimeoutSec is the default time limit of one command;
-	// MaxCommandSetTimeoutSec the largest. (The agent's own external tools
-	// such as auditctl have no time limit.)
-	DefaultCommandSetTimeoutSec = 300
-	MaxCommandSetTimeoutSec     = 86400
+	// MaxCommandSetTimeoutSec is the largest time limit of one command; 0 is
+	// no limit, and nothing fills a limit in. (The agent's own external
+	// tools such as auditctl have no time limit.)
+	MaxCommandSetTimeoutSec = 86400
 	// DefaultCommandLineLimit is the default number of lines of a command's
 	// part of the display value; MaxCommandLineLimit the largest.
 	DefaultCommandLineLimit = 20

@@ -853,3 +853,53 @@ func TestCommandSetEndToEnd(t *testing.T) {
 		t.Fatalf("definitions not reported as delivered: %v", list)
 	}
 }
+
+// The time limit of a command is what the administrator gave: an omitted
+// one is stored, answered and delivered as 0 (no limit), 0 is accepted, a
+// limit is kept, and a value out of 0..86400 is refused.
+func TestCommandTimeLimitNotFilledIn(t *testing.T) {
+	e := newTestEnv(t)
+	tok, a, tdb := commandAgent(t, e, "host-limit")
+	path := "/agents/" + itoa64(a.ID) + "/command-sets"
+	body := map[string]any{"name": "limits", "purpose": "run_only", "os_user": "svc", "commands": []any{
+		map[string]any{"command_line": "true"},
+		map[string]any{"command_line": "true", "timeout_sec": 0},
+		map[string]any{"command_line": "true", "timeout_sec": 120},
+	}}
+	created := e.admin("POST", path, body)
+	limits := func(set map[string]any) []float64 {
+		var out []float64
+		for _, c := range set["commands"].([]any) {
+			out = append(out, c.(map[string]any)["timeout_sec"].(float64))
+		}
+		return out
+	}
+	if got := limits(created); !slices.Equal(got, []float64{0, 0, 120}) {
+		t.Fatalf("created: %v", got)
+	}
+	id := int64(created["id"].(float64))
+	items, err := models.ListCommandItems(tdb.Read(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{0, 0, 120} {
+		if items[i].TimeoutSec != want {
+			t.Fatalf("stored command %d: timeout_sec %d, want %d", i+1, items[i].TimeoutSec, want)
+		}
+	}
+	body["commands"] = []any{map[string]any{"command_line": "true"}}
+	if got := limits(e.admin("PUT", path+"/"+itoa64(id), body)); !slices.Equal(got, []float64{0}) {
+		t.Fatalf("updated: %v", got)
+	}
+	resp := syncWith(t, e, tok, modules.SyncRequest{})
+	if resp.CommandSets == nil || len(resp.CommandSets.Sets) != 1 || resp.CommandSets.Sets[0].Commands[0].TimeoutSec != 0 {
+		t.Fatalf("delivered: %+v", resp.CommandSets)
+	}
+	for _, bad := range []int{-1, 86401} {
+		body["commands"] = []any{map[string]any{"command_line": "true", "timeout_sec": bad}}
+		rec := e.cli("POST", path+"/validate", body)
+		if !strings.Contains(rec.Body.String(), "command 1: timeout_sec: must be between 0 and 86400") {
+			t.Fatalf("timeout_sec %d: %d %s", bad, rec.Code, rec.Body.String())
+		}
+	}
+}

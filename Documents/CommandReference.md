@@ -150,7 +150,7 @@ Command sets of one agent (the built-in agent included): definitions, run reques
 | `ctl command-sets runs AGENT_ID SET_ID [--limit N] [--before RUN_ID]` | List the runs of a command set, newest first (also of a deleted set while its runs are kept): trigger, due time of a scheduled run, start, end, state, reason and the display value on one line. `--limit` defaults to 50 and is held between 1 and 500; when older runs exist, the `--before` value of the next page is printed below the table |
 | `ctl command-sets show-run AGENT_ID RUN_ID` | Show a run: trigger, OS user, working directory, times, state, display value, and for every executed command its result, exit code, times, command line, note and console output (up to 1 MiB per command), and how many commands were not executed |
 
-The definition file is one JSON object in the shape of `CommandSetSpec` of the API (see [API仕様.md](API仕様.md), chapter 4.1, for every field, its values and limits); unknown fields are refused. Omitted fields take their defaults: run mode from whether a schedule is given, 100 kept runs, comma joiner, success code 0, failure codes 1 or more, `on_problems` `stop`, 300 seconds, 20 lines. Example:
+The definition file is one JSON object in the shape of `CommandSetSpec` of the API (see [API仕様.md](API仕様.md), chapter 4.1, for every field, its values and limits); unknown fields are refused. Omitted fields take their defaults: run mode from whether a schedule is given, 100 kept runs, comma joiner, success code 0, failure codes 1 or more, `on_problems` `stop`, 20 lines. An omitted `timeout_sec` is 0: the command has no time limit and is waited for until it ends. Example:
 
 ```json
 {

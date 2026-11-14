@@ -111,6 +111,7 @@ var msgCatalog = map[string]msgDef{
 	"command.spec.os_user_space":                    {en: "must not contain white space or control characters", admin: true},
 	"command.spec.patterns_run_only":                {en: "are used only when purpose is collect_output", admin: true},
 	"command.spec.purpose":                          {en: "must be collect_output or run_only", admin: true},
+	"command.spec.range_0":                          {en: "must be between 0 and {{max}}", admin: true},
 	"command.spec.range_1":                          {en: "must be between 1 and {{max}}", admin: true},
 	"command.spec.required":                         {en: "is required", admin: true},
 	"command.spec.run_mode":                         {en: "must be manual or schedule", admin: true},

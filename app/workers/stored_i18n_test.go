@@ -215,7 +215,7 @@ func TestAgentCommandProblemsCoded(t *testing.T) {
 	sig := syncAgent(t, e, tok, "").CommandSets.Signature
 
 	p1 := modules.FieldProblem("os_user", modules.M("command.spec.os_user_dash"))
-	p2 := modules.FieldProblem("timeout_sec", modules.M("command.spec.range_1", "max", 86400))
+	p2 := modules.FieldProblem("timeout_sec", modules.M("command.spec.range_0", "max", 86400))
 	reportAgent(t, e, tok, modules.ReportRequest{CommandApply: &modules.CommandApplyResult{Signature: sig, At: 5,
 		Problems: []modules.CommandApplyProblem{
 			{SetID: s1, SetName: "s1", Problems: []string{p1.Text(), "timeout_sec: changed"}, ProblemsI18n: []modules.Problem{p1, p2}},
