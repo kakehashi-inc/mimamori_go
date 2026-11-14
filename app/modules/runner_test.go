@@ -39,6 +39,34 @@ func TestRunToolNoTimeLimit(t *testing.T) {
 }
 
 // The output, the standard error and the exit code are kept; output much
+// After the program has ended, its pipes are read until nothing has arrived
+// for pipeDrainSilence: a child that keeps a pipe open and silent ends the
+// reading after that silence, and output that a child keeps writing for
+// longer than that is read completely.
+func TestRunToolDrainAfterEnd(t *testing.T) {
+	// The background sleep holds standard output and standard error open
+	// and writes nothing: one silence for both pipes.
+	start := time.Now()
+	res, err := RunTool(nil, 1<<20, "sh", "-c", "sleep 30 & echo hi")
+	took := time.Since(start)
+	if err != nil || string(res.Stdout) != "hi\n" {
+		t.Fatalf("silent child: %q %v", res.Stdout, err)
+	}
+	if took < pipeDrainSilence || took > pipeDrainSilence+time.Second {
+		t.Fatalf("silent child: RunTool took %v, want about %v", took, pipeDrainSilence)
+	}
+
+	// A child writes a line every 0.5 s for 4 s after the program ended:
+	// longer than pipeDrainSilence in total, never silent that long.
+	res, err = RunTool(nil, 1<<20, "sh", "-c", "(i=1; while [ $i -le 8 ]; do echo $i; sleep 0.5; i=$((i+1)); done) & exit 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "1\n2\n3\n4\n5\n6\n7\n8\n"; string(res.Stdout) != want {
+		t.Fatalf("output after the end: %q, want %q", res.Stdout, want)
+	}
+}
+
 // larger than a pipe buffer does not block the tool and is cut at the limit.
 func TestRunToolOutputLimit(t *testing.T) {
 	res, err := RunTool(nil, 1<<20, "sh", "-c", "echo hello; echo err >&2; exit 3")

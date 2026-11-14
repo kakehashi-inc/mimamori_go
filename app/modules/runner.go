@@ -134,9 +134,9 @@ func RunTool(stop <-chan struct{}, maxOutput int64, name string, args ...string)
 		}
 	}
 	_ = proc.Release()
-	// Read what is left after the process ended (until end of file).
-	drainAll(outR, stdout)
-	drainAll(errR, stderr)
+	// Read what is left after the process ended (until end of file, or a
+	// silence of pipeDrainSilence).
+	drainAll(pipeOutput{outR, stdout}, pipeOutput{errR, stderr})
 
 	res := &CommandResult{ExitCode: ws.ExitStatus(), Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if ws.Signaled() {
@@ -185,18 +185,43 @@ func drain(f *os.File, dst *limitedBuffer) {
 	}
 }
 
-// drainAll reads the pipe until end of file (the writer has exited), bounded
-// by a short deadline in case a child of the command still holds it open.
-func drainAll(f *os.File, dst *limitedBuffer) {
+// pipeDrainSilence is how long drainAll waits for the next byte after the
+// program has ended: a child of the program that still holds the pipe open
+// and writes nothing for this long ends the reading.
+const pipeDrainSilence = 2 * time.Second
+
+// pipeOutput is a pipe from a program and the buffer its output goes to.
+type pipeOutput struct {
+	f   *os.File
+	dst *limitedBuffer
+}
+
+// drainAll reads the pipes until end of file on each (every writer has
+// exited), or until nothing has arrived on any of them for pipeDrainSilence,
+// counted anew after every read that returned data, in case a child of the
+// program still holds a pipe open without writing. Output that keeps
+// arriving is read completely. The pipes are read in turn, each read waiting
+// at most 50 ms, so the silence is that of all of them together.
+func drainAll(pipes ...pipeOutput) {
 	buf := make([]byte, 64<<10)
-	_ = f.SetReadDeadline(time.Now().Add(2 * time.Second))
-	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			dst.Write(buf[:n])
-		}
-		if err != nil {
-			return
+	done := make([]bool, len(pipes))
+	open := len(pipes)
+	lastData := time.Now()
+	for open > 0 && time.Since(lastData) < pipeDrainSilence {
+		for i, p := range pipes {
+			if done[i] {
+				continue
+			}
+			_ = p.f.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			n, err := p.f.Read(buf)
+			if n > 0 {
+				p.dst.Write(buf[:n])
+				lastData = time.Now()
+			}
+			if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+				done[i] = true
+				open--
+			}
 		}
 	}
 }

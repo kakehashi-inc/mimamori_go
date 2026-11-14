@@ -253,7 +253,7 @@ func runWrapped(in CommandExecInput, hooks CommandExecHooks) (wrappedOutput, raw
 		sig.osUser = in.OSUser
 	}
 	raw := waitProcess(proc, r, buf, timeout, grace, hooks, sig)
-	drainAll(r, buf)
+	drainAll(pipeOutput{r, buf})
 	return splitMarkers(buf.Bytes(), buf.total, marker), raw
 }
 
