@@ -116,13 +116,23 @@ func ReleaseCommandRequest(db Writer, id int64) (bool, error) {
 	return execChanged(db, `UPDATE command_requests SET state = 'queued' WHERE id = ? AND state = 'pending'`, id)
 }
 
-// HandOverCommandRequests marks the pending requests of an agent whose
-// expiry has not passed as delivered and returns every delivered request of
-// the agent, by id (a delivered request is sent again until the agent
-// answers it).
-func HandOverCommandRequests(db Writer, agentID, now int64) ([]*CommandRequest, error) {
+// LastCommandRequestID returns the highest id of the stored requests (0
+// when there is none). Ids are never given twice, so every request created
+// after this read has a higher id.
+func LastCommandRequestID(db Reader) (int64, error) {
+	var id int64
+	err := db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM command_requests`).Scan(&id)
+	return id, err
+}
+
+// HandOverCommandRequests marks the pending requests of an agent with an id
+// up to upTo whose expiry has not passed as delivered and returns every
+// delivered request of the agent, by id (a delivered request is sent again
+// until the agent answers it). A pending request with a higher id stays
+// pending.
+func HandOverCommandRequests(db Writer, agentID, upTo, now int64) ([]*CommandRequest, error) {
 	if _, err := db.Exec(`UPDATE command_requests SET state = 'delivered', delivered_at = ?
-		WHERE agent_id = ? AND state = 'pending' AND expires_at > ?`, now, agentID, now); err != nil {
+		WHERE agent_id = ? AND state = 'pending' AND id <= ? AND expires_at > ?`, now, agentID, upTo, now); err != nil {
 		return nil, err
 	}
 	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE agent_id = ? AND state = 'delivered' ORDER BY id`, agentID)

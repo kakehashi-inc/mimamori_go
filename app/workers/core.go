@@ -91,6 +91,11 @@ type core struct {
 	// request is inserted.
 	runSetLoaded func()
 
+	// syncRead, when set (tests only), is called in centralSync after
+	// everything the answer needs was read and before the transaction that
+	// records the sync and hands requests over.
+	syncRead func()
+
 	builtinMu      sync.Mutex
 	builtinRunning bool
 	builtinMessage modules.Msg

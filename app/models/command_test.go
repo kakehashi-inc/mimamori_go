@@ -307,6 +307,9 @@ func TestCommandRequestModel(t *testing.T) {
 			}
 		}
 
+		if last, err := models.LastCommandRequestID(tx); err != nil || last != 0 {
+			t.Fatalf("last request id without requests: %d %v", last, err)
+		}
 		// queued; a second unanswered request of the set is refused, the
 		// same set id of another agent is another set.
 		r := insert(A, 1, 100)
@@ -345,22 +348,29 @@ func TestCommandRequestModel(t *testing.T) {
 			t.Fatal("not pending")
 		}
 
-		// Hand-over: pending of the agent (expiry not passed) -> delivered;
-		// every delivered request is returned, the other agent's are not.
+		// Hand-over: pending of the agent with an id up to the given one
+		// (expiry not passed) -> delivered; every delivered request is
+		// returned, the other agent's are not.
 		if _, err := models.GrantCommandRequest(tx, rb.ID); err != nil {
 			t.Fatal(err)
 		}
-		list, err := models.HandOverCommandRequests(tx, A, 150)
+		if last, err := models.LastCommandRequestID(tx); err != nil || last != rb.ID {
+			t.Fatalf("last request id: %d %v", last, err)
+		}
+		if list, err := models.HandOverCommandRequests(tx, A, r.ID-1, 140); err != nil || len(list) != 0 || state(r.ID) != models.RequestPending {
+			t.Fatalf("hand-over of a request above the given id: %v %+v %s", err, list, state(r.ID))
+		}
+		list, err := models.HandOverCommandRequests(tx, A, r.ID, 150)
 		if err != nil || len(list) != 1 || list[0].ID != r.ID || list[0].State != models.RequestDelivered || list[0].DeliveredAt != 150 {
 			t.Fatalf("hand-over: %v %+v", err, list)
 		}
-		if list, _ = models.HandOverCommandRequests(tx, A, 160); len(list) != 1 || list[0].DeliveredAt != 150 {
+		if list, _ = models.HandOverCommandRequests(tx, A, r.ID, 160); len(list) != 1 || list[0].DeliveredAt != 150 {
 			t.Fatalf("hand-over again: %+v", list)
 		}
 		if rbNow, _ := models.GetCommandRequest(tx, B, rb.ID); rbNow.State != models.RequestPending {
 			t.Fatalf("other agent's request handed over: %+v", rbNow)
 		}
-		if list, _ = models.HandOverCommandRequests(tx, B, 200); len(list) != 0 {
+		if list, _ = models.HandOverCommandRequests(tx, B, rb.ID, 200); len(list) != 0 {
 			t.Fatalf("hand-over past the expiry: %+v", list)
 		}
 		ok, err = models.DiscardCommandRequest(tx, A, r.ID, "a", 151)
@@ -395,7 +405,7 @@ func TestCommandRequestModel(t *testing.T) {
 		if _, err := models.GrantCommandRequest(tx, r2.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := models.HandOverCommandRequests(tx, A, 171); err != nil {
+		if _, err := models.HandOverCommandRequests(tx, A, r2.ID, 171); err != nil {
 			t.Fatal(err)
 		}
 		ok, err = models.MarkCommandRequestDone(tx, A, r2.ID, "u2", 190)
@@ -409,7 +419,7 @@ func TestCommandRequestModel(t *testing.T) {
 		ok, err = models.MarkCommandRequestExpired(tx, A, r3.ID, 201)
 		mustChange("expired from queued", ok, err, false)
 		_, _ = models.GrantCommandRequest(tx, r3.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, 202)
+		_, _ = models.HandOverCommandRequests(tx, A, r3.ID, 202)
 		ok, err = models.MarkCommandRequestExpired(tx, B, r3.ID, 203)
 		mustChange("expired by another agent", ok, err, false)
 		ok, err = models.MarkCommandRequestExpired(tx, A, r3.ID, 203)
@@ -421,7 +431,7 @@ func TestCommandRequestModel(t *testing.T) {
 		_, _ = models.GrantCommandRequest(tx, r5.ID)
 		r6 := insert(A, 3, 302)
 		_, _ = models.GrantCommandRequest(tx, r6.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, 303)
+		_, _ = models.HandOverCommandRequests(tx, A, r6.ID, 303)
 		_, _ = models.MarkCommandRequestRunning(tx, A, r6.ID, "u6", 304)
 		open, err := models.ListOpenCommandRequests(tx)
 		var ids []int64
@@ -440,7 +450,7 @@ func TestCommandRequestModel(t *testing.T) {
 		// when or after the sync's handling began (its list is older).
 		r7 := insert(A, 4, 304)
 		_, _ = models.GrantCommandRequest(tx, r7.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, 305)
+		_, _ = models.HandOverCommandRequests(tx, A, r7.ID, 305)
 		_, _ = models.MarkCommandRequestRunning(tx, A, r7.ID, "u7", 306)
 		if n, err := models.EndUnheldCommandRequests(tx, A, []int64{r7.ID}, 310, 310); err != nil || n != 1 {
 			t.Fatalf("end unheld: %d %v", n, err)

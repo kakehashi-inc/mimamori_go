@@ -78,3 +78,71 @@ func TestSyncAnswerReadBeforeRecording(t *testing.T) {
 		t.Fatalf("sync not recorded: %+v", cur)
 	}
 }
+
+// A sync hands a request over only together with the definition of its
+// set. A set created and a run of it requested while a sync is between the
+// reads for its answer and its transaction are not part of that answer:
+// neither the definitions it sends nor the ones the agent holds (when its
+// signature was the current one) have the set, so the request is not handed
+// over by that sync. The next sync sends the set's definition and hands the
+// request over.
+func TestSyncHandsOverOnlyWithDefinitions(t *testing.T) {
+	for _, held := range []bool{true, false} {
+		name := "agent holds the definitions"
+		if !held {
+			name = "definitions sent with the answer"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newTestEnv(t)
+			A := newQueueAgent(t, e, "late-a", 1)
+			first := syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})
+			if first.CommandSets == nil {
+				t.Fatal("the first sync sent no definitions")
+			}
+			sig := first.CommandSets.Signature
+			if !held {
+				sig = "sig-other"
+			}
+			var lateSet, lateReq int64
+			e.c.syncRead = func() {
+				e.c.syncRead = nil
+				body := commandSetBody("late", "run_only")
+				body["os_user"] = "svc"
+				lateSet = int64(e.admin("POST", "/agents/"+itoa64(A.a.ID)+"/command-sets", body)["id"].(float64))
+				lateReq, _ = requestRun(t, e, A.a, lateSet)
+			}
+			req := modules.SyncRequest{CommandSig: sig, RunningRequests: []int64{}}
+			resp := syncWith(t, e, A.tok, req)
+			if lateReq == 0 {
+				t.Fatal("the hook did not run")
+			}
+			defs := first.CommandSets
+			if resp.CommandSets != nil {
+				defs = resp.CommandSets
+			}
+			if (resp.CommandSets != nil) == held {
+				t.Fatalf("definitions sent: %v", resp.CommandSets != nil)
+			}
+			for _, r := range resp.CommandRequests {
+				if !slices.ContainsFunc(defs.Sets, func(d modules.CommandSetDef) bool { return d.ID == r.SetID }) {
+					t.Fatalf("request %d of set %d handed over in an answer that does not carry the set's definition", r.ID, r.SetID)
+				}
+			}
+			if st := reqState(t, e, A.a.ID, lateReq); st != models.RequestPending {
+				t.Fatalf("request after the sync: %s", st)
+			}
+
+			// The next sync carries the set's definition and the request.
+			resp = syncWith(t, e, A.tok, req)
+			if resp.CommandSets == nil || !slices.ContainsFunc(resp.CommandSets.Sets, func(d modules.CommandSetDef) bool { return d.ID == lateSet }) {
+				t.Fatalf("the next sync did not send the set's definition: %+v", resp.CommandSets)
+			}
+			if got := handedIDs(resp); !slices.Equal(got, []int64{lateReq}) {
+				t.Fatalf("handed over by the next sync: %v", got)
+			}
+			if st := reqState(t, e, A.a.ID, lateReq); st != models.RequestDelivered {
+				t.Fatalf("request after the next sync: %s", st)
+			}
+		})
+	}
+}

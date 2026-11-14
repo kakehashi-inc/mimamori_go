@@ -93,17 +93,24 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 // agent read its running_requests before that, so the list ends only the
 // requests that became running before it.
 //
-// Everything the answer needs that can fail (the assigned rule version, the
-// command set definitions) is read first: when a read fails, the sync is
-// answered with an error and nothing of it was recorded or handed over.
-// Then one transaction of the central database records the sync (so the
-// agent is responding again in it) and the signature of the definitions the
-// agent holds, ends the running requests the agent no longer lists (only
-// when it sent the list), stores a new token renewal value with its history
-// row, runs the queue step and hands the agent's pending requests over; the
-// delivered ones are sent with the answer (again with every sync until the
-// agent answers them; the agent runs a request at most once and answers it
-// again).
+// Everything the answer needs that can fail (the highest request id, the
+// assigned rule version, the command set definitions) is read first: when a
+// read fails, the sync is answered with an error and nothing of it was
+// recorded or handed over. Then one transaction of the central database
+// records the sync (so the agent is responding again in it) and the
+// signature of the definitions the agent holds, ends the running requests
+// the agent no longer lists (only when it sent the list), stores a new token
+// renewal value with its history row, runs the queue step and hands the
+// agent's pending requests over; the delivered ones are sent with the
+// answer (again with every sync until the agent answers them; the agent
+// runs a request at most once and answers it again).
+//
+// Only the pending requests with an id up to the one read before the
+// definitions are handed over. A request is created after its set was read
+// from the agent's database, so the set of each of them is in the
+// definitions read afterwards (sent with the answer, or held by the agent
+// when its signature is the current one). A request created after that read
+// stays pending until the next sync, whose answer has its set.
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest, entered int64) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	cfg := c.conf()
@@ -111,6 +118,10 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	resp := &modules.SyncResponse{
 		AgentName:          modules.BuiltinAgentName,
 		DefaultIntervalSec: cfg.DefaultCheckIntervalSec,
+	}
+	lastRequest, err := models.LastCommandRequestID(c.db.Read())
+	if err != nil {
+		return nil, err
 	}
 	// The assigned version is always sent, so the agent can tell whether it
 	// runs the assigned version (it applies only a different one).
@@ -143,8 +154,11 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 			tok.PendingExpiresAt = now + int64(cfg.TokenValidDays)*86400
 		}
 	}
+	if c.syncRead != nil {
+		c.syncRead()
+	}
 	var handed []*models.CommandRequest
-	err := c.queueWrite(now, func(tx models.Writer) error {
+	err = c.queueWrite(now, func(tx models.Writer) error {
 		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
 			return err
 		}
@@ -174,7 +188,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		return nil
 	}, func(tx models.Writer) error {
 		var err error
-		handed, err = models.HandOverCommandRequests(tx, agent.ID, now)
+		handed, err = models.HandOverCommandRequests(tx, agent.ID, lastRequest, now)
 		return err
 	})
 	if err != nil {
