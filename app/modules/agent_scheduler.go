@@ -29,7 +29,8 @@ import (
 //     scheduler handing it the step (next or inlineMonitor) and the step's
 //     doneMonitor; the scheduler's mutex orders one step after the other.
 //   - The scheduler (this file): when the monitoring step ran and whether it
-//     runs, the check interval in use, the command set definitions, the
+//     runs, the check interval in use, its copy of the worker count (for
+//     free_worker of the sync), the command set definitions, the
 //     valid sets, the waiting manual requests, the answered requests and the
 //     sets that run. Only through its methods, each under its one mutex.
 //   - The outbox (agent_outbox.go): the table outbox, through its methods,
@@ -65,6 +66,8 @@ type agentScheduler struct {
 	loc  func() *time.Location
 
 	mu sync.Mutex
+	// workers is the agent's worker count (AgentRuntime.SetWorkers).
+	workers int
 	// changed is closed and replaced at every change; idle workers wait on
 	// it. idle is the number of workers waiting in next.
 	changed chan struct{}
@@ -94,7 +97,7 @@ type agentScheduler struct {
 }
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location, interval time.Duration) *agentScheduler {
-	return &agentScheduler{db: db, now: now, loc: loc, interval: interval, changed: make(chan struct{}),
+	return &agentScheduler{db: db, now: now, loc: loc, interval: interval, workers: 1, changed: make(chan struct{}),
 		valid: map[int64]*CommandSetDef{}, acked: map[int64]bool{}, running: map[int64]bool{}, notStarted: map[int64]bool{}}
 }
 
@@ -335,6 +338,23 @@ func (s *agentScheduler) receiveRequests(reqs []CommandRunRequest) []CommandRequ
 		s.changedLocked()
 	}
 	return acks
+}
+
+// setWorkers sets the agent's worker count.
+func (s *agentScheduler) setWorkers(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workers = n
+}
+
+// freeWorker reports whether the agent can take a manual run request now
+// (free_worker of the sync): fewer command sets run than the agent has
+// workers (the worker that runs the monitoring step on its own is free when
+// the step ends) and no manual request waits.
+func (s *agentScheduler) freeWorker() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.running) < s.workers && len(s.requests) == 0
 }
 
 // signature is the signature of the definitions the agent holds.

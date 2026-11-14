@@ -100,17 +100,18 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 // records the sync (so the agent is responding again in it) and the
 // signature of the definitions the agent holds, ends the running requests
 // the agent no longer lists (only when it sent the list), stores a new token
-// renewal value with its history row, runs the queue step and hands the
-// agent's pending requests over; the delivered ones are sent with the
-// answer (again with every sync until the agent answers them; the agent
-// runs a request at most once and answers it again).
+// renewal value with its history row and, when the sync says free_worker,
+// hands the oldest queued request of this agent over; every delivered
+// request of the agent is sent with the answer (again with every sync until
+// the agent answers it; the agent runs a request at most once and answers it
+// again). Requests of other agents play no role.
 //
-// Only the pending requests with an id up to the one read before the
-// definitions are handed over. A request is created after its set was read
+// Only a queued request with an id up to the one read before the
+// definitions is handed over. A request is created after its set was read
 // from the agent's database, so the set of each of them is in the
 // definitions read afterwards (sent with the answer, or held by the agent
 // when its signature is the current one). A request created after that read
-// stays pending until the next sync, whose answer has its set.
+// stays queued until a later sync, whose answer has its set.
 func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.SyncRequest, entered int64) (*modules.SyncResponse, error) {
 	now := time.Now().Unix()
 	cfg := c.conf()
@@ -158,7 +159,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		c.syncRead()
 	}
 	var handed []*models.CommandRequest
-	err = c.queueWrite(now, func(tx models.Writer) error {
+	err = c.db.Write(func(tx models.Writer) error {
 		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
 			return err
 		}
@@ -185,10 +186,8 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 				}
 			}
 		}
-		return nil
-	}, func(tx models.Writer) error {
-		var err error
-		handed, err = models.HandOverCommandRequests(tx, agent.ID, lastRequest, now)
+		list, err := models.HandOverCommandRequests(tx, agent.ID, lastRequest, now, req.FreeWorker)
+		handed = list
 		return err
 	})
 	if err != nil {
@@ -354,10 +353,9 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 	// and decides from it, so each history row is written together with the
 	// row or not at all. What the items say about run requests is applied
 	// first, every time (each change is conditional on the request's state,
-	// so applying it again changes nothing), and the queue step runs at its
-	// end (a request that ended frees its worker); a request that ended
-	// without a run is recorded in the history after it, with the set's name
-	// read from the agent's database. Unless the agent's row names this
+	// so applying it again changes nothing); a request that ended without a
+	// run is recorded in the history after it, with the set's name read from
+	// the agent's database. Unless the agent's row names this
 	// identity as the last stored one, the items are then applied in order,
 	// each on the row the item before it left (two application results each
 	// get their history row), and the identity is remembered.
@@ -367,7 +365,7 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 	for i := range batch.Reports {
 		transitions = append(transitions, requestTransitions(&batch.Reports[i])...)
 	}
-	err = c.queueWrite(now, func(tx models.Writer) error {
+	err = c.db.Write(func(tx models.Writer) error {
 		var err error
 		if ended, err = applyRequestTransitions(tx, agent.ID, transitions, now); err != nil {
 			return err
@@ -394,7 +392,7 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 			return models.RecordAgentReport(tx, cur.ID, models.AgentReportFields{Now: now, ReportID: id})
 		}
 		return nil
-	}, nil)
+	})
 	if err != nil {
 		return err
 	}

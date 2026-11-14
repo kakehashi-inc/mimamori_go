@@ -304,9 +304,9 @@ func TestReportBatchItemsInOrder(t *testing.T) {
 func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 	e := newTestEnv(t)
 	tok, a, tdb, setID, logs := identityAgent(t, e, "host-lost")
-	syncWith(t, e, tok, modules.SyncRequest{})
+	syncFree(t, e, tok)
 	reqID, _ := requestRun(t, e, a, setID)
-	if got := handedIDs(syncWith(t, e, tok, modules.SyncRequest{})); len(got) != 1 || got[0] != reqID {
+	if got := handedIDs(syncFree(t, e, tok)); len(got) != 1 || got[0] != reqID {
 		t.Fatalf("handed over: %v", got)
 	}
 	rep := identityReport(reportID1, setID)

@@ -379,16 +379,15 @@
         "notFound": "The command set was not found. It may have been deleted.",
         "importedFrom": "Imported from {{source}}.",
         "runNow": "Run now",
-        "requested": "Requested a run of {{name}}. It goes to the agent at the agent's next connection once a worker of the central is free.",
+        "requested": "Requested a run of {{name}}. It is handed to the agent at one of its next syncs.",
         "requestConflict": "A run of this command set is already requested.",
         "discard": "Discard request",
         "discarded": "Discarded the run request of {{name}}",
         "request": "Run request",
         "requestState": {
-            "queued": "Waiting for a free worker of the central",
+            "queued": "Waiting for the agent's sync",
             "queuedAgentSilent": "Waiting for the agent to connect",
-            "pending": "Waiting for the agent to fetch it",
-            "delivered": "Delivered to the agent"
+            "delivered": "Handed to the agent"
         },
         "whenRun": "When it runs",
         "lastRun": "Last run",

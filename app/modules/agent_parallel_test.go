@@ -44,6 +44,7 @@ type syncSeen struct {
 	inWaitLoop bool
 	goroutine  uint64
 	running    int
+	freeWorker bool
 }
 
 func (f *parTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
@@ -55,7 +56,7 @@ func (f *parTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 			break
 		}
 	}
-	seen := syncSeen{inWaitLoop: inWaitLoop(), goroutine: goroutineNumber()}
+	seen := syncSeen{inWaitLoop: inWaitLoop(), goroutine: goroutineNumber(), freeWorker: req.FreeWorker}
 	if f.db != nil {
 		runs, _ := models.ListUnfinishedCommandExecutions(f.db.Read())
 		seen.running = len(runs)
@@ -145,7 +146,7 @@ func countRuns(db *DB) (all, finished int) {
 func newParallelRuntime(t *testing.T, tr *parTransport, n int) *AgentRuntime {
 	t.Helper()
 	rt := newCommandRuntime(t, tr)
-	rt.workers = n
+	rt.SetWorkers(n)
 	rt.sched.lastMonitor = time.Time{}
 	rt.mon.defaultInterval = 1
 	tr.db = rt.DB
@@ -386,7 +387,7 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
-	rt2.workers = 3
+	rt2.SetWorkers(3)
 	stop := make(chan struct{})
 	close(stop)
 	if err := rt2.Run(stop); err != nil {

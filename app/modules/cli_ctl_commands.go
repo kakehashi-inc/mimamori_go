@@ -24,7 +24,7 @@ type CtlCommandSetsCmd struct {
 	Update  CtlCommandSetsUpdateCmd  `cmd:"" help:"Replace the definition of a command set with a JSON definition file"`
 	Delete  CtlCommandSetsDeleteCmd  `cmd:"" help:"Delete a command set (its runs are kept until the retention removes them)"`
 	Import  CtlCommandSetsImportCmd  `cmd:"" help:"Copy command sets of an agent (or of the same agent) into an agent"`
-	Run     CtlCommandSetsRunCmd     `cmd:"" help:"Request a run of a command set (it waits for a free worker of the central and goes to the agent with its next sync)"`
+	Run     CtlCommandSetsRunCmd     `cmd:"" help:"Request a run of a command set (it is handed to the agent with one of its next syncs)"`
 	Discard CtlCommandSetsDiscardCmd `cmd:"" help:"Discard a run request that was not yet handed to the agent"`
 	Runs    CtlCommandSetsRunsCmd    `cmd:"" help:"List the runs of a command set, newest first"`
 	ShowRun CtlCommandSetsShowRunCmd `cmd:"" name:"show-run" help:"Show a run with every command's result and console output"`
@@ -103,8 +103,8 @@ func (c *CtlCommandSetsListCmd) Run(p *CtlCmd) error {
 
 // commandSetsHeader is the text printed above the set table: the agent,
 // the OS user new sets default to, the host's time zone, whether the agent
-// holds the current definitions and whether it is responding (its run
-// requests take no worker of the central while it is not).
+// holds the current definitions and whether it is responding (while it is
+// not, its run requests wait until it syncs again).
 func commandSetsHeader(m map[string]any) string {
 	user, _ := m["default_os_user"].(string)
 	if user == "" {
@@ -120,7 +120,7 @@ func commandSetsHeader(m map[string]any) string {
 	if m["definitions_delivered"] == true {
 		delivered = "yes"
 	}
-	responding := "no (its run requests wait without a worker of the central until it syncs)"
+	responding := "no (its run requests wait until it syncs again)"
 	if m["agent_responding"] == true {
 		responding = "yes"
 	}

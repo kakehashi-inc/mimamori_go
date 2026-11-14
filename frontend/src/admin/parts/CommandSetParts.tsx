@@ -166,8 +166,7 @@ export function CommandSetsSection({ agent, reload: reloadPage }: { agent: Agent
                                                     <span className='text-muted'>
                                                         {formatDateTime(s.request.requested_at)}
                                                     </span>
-                                                    {(s.request.state === 'queued' ||
-                                                        s.request.state === 'pending') && (
+                                                    {s.request.state === 'queued' && (
                                                         <Button
                                                             size='sm'
                                                             variant='ghost'
@@ -274,21 +273,15 @@ interface ImportRow {
     name: string;
 }
 
-// The badge of an unanswered run request: a queued request waits for a free
-// worker of the central, or for the agent to connect while the agent is not
-// responding (it then takes no worker).
+// The badge of an unanswered run request: a queued request waits for a sync
+// of the agent, or for the agent to connect while the agent is not
+// responding; a delivered one was handed to the agent.
 function requestStateKey(
     request: CommandRequest,
     agentResponding: boolean
-): 'queued' | 'queuedAgentSilent' | 'pending' | 'delivered' {
-    switch (request.state) {
-        case 'queued':
-            return agentResponding ? 'queued' : 'queuedAgentSilent';
-        case 'pending':
-            return 'pending';
-        default:
-            return 'delivered';
-    }
+): 'queued' | 'queuedAgentSilent' | 'delivered' {
+    if (request.state === 'queued') return agentResponding ? 'queued' : 'queuedAgentSilent';
+    return 'delivered';
 }
 
 function ImportDialog({

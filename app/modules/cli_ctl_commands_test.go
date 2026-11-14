@@ -213,7 +213,7 @@ func TestCommandSetsTextOutput(t *testing.T) {
 			t.Errorf("header lacks %q:\n%s", want, head)
 		}
 	}
-	if !strings.Contains(head, "agent responding:      no (its run requests wait without a worker of the central until it syncs)") {
+	if !strings.Contains(head, "agent responding:      no (its run requests wait until it syncs again)") {
 		t.Errorf("header of an agent that is not responding:\n%s", head)
 	}
 	head = commandSetsHeader(map[string]any{"agent_id": float64(3), "agent_name": "web1", "agent_responding": true})

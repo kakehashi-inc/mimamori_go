@@ -4,9 +4,8 @@ import "errors"
 
 // States of a manual run request.
 const (
-	RequestQueued    = "queued"    // waiting for a free worker of the central
-	RequestPending   = "pending"   // a worker was given; waiting for the agent's next sync
-	RequestDelivered = "delivered" // handed to the agent with a sync, no answer yet
+	RequestQueued    = "queued"    // waiting for a sync of its agent that hands it over
+	RequestDelivered = "delivered" // handed over in a sync answer, no answer yet
 	RequestRunning   = "running"   // the agent answered that it started the run (RunUID)
 	RequestDone      = "done"      // the central learned that the run ended
 	RequestExpired   = "expired"   // not handed over in time, or the agent answered that it arrived too late or that it does not hold the set
@@ -14,7 +13,7 @@ const (
 )
 
 // ErrRequestActive is returned when the set already has an unanswered
-// (queued, pending or delivered) request.
+// (queued or delivered) request.
 var ErrRequestActive = errors.New("the command set already has a run request waiting")
 
 // CommandRequest is a row of the command_requests table of the central
@@ -80,11 +79,11 @@ func GetCommandRequest(db Reader, agentID, id int64) (*CommandRequest, error) {
 	return scanCommandRequest(db.QueryRow(`SELECT `+commandRequestCols+` FROM command_requests WHERE id = ? AND agent_id = ?`, id, agentID))
 }
 
-// UnansweredCommandRequests returns the unanswered (queued, pending,
-// delivered) requests of an agent by set id.
+// UnansweredCommandRequests returns the unanswered (queued, delivered)
+// requests of an agent by set id.
 func UnansweredCommandRequests(db Reader, agentID int64) (map[int64]*CommandRequest, error) {
 	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests
-		WHERE agent_id = ? AND state IN ('queued', 'pending', 'delivered')`, agentID)
+		WHERE agent_id = ? AND state IN ('queued', 'delivered')`, agentID)
 	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
 		return nil, err
@@ -96,26 +95,6 @@ func UnansweredCommandRequests(db Reader, agentID int64) (map[int64]*CommandRequ
 	return out, nil
 }
 
-// ListOpenCommandRequests returns the requests of all agents in queued,
-// pending, delivered and running, by id.
-func ListOpenCommandRequests(db Reader) ([]*CommandRequest, error) {
-	rows, err := db.Query(`SELECT ` + commandRequestCols + ` FROM command_requests
-		WHERE state IN ('queued', 'pending', 'delivered', 'running') ORDER BY id`)
-	return collect(rows, err, scanCommandRequest)
-}
-
-// GrantCommandRequest gives a worker to a queued request (queued ->
-// pending).
-func GrantCommandRequest(db Writer, id int64) (bool, error) {
-	return execChanged(db, `UPDATE command_requests SET state = 'pending' WHERE id = ? AND state = 'queued'`, id)
-}
-
-// ReleaseCommandRequest puts a granted request back into the queue
-// (pending -> queued); it keeps its id and so its place.
-func ReleaseCommandRequest(db Writer, id int64) (bool, error) {
-	return execChanged(db, `UPDATE command_requests SET state = 'queued' WHERE id = ? AND state = 'pending'`, id)
-}
-
 // LastCommandRequestID returns the highest id of the stored requests (0
 // when there is none). Ids are never given twice, so every request created
 // after this read has a higher id.
@@ -125,18 +104,43 @@ func LastCommandRequestID(db Reader) (int64, error) {
 	return id, err
 }
 
-// HandOverCommandRequests marks the pending requests of an agent with an id
-// up to upTo whose expiry has not passed as delivered and returns every
-// delivered request of the agent, by id (a delivered request is sent again
-// until the agent answers it). A pending request with a higher id stays
-// pending.
-func HandOverCommandRequests(db Writer, agentID, upTo, now int64) ([]*CommandRequest, error) {
-	if _, err := db.Exec(`UPDATE command_requests SET state = 'delivered', delivered_at = ?
-		WHERE agent_id = ? AND state = 'pending' AND id <= ? AND expires_at > ?`, now, agentID, upTo, now); err != nil {
+// HandOverCommandRequests hands run requests over at a sync of the agent and
+// returns every delivered request of the agent, by id (a delivered request
+// is sent again with every sync until the agent answers it). With
+// freeWorker (the agent can take a request now), the oldest queued request
+// of the agent with an id up to upTo whose expiry has not passed becomes
+// delivered; at most one request is handed over per call. Requests of other
+// agents are neither read nor changed. delivered_at keeps the time the
+// request was handed over first.
+func HandOverCommandRequests(db Writer, agentID, upTo, now int64, freeWorker bool) ([]*CommandRequest, error) {
+	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests
+		WHERE agent_id = ? AND state IN ('queued', 'delivered') ORDER BY id`, agentID)
+	list, err := collect(rows, err, scanCommandRequest)
+	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests WHERE agent_id = ? AND state = 'delivered' ORDER BY id`, agentID)
-	return collect(rows, err, scanCommandRequest)
+	take := freeWorker
+	var out []*CommandRequest
+	for _, r := range list {
+		if take && r.State == RequestQueued && r.ID <= upTo && r.ExpiresAt > now {
+			ok, err := execChanged(db, `UPDATE command_requests SET state = 'delivered',
+				delivered_at = CASE WHEN delivered_at = 0 THEN ? ELSE delivered_at END WHERE id = ? AND state = 'queued'`, now, r.ID)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				take = false
+				r.State = RequestDelivered
+				if r.DeliveredAt == 0 {
+					r.DeliveredAt = now
+				}
+			}
+		}
+		if r.State == RequestDelivered {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // MarkCommandRequestRunning records that the agent started the run of a
@@ -194,18 +198,18 @@ func EndUnheldCommandRequests(db Writer, agentID int64, held []int64, since, now
 	return n, nil
 }
 
-// ExpireCommandRequests ends the queued and pending requests whose expiry
-// passed and returns them (with their new state), by id.
+// ExpireCommandRequests ends the queued requests whose expiry passed and
+// returns them (with their new state), by id.
 func ExpireCommandRequests(db Writer, now int64) ([]*CommandRequest, error) {
 	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests
-		WHERE state IN ('queued', 'pending') AND expires_at <= ? ORDER BY id`, now)
+		WHERE state = 'queued' AND expires_at <= ? ORDER BY id`, now)
 	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
 		return nil, err
 	}
 	var out []*CommandRequest
 	for _, r := range list {
-		ok, err := execChanged(db, `UPDATE command_requests SET state = 'expired', done_at = ? WHERE id = ? AND state IN ('queued', 'pending')`, now, r.ID)
+		ok, err := execChanged(db, `UPDATE command_requests SET state = 'expired', done_at = ? WHERE id = ? AND state = 'queued'`, now, r.ID)
 		if err != nil {
 			return out, err
 		}
@@ -217,18 +221,17 @@ func ExpireCommandRequests(db Writer, now int64) ([]*CommandRequest, error) {
 	return out, nil
 }
 
-// DiscardCommandRequest discards a request of an agent that was not yet
-// handed over (queued or pending).
+// DiscardCommandRequest discards a queued request of an agent.
 func DiscardCommandRequest(db Writer, agentID, id int64, by string, now int64) (bool, error) {
 	return execChanged(db, `UPDATE command_requests SET state = 'discarded', discarded_at = ?, discarded_by = ?
-		WHERE id = ? AND agent_id = ? AND state IN ('queued', 'pending')`, now, by, id, agentID)
+		WHERE id = ? AND agent_id = ? AND state = 'queued'`, now, by, id, agentID)
 }
 
-// DiscardCommandRequestsOfSet discards the queued and pending requests of a
-// set (with its deletion) and returns their ids.
+// DiscardCommandRequestsOfSet discards the queued requests of a set (with
+// its deletion) and returns their ids.
 func DiscardCommandRequestsOfSet(db Writer, agentID, setID int64, by string, now int64) ([]int64, error) {
 	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests
-		WHERE agent_id = ? AND set_id = ? AND state IN ('queued', 'pending') ORDER BY id`, agentID, setID)
+		WHERE agent_id = ? AND set_id = ? AND state = 'queued' ORDER BY id`, agentID, setID)
 	list, err := collect(rows, err, scanCommandRequest)
 	if err != nil {
 		return nil, err

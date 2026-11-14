@@ -44,7 +44,7 @@ func TestSyncAnswerReadBeforeRecording(t *testing.T) {
 	}
 	// A later second, so that a recorded sync would show.
 	time.Sleep(1100 * time.Millisecond)
-	req := modules.SyncRequest{AgentVersion: "other", CommandSig: "sig-other", RunningRequests: []int64{}}
+	req := modules.SyncRequest{AgentVersion: "other", CommandSig: "sig-other", RunningRequests: []int64{}, FreeWorker: true}
 	for range 3 {
 		if rec := e.agentCall("sync", A.tok, "m-"+A.tok[len(A.tok)-6:], req); rec.Code != 500 {
 			t.Fatalf("sync with an unreadable database: %d %s", rec.Code, rec.Body.String())
@@ -111,7 +111,7 @@ func TestSyncHandsOverOnlyWithDefinitions(t *testing.T) {
 				lateSet = int64(e.admin("POST", "/agents/"+itoa64(A.a.ID)+"/command-sets", body)["id"].(float64))
 				lateReq, _ = requestRun(t, e, A.a, lateSet)
 			}
-			req := modules.SyncRequest{CommandSig: sig, RunningRequests: []int64{}}
+			req := modules.SyncRequest{CommandSig: sig, RunningRequests: []int64{}, FreeWorker: true}
 			resp := syncWith(t, e, A.tok, req)
 			if lateReq == 0 {
 				t.Fatal("the hook did not run")
@@ -128,7 +128,7 @@ func TestSyncHandsOverOnlyWithDefinitions(t *testing.T) {
 					t.Fatalf("request %d of set %d handed over in an answer that does not carry the set's definition", r.ID, r.SetID)
 				}
 			}
-			if st := reqState(t, e, A.a.ID, lateReq); st != models.RequestPending {
+			if st := reqState(t, e, A.a.ID, lateReq); st != models.RequestQueued {
 				t.Fatalf("request after the sync: %s", st)
 			}
 

@@ -327,50 +327,38 @@ func TestCommandRequestModel(t *testing.T) {
 			t.Fatalf("unanswered: %+v", un)
 		}
 
-		// queued -> pending -> queued -> pending; nothing else from queued.
-		ok, err := models.ReleaseCommandRequest(tx, r.ID)
-		mustChange("release of queued", ok, err, false)
-		ok, err = models.MarkCommandRequestRunning(tx, A, r.ID, "u", 1)
+		// Only a hand-over moves a queued request on.
+		ok, err := models.MarkCommandRequestRunning(tx, A, r.ID, "u", 1)
 		mustChange("running from queued", ok, err, false)
 		ok, err = models.MarkCommandRequestDone(tx, A, r.ID, "u", 1)
 		mustChange("done from queued", ok, err, false)
 		ok, err = models.MarkCommandRequestExpired(tx, A, r.ID, 1)
 		mustChange("expired from queued", ok, err, false)
-		ok, err = models.GrantCommandRequest(tx, r.ID)
-		mustChange("grant", ok, err, true)
-		ok, err = models.GrantCommandRequest(tx, r.ID)
-		mustChange("grant of pending", ok, err, false)
-		ok, err = models.ReleaseCommandRequest(tx, r.ID)
-		mustChange("release", ok, err, true)
-		ok, err = models.GrantCommandRequest(tx, r.ID)
-		mustChange("grant again", ok, err, true)
-		if state(r.ID) != models.RequestPending {
-			t.Fatal("not pending")
-		}
 
-		// Hand-over: pending of the agent with an id up to the given one
-		// (expiry not passed) -> delivered; every delivered request is
-		// returned, the other agent's are not.
-		if _, err := models.GrantCommandRequest(tx, rb.ID); err != nil {
-			t.Fatal(err)
-		}
+		// Hand-over: only when the agent has a free worker, a queued request
+		// of the agent with an id up to the given one (expiry not passed) ->
+		// delivered; every delivered request is returned, the other agent's
+		// are neither handed over nor returned.
 		if last, err := models.LastCommandRequestID(tx); err != nil || last != rb.ID {
 			t.Fatalf("last request id: %d %v", last, err)
 		}
-		if list, err := models.HandOverCommandRequests(tx, A, r.ID-1, 140); err != nil || len(list) != 0 || state(r.ID) != models.RequestPending {
+		if list, err := models.HandOverCommandRequests(tx, A, rb.ID, 140, false); err != nil || len(list) != 0 || state(r.ID) != models.RequestQueued {
+			t.Fatalf("hand-over without a free worker: %v %+v %s", err, list, state(r.ID))
+		}
+		if list, err := models.HandOverCommandRequests(tx, A, r.ID-1, 140, true); err != nil || len(list) != 0 || state(r.ID) != models.RequestQueued {
 			t.Fatalf("hand-over of a request above the given id: %v %+v %s", err, list, state(r.ID))
 		}
-		list, err := models.HandOverCommandRequests(tx, A, r.ID, 150)
+		list, err := models.HandOverCommandRequests(tx, A, r.ID, 150, true)
 		if err != nil || len(list) != 1 || list[0].ID != r.ID || list[0].State != models.RequestDelivered || list[0].DeliveredAt != 150 {
 			t.Fatalf("hand-over: %v %+v", err, list)
 		}
-		if list, _ = models.HandOverCommandRequests(tx, A, r.ID, 160); len(list) != 1 || list[0].DeliveredAt != 150 {
-			t.Fatalf("hand-over again: %+v", list)
+		if list, _ = models.HandOverCommandRequests(tx, A, r.ID, 160, false); len(list) != 1 || list[0].DeliveredAt != 150 {
+			t.Fatalf("delivered request sent again: %+v", list)
 		}
-		if rbNow, _ := models.GetCommandRequest(tx, B, rb.ID); rbNow.State != models.RequestPending {
+		if rbNow, _ := models.GetCommandRequest(tx, B, rb.ID); rbNow.State != models.RequestQueued {
 			t.Fatalf("other agent's request handed over: %+v", rbNow)
 		}
-		if list, _ = models.HandOverCommandRequests(tx, B, rb.ID, 200); len(list) != 0 {
+		if list, _ = models.HandOverCommandRequests(tx, B, rb.ID, 200, true); len(list) != 0 {
 			t.Fatalf("hand-over past the expiry: %+v", list)
 		}
 		ok, err = models.DiscardCommandRequest(tx, A, r.ID, "a", 151)
@@ -402,11 +390,8 @@ func TestCommandRequestModel(t *testing.T) {
 		mustChange("done twice", ok, err, false)
 
 		// delivered -> done directly, with the run's uid.
-		if _, err := models.GrantCommandRequest(tx, r2.ID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := models.HandOverCommandRequests(tx, A, r2.ID, 171); err != nil {
-			t.Fatal(err)
+		if list, err := models.HandOverCommandRequests(tx, A, r2.ID, 171, true); err != nil || len(list) != 1 || list[0].ID != r2.ID {
+			t.Fatalf("hand-over of r2: %v %+v", err, list)
 		}
 		ok, err = models.MarkCommandRequestDone(tx, A, r2.ID, "u2", 190)
 		mustChange("done from delivered", ok, err, true)
@@ -418,39 +403,29 @@ func TestCommandRequestModel(t *testing.T) {
 		r3 := insert(A, 1, 200)
 		ok, err = models.MarkCommandRequestExpired(tx, A, r3.ID, 201)
 		mustChange("expired from queued", ok, err, false)
-		_, _ = models.GrantCommandRequest(tx, r3.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, r3.ID, 202)
+		_, _ = models.HandOverCommandRequests(tx, A, r3.ID, 202, true)
 		ok, err = models.MarkCommandRequestExpired(tx, B, r3.ID, 203)
 		mustChange("expired by another agent", ok, err, false)
 		ok, err = models.MarkCommandRequestExpired(tx, A, r3.ID, 203)
 		mustChange("expired", ok, err, true)
 
-		// The open list over all agents, by id.
-		r4 := insert(A, 1, 300)
+		// One request per hand-over, the oldest queued one first; the
+		// delivered ones are returned by id.
 		r5 := insert(A, 2, 301)
-		_, _ = models.GrantCommandRequest(tx, r5.ID)
 		r6 := insert(A, 3, 302)
-		_, _ = models.GrantCommandRequest(tx, r6.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, r6.ID, 303)
+		if list, err := models.HandOverCommandRequests(tx, A, r6.ID, 303, true); err != nil || len(list) != 1 || list[0].ID != r5.ID || state(r6.ID) != models.RequestQueued {
+			t.Fatalf("first hand-over of two queued requests: %v %+v %s", err, list, state(r6.ID))
+		}
+		if list, err := models.HandOverCommandRequests(tx, A, r6.ID, 303, true); err != nil || len(list) != 2 || list[0].ID != r5.ID || list[1].ID != r6.ID {
+			t.Fatalf("second hand-over: %v %+v", err, list)
+		}
 		_, _ = models.MarkCommandRequestRunning(tx, A, r6.ID, "u6", 304)
-		open, err := models.ListOpenCommandRequests(tx)
-		var ids []int64
-		for _, o := range open {
-			ids = append(ids, o.ID)
-		}
-		if err != nil || !reflect.DeepEqual(ids, []int64{rb.ID, r4.ID, r5.ID, r6.ID}) {
-			t.Fatalf("open: %v %v", err, ids)
-		}
-		if ags, err := models.ListAgentsWithOpenCommandRequests(tx); err != nil || len(ags) != 2 || ags[0].ID != A || ags[1].ID != B {
-			t.Fatalf("agents with open requests: %v %+v", err, ags)
-		}
 
 		// running requests the agent no longer holds end; delivered ones
 		// and listed ones are not touched, nor those that became running
 		// when or after the sync's handling began (its list is older).
 		r7 := insert(A, 4, 304)
-		_, _ = models.GrantCommandRequest(tx, r7.ID)
-		_, _ = models.HandOverCommandRequests(tx, A, r7.ID, 305)
+		_, _ = models.HandOverCommandRequests(tx, A, r7.ID, 305, true)
 		_, _ = models.MarkCommandRequestRunning(tx, A, r7.ID, "u7", 306)
 		if n, err := models.EndUnheldCommandRequests(tx, A, []int64{r7.ID}, 310, 310); err != nil || n != 1 {
 			t.Fatalf("end unheld: %d %v", n, err)
@@ -468,9 +443,13 @@ func TestCommandRequestModel(t *testing.T) {
 			t.Fatalf("empty list: %d %s", n, state(r7.ID))
 		}
 
-		// Expiry ends queued and pending requests past their expiry only.
+		// A queued request past its expiry is not handed over. Expiry ends
+		// queued requests past their expiry only.
+		r4 := insert(A, 1, 300)
 		r8 := insert(A, 5, 400)
-		_, _ = models.GrantCommandRequest(tx, r8.ID)
+		if list, err := models.HandOverCommandRequests(tx, A, r4.ID, 450, true); err != nil || len(list) != 1 || list[0].ID != r5.ID || state(r4.ID) != models.RequestQueued {
+			t.Fatalf("hand-over of a request past its expiry: %v %+v %s", err, list, state(r4.ID))
+		}
 		if exp, _ := models.ExpireCommandRequests(tx, 399); len(exp) != 1 || exp[0].ID != rb.ID {
 			t.Fatalf("expired too early: %+v", exp)
 		}
@@ -486,7 +465,7 @@ func TestCommandRequestModel(t *testing.T) {
 			t.Fatalf("expire: %v %v %s", err, expIDs, state(r5.ID))
 		}
 
-		// Discard: queued and pending of the own agent only.
+		// Discard: queued of the own agent only.
 		r9 := insert(A, 6, 600)
 		ok, err = models.DiscardCommandRequest(tx, B, r9.ID, "b", 601)
 		mustChange("discard by another agent", ok, err, false)
@@ -495,10 +474,6 @@ func TestCommandRequestModel(t *testing.T) {
 		if got, _ := models.GetCommandRequest(tx, A, r9.ID); got.State != models.RequestDiscarded || got.DiscardedBy != "b" || got.DiscardedAt != 601 {
 			t.Fatalf("discarded: %+v", got)
 		}
-		r10 := insert(A, 6, 602)
-		_, _ = models.GrantCommandRequest(tx, r10.ID)
-		ok, err = models.DiscardCommandRequest(tx, A, r10.ID, "b", 603)
-		mustChange("discard of pending", ok, err, true)
 		r11 := insert(A, 7, 604)
 		if ids, err := models.DiscardCommandRequestsOfSet(tx, B, 7, "c", 605); err != nil || len(ids) != 0 {
 			t.Fatalf("set of another agent: %v %v", ids, err)
@@ -529,8 +504,9 @@ func TestCommandRequestModel(t *testing.T) {
 		if _, err := tx.Exec(`DELETE FROM agents WHERE id = ?`, A); err != nil {
 			t.Fatal(err)
 		}
-		if open, _ := models.ListOpenCommandRequests(tx); len(open) != 0 {
-			t.Fatalf("requests of a deleted agent: %+v", open)
+		var left int
+		if err := tx.QueryRow(`SELECT count(*) FROM command_requests WHERE agent_id = ?`, A).Scan(&left); err != nil || left != 0 {
+			t.Fatalf("requests of a deleted agent: %d %v", left, err)
 		}
 	})
 }

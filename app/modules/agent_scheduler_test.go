@@ -202,3 +202,50 @@ func TestSchedulerInlineMonitor(t *testing.T) {
 		t.Fatalf("no unit after the stop: %+v %+v", u, acks)
 	}
 }
+
+// TestSyncSaysFreeWorker: the sync says free_worker while fewer command sets
+// run than the agent has workers and no manual request waits in the agent;
+// a sync inside the wait loop of the only worker's command does not.
+func TestSyncSaysFreeWorker(t *testing.T) {
+	s := newAgentScheduler(nil, time.Now, func() *time.Location { return time.UTC }, time.Minute)
+	if !s.freeWorker() {
+		t.Fatal("one worker, nothing runs: not free")
+	}
+	s.running[1] = true
+	if s.freeWorker() {
+		t.Fatal("one worker, one set runs: free")
+	}
+	s.setWorkers(2)
+	if !s.freeWorker() {
+		t.Fatal("two workers, one set runs: not free")
+	}
+	s.requests = append(s.requests, CommandRunRequest{ID: 5, SetID: 2})
+	if s.freeWorker() {
+		t.Fatal("a manual request waits: free")
+	}
+
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5"))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
+		t.Fatal(err)
+	}
+	seen := tr.seen()
+	if len(seen) == 0 || !seen[0].freeWorker {
+		t.Fatalf("first sync of an idle agent: %+v", seen)
+	}
+	during := 0
+	for i, s := range seen {
+		if s.inWaitLoop {
+			during++
+			if s.freeWorker {
+				t.Fatalf("sync %d inside the wait loop of the only worker says free_worker", i+1)
+			}
+		}
+	}
+	if during == 0 {
+		t.Fatal("no sync ran while the command ran")
+	}
+}

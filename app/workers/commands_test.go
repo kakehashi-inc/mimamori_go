@@ -51,9 +51,11 @@ func commandSetBody(name, purpose string) map[string]any {
 	}
 }
 
+// syncAgent sends a sync of a fake agent that holds the definitions of
+// signature sig, runs nothing and can take a run request (free_worker).
 func syncAgent(t *testing.T, e *testEnv, tok, sig string) modules.SyncResponse {
 	t.Helper()
-	rec := e.agentCall("sync", tok, "m-"+tok[len(tok)-6:], modules.SyncRequest{AgentVersion: "test", CommandSig: sig})
+	rec := e.agentCall("sync", tok, "m-"+tok[len(tok)-6:], modules.SyncRequest{AgentVersion: "test", CommandSig: sig, FreeWorker: true})
 	if rec.Code != 200 {
 		t.Fatalf("sync: %d %s", rec.Code, rec.Body.String())
 	}
@@ -229,8 +231,8 @@ func TestCommandRequestLifecycle(t *testing.T) {
 	setID := int64(e.admin("POST", path+"/command-sets", body)["id"].(float64))
 	sp := path + "/command-sets/" + itoa64(setID)
 
-	// queued (the agent never synced, so it is not responding and the
-	// request takes no worker), refused twice, discarded
+	// queued (the agent never synced, so it is not responding), refused
+	// twice, discarded
 	q := e.admin("POST", sp+"/run", nil)
 	if q["state"] != models.RequestQueued || q["expires_at"] == nil {
 		t.Fatalf("request: %v", q)
@@ -252,8 +254,8 @@ func TestCommandRequestLifecycle(t *testing.T) {
 		t.Fatalf("discard unknown: %d", rec.Code)
 	}
 
-	// queued -> (granted and handed over in the agent's first sync)
-	// delivered (cannot be discarded, delivered again) -> running -> done
+	// queued -> (handed over in the agent's first sync) delivered (cannot
+	// be discarded, delivered again) -> running -> done
 	q = e.admin("POST", sp+"/run", nil)
 	qid2 := int64(q["id"].(float64))
 	resp := syncAgent(t, e, tok, "")
@@ -440,7 +442,7 @@ func TestCommandRetention(t *testing.T) {
 	}
 	add("running", setID, now, 0)
 	add("ancient", oldID, old, old) // the only (last) run of its set
-	for _, st := range []string{"done", "expired", "discarded", "pending"} {
+	for _, st := range []string{"done", "expired", "discarded", "queued"} {
 		if err := e.exec(`INSERT INTO command_requests (agent_id, set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, ?, 'x', ?)`,
 			a.ID, oldID, st, old, old+86400); err != nil {
 			t.Fatal(err)
@@ -466,7 +468,7 @@ func TestCommandRetention(t *testing.T) {
 		states = append(states, s)
 	}
 	rows.Close()
-	if !slices.Equal(states, []string{"pending"}) {
+	if !slices.Equal(states, []string{"queued"}) {
 		t.Fatalf("requests after retention: %v", states)
 	}
 }

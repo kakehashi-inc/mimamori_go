@@ -1,15 +1,14 @@
 package workers
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
 	"math/rand/v2"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,9 +16,9 @@ import (
 	"mimamori/app/modules"
 )
 
-// The queue of run requests: the central's item workers is the largest
-// number of run requests in progress at agents (pending, delivered,
-// running), all agents together.
+// The run requests of the agents: a request waits queued until a sync of its
+// agent that says free_worker hands it over (one per sync); requests of
+// other agents play no role.
 
 // queueAgent is a token agent of a queue test with its sets.
 type queueAgent struct {
@@ -89,6 +88,13 @@ func syncWith(t *testing.T, e *testEnv, tok string, req modules.SyncRequest) mod
 	return decode[modules.SyncResponse](t, rec)
 }
 
+// syncFree sends a sync of a token agent that runs nothing and can take a
+// run request (free_worker).
+func syncFree(t *testing.T, e *testEnv, tok string) modules.SyncResponse {
+	t.Helper()
+	return syncWith(t, e, tok, modules.SyncRequest{RunningRequests: []int64{}, FreeWorker: true})
+}
+
 // handedIDs returns the ids of the requests of a sync answer.
 func handedIDs(resp modules.SyncResponse) []int64 {
 	var ids []int64
@@ -113,326 +119,6 @@ func setLastSync(t *testing.T, e *testEnv, agentID, at int64) {
 	}
 }
 
-// queueInvariant checks, inside a transaction, that the requests in
-// progress of responding agents are at most workers and that no worker is
-// left unused while a request of a responding agent waits.
-func queueInvariant(c *core, tx models.Reader, now int64) error {
-	list, err := models.ListOpenCommandRequests(tx)
-	if err != nil {
-		return err
-	}
-	agents, err := models.ListAgentsWithOpenCommandRequests(tx)
-	if err != nil {
-		return err
-	}
-	responding := map[int64]bool{}
-	for _, a := range agents {
-		responding[a.ID] = agentResponding(tx, a, c.conf().DefaultCheckIntervalSec, now)
-	}
-	busy, waiting := 0, 0
-	for _, r := range list {
-		switch {
-		case !responding[r.AgentID]:
-		case r.State == models.RequestQueued && r.ExpiresAt > now:
-			waiting++
-		case r.State != models.RequestQueued:
-			busy++
-		}
-	}
-	if busy > c.conf().Workers {
-		return fmt.Errorf("%d requests in progress with workers %d", busy, c.conf().Workers)
-	}
-	if busy < c.conf().Workers && waiting > 0 {
-		return fmt.Errorf("%d requests in progress with workers %d while %d wait", busy, c.conf().Workers, waiting)
-	}
-	return nil
-}
-
-// Q2: workers 2, requests to three responding agents A, B, C in this
-// order: A and B get the workers, C waits; when A's run ends, C is granted
-// in the same call.
-func TestQueueOrderOverAgents(t *testing.T) {
-	e := newTestEnv(t)
-	if e.c.conf().Workers != 2 {
-		t.Fatalf("default workers %d", e.c.conf().Workers)
-	}
-	var ags []*queueAgent
-	for _, n := range []string{"qa", "qb", "qc"} {
-		q := newQueueAgent(t, e, n, 1)
-		syncWith(t, e, q.tok, modules.SyncRequest{})
-		ags = append(ags, q)
-	}
-	var ids []int64
-	for i, want := range []string{models.RequestPending, models.RequestPending, models.RequestQueued} {
-		id, st := requestRun(t, e, ags[i].a, ags[i].sets[0])
-		if st != want {
-			t.Fatalf("request of agent %d: %s, want %s", i, st, want)
-		}
-		ids = append(ids, id)
-	}
-	A, C := ags[0], ags[2]
-	if got := handedIDs(syncWith(t, e, C.tok, modules.SyncRequest{})); len(got) != 0 {
-		t.Fatalf("queued request handed over: %v", got)
-	}
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 1 || got[0] != ids[0] {
-		t.Fatalf("A's answer: %v", got)
-	}
-	wantStates(t, e, "A handed over", A.a.ID, ids[0], models.RequestDelivered, C.a.ID, ids[2], models.RequestQueued)
-	finishRun(t, e, A.tok, A.sets[0], ids[0])
-	wantStates(t, e, "A ended", A.a.ID, ids[0], models.RequestDone, C.a.ID, ids[2], models.RequestPending)
-	if got := handedIDs(syncWith(t, e, C.tok, modules.SyncRequest{})); len(got) != 1 || got[0] != ids[2] {
-		t.Fatalf("C's answer: %v", got)
-	}
-}
-
-// Many syncs and reports of different agents at the same moment (through
-// the HTTPS handler, and the built-in agent's direct calls) never let more
-// requests be in progress than workers, never leave a worker unused while a
-// request of a responding agent waits, and grant by request id.
-func TestQueueConcurrentSyncs(t *testing.T) {
-	e := newTestEnv(t)
-	const agents, sets = 50, 4
-	var ags []*queueAgent
-	for i := range agents - 1 {
-		q := newQueueAgent(t, e, fmt.Sprintf("qc%02d", i), sets)
-		syncWith(t, e, q.tok, modules.SyncRequest{})
-		ags = append(ags, q)
-	}
-	b, err := models.GetBuiltinAgent(e.c.db.Read())
-	if err != nil {
-		t.Fatal(err)
-	}
-	builtin := &queueAgent{a: b, sets: addQueueSets(t, e, b, sets)}
-	bt := &inProcessTransport{c: e.c, agentID: b.ID}
-	if _, err := bt.Sync(&modules.SyncRequest{AgentVersion: "test"}); err != nil {
-		t.Fatal(err)
-	}
-	ags = append(ags, builtin)
-
-	// An agent with nothing to do waits as a real one waits for its
-	// interval, but is woken when one of its requests is granted, so the
-	// test does not wait for intervals.
-	wake := map[int64]chan struct{}{}
-	for _, q := range ags {
-		wake[q.a.ID] = make(chan struct{}, 1)
-	}
-	var mu sync.Mutex
-	var problems []string
-	var lastGrant int64
-	grants := 0
-	e.c.queueChecked = func(tx models.Reader, now int64, granted []*models.CommandRequest) {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, r := range granted {
-			if r.ID <= lastGrant {
-				problems = append(problems, fmt.Sprintf("request %d granted after %d", r.ID, lastGrant))
-			}
-			lastGrant = r.ID
-			grants++
-			select {
-			case wake[r.AgentID] <- struct{}{}:
-			default:
-			}
-		}
-		if err := queueInvariant(e.c, tx, now); err != nil {
-			problems = append(problems, err.Error())
-		}
-	}
-	// All requests at once, in an order mixing the agents.
-	total := 0
-	for s := range sets {
-		for _, q := range ags {
-			requestRun(t, e, q.a, q.sets[s])
-			total++
-		}
-	}
-
-	var done atomic.Bool
-	var wg sync.WaitGroup
-	deadline := time.Now().Add(4 * time.Minute)
-	for i, q := range ags {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rng := rand.New(rand.NewPCG(uint64(i), 7))
-			fail := func(format string, args ...any) {
-				mu.Lock()
-				problems = append(problems, fmt.Sprintf(format, args...))
-				mu.Unlock()
-				done.Store(true)
-			}
-			held := map[int64]int64{} // request id -> set id
-			sig := ""
-			var lastDrop time.Time
-			for !done.Load() && time.Now().Before(deadline) {
-				req := modules.SyncRequest{AgentVersion: "test", CommandSig: sig, RunningRequests: []int64{}}
-				for id := range held {
-					req.RunningRequests = append(req.RunningRequests, id)
-				}
-				var resp *modules.SyncResponse
-				if q.tok == "" {
-					r, err := bt.Sync(&req)
-					if err != nil {
-						fail("built-in sync: %v", err)
-						return
-					}
-					resp = r
-				} else {
-					rec := e.agentCall("sync", q.tok, "m-"+q.tok[len(q.tok)-6:], req)
-					if rec.Code != 200 {
-						fail("sync: %d %s", rec.Code, rec.Body.String())
-						return
-					}
-					r := decode[modules.SyncResponse](t, rec)
-					resp = &r
-				}
-				if resp.CommandSets != nil {
-					sig = resp.CommandSets.Signature
-				}
-				var rep modules.ReportRequest
-				for _, cr := range resp.CommandRequests {
-					if _, ok := held[cr.ID]; ok {
-						continue
-					}
-					held[cr.ID] = cr.SetID
-					uid := "run-" + itoa64(cr.ID)
-					rep.CommandRequestAcks = append(rep.CommandRequestAcks, modules.CommandRequestAck{RequestID: cr.ID, Status: modules.RequestAckStarted, RunUID: uid, At: 1000})
-					rep.CommandRuns = append(rep.CommandRuns, runReport(uid, cr.SetID, "s", cr.ID, []modules.CommandResultReport{}, false, ""))
-				}
-				dropped := false
-				for id, set := range held {
-					if rng.IntN(2) != 0 {
-						continue
-					}
-					// The end comes with a report, or only by the next
-					// sync's list (a closing report the agent lost).
-					if rng.IntN(2) == 0 {
-						rep.CommandRuns = append(rep.CommandRuns, runReport("run-"+itoa64(id), set, "s", id, []modules.CommandResultReport{}, true, modules.ResultSuccess))
-					} else {
-						dropped = true
-						lastDrop = time.Now()
-					}
-					delete(held, id)
-				}
-				if len(rep.CommandRuns) == 0 && len(rep.CommandRequestAcks) == 0 {
-					// A sync's list ends only the requests that became
-					// running before the second its handling began, so a
-					// lost end is learned by a sync in a later second.
-					if !dropped && time.Since(lastDrop) < 2*time.Second {
-						time.Sleep(1100 * time.Millisecond)
-						continue
-					}
-					if len(held) == 0 && !dropped {
-						select {
-						case <-wake[q.a.ID]:
-						case <-time.After(time.Duration(2000+rng.IntN(2000)) * time.Millisecond):
-						}
-					}
-					continue
-				}
-				if q.tok == "" {
-					if err := bt.Report(batchOf(rep)); err != nil {
-						fail("built-in report: %v", err)
-						return
-					}
-				} else if rec := e.agentCall("report", q.tok, "m-"+q.tok[len(q.tok)-6:], batchOf(rep)); rec.Code != 200 {
-					fail("report: %d %s", rec.Code, rec.Body.String())
-					return
-				}
-			}
-		}()
-	}
-	for !done.Load() && time.Now().Before(deadline) {
-		var open int
-		if err := e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE state != 'done'`).Scan(&open); err != nil {
-			t.Fatal(err)
-		}
-		if open == 0 {
-			done.Store(true)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	done.Store(true)
-	wg.Wait()
-	mu.Lock()
-	defer mu.Unlock()
-	if len(problems) > 0 {
-		t.Fatalf("%d problems, first: %s", len(problems), problems[0])
-	}
-	var open int
-	_ = e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE state != 'done'`).Scan(&open)
-	if open != 0 || grants != total {
-		t.Fatalf("%d of %d requests not done, %d grants", open, total, grants)
-	}
-}
-
-// Q4: an agent that stops syncing holds no worker and blocks nobody; when
-// it returns its requests count again (above workers for a while, with no
-// grant until below), and its queued request is granted and handed over in
-// the answer to its sync once a worker is free.
-func TestQueueSilentAgent(t *testing.T) {
-	e := newTestEnv(t)
-	var logs bytes.Buffer
-	var logMu sync.Mutex
-	e.c.logger = log.New(lockedWriter{&logs, &logMu}, "", 0)
-	A := newQueueAgent(t, e, "silent-a", 2)
-	B := newQueueAgent(t, e, "silent-b", 2)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
-	syncWith(t, e, B.tok, modules.SyncRequest{})
-
-	a1, _ := requestRun(t, e, A.a, A.sets[0])
-	syncWith(t, e, A.tok, modules.SyncRequest{}) // a1 delivered
-	a2, _ := requestRun(t, e, A.a, A.sets[1])
-	b1, _ := requestRun(t, e, B.a, B.sets[0])
-	b2, _ := requestRun(t, e, B.a, B.sets[1])
-	wantStates(t, e, "start", A.a.ID, a1, models.RequestDelivered, A.a.ID, a2, models.RequestPending,
-		B.a.ID, b1, models.RequestQueued, B.a.ID, b2, models.RequestQueued)
-
-	// A is silent for longer than 3 x 60 + 600 s.
-	now := time.Now()
-	setLastSync(t, e, A.a.ID, now.Unix()-781)
-	if list := e.admin("GET", "/agents/"+itoa64(A.a.ID)+"/command-sets", nil); list["agent_responding"] != false {
-		t.Fatalf("agent_responding of the silent agent: %v", list["agent_responding"])
-	}
-	e.c.runRequestsStep(now)
-	wantStates(t, e, "A silent", A.a.ID, a1, models.RequestDelivered, A.a.ID, a2, models.RequestQueued,
-		B.a.ID, b1, models.RequestPending, B.a.ID, b2, models.RequestPending)
-	logMu.Lock()
-	line := fmt.Sprintf("run request %d of silent-a waits again: the agent has not synced since ", a2)
-	if strings.Count(logs.String(), line) != 1 {
-		t.Fatalf("log: %q", logs.String())
-	}
-	logMu.Unlock()
-
-	// A returns: a1 counts again (3 in progress with workers 2), a2 waits.
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 1 || got[0] != a1 {
-		t.Fatalf("A's answer: %v", got)
-	}
-	wantStates(t, e, "A back", A.a.ID, a2, models.RequestQueued)
-	syncWith(t, e, B.tok, modules.SyncRequest{})
-	finishRun(t, e, B.tok, B.sets[0], b1)
-	wantStates(t, e, "b1 ended, still 2 in progress", A.a.ID, a2, models.RequestQueued)
-	finishRun(t, e, B.tok, B.sets[1], b2)
-	wantStates(t, e, "b2 ended", A.a.ID, a2, models.RequestPending)
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 2 || got[1] != a2 {
-		t.Fatalf("A's answer with a2: %v", got)
-	}
-
-	// A silent again with a queued request: it is granted and handed over
-	// in the answer to the sync that brings A back.
-	finishRun(t, e, A.tok, A.sets[0], a1)
-	finishRun(t, e, A.tok, A.sets[1], a2)
-	setLastSync(t, e, A.a.ID, time.Now().Unix()-781)
-	a3, st := requestRun(t, e, A.a, A.sets[0])
-	if st != models.RequestQueued {
-		t.Fatalf("request of a silent agent: %s", st)
-	}
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 1 || got[0] != a3 {
-		t.Fatalf("answer of the returning agent: %v", got)
-	}
-	wantStates(t, e, "a3", A.a.ID, a3, models.RequestDelivered)
-}
-
 // lockedWriter serialises writes to a buffer shared with the test.
 type lockedWriter struct {
 	w  io.Writer
@@ -445,13 +131,137 @@ func (l lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// An agent that never synced is not responding: its requests wait without a
-// worker and block nobody; its first sync grants and hands over.
+// One request per sync and only with free_worker: a request is created
+// queued; a sync without free_worker hands nothing over; each sync with
+// free_worker hands over the oldest queued request of the agent whose expiry
+// has not passed; every answer carries all delivered requests of the agent.
+func TestRequestOnePerSyncWithFreeWorker(t *testing.T) {
+	e := newTestEnv(t)
+	A := newQueueAgent(t, e, "one-a", 3)
+	syncFree(t, e, A.tok)
+	var ids []int64
+	for _, s := range A.sets {
+		id, st := requestRun(t, e, A.a, s)
+		if st != models.RequestQueued {
+			t.Fatalf("new request answered %s", st)
+		}
+		ids = append(ids, id)
+	}
+	for _, req := range []modules.SyncRequest{{RunningRequests: []int64{}}, {}} {
+		if got := handedIDs(syncWith(t, e, A.tok, req)); len(got) != 0 {
+			t.Fatalf("handed over without free_worker: %v", got)
+		}
+	}
+	wantStates(t, e, "without free_worker", A.a.ID, ids[0], models.RequestQueued, A.a.ID, ids[1], models.RequestQueued, A.a.ID, ids[2], models.RequestQueued)
+	for i := range ids {
+		if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, ids[:i+1]) {
+			t.Fatalf("sync %d with free_worker answered %v, want %v", i+1, got, ids[:i+1])
+		}
+		for j, id := range ids {
+			want := models.RequestQueued
+			if j <= i {
+				want = models.RequestDelivered
+			}
+			wantStates(t, e, fmt.Sprintf("after sync %d", i+1), A.a.ID, id, want)
+		}
+	}
+	// The delivered requests come again with every sync until the agent
+	// answers them, whether it says free_worker or not.
+	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})); !slices.Equal(got, ids) {
+		t.Fatalf("answer without free_worker: %v", got)
+	}
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, ids) {
+		t.Fatalf("answer with free_worker and nothing queued: %v", got)
+	}
+	for i, id := range ids {
+		finishRun(t, e, A.tok, A.sets[i], id)
+	}
+
+	// A queued request whose expiry passed is not handed over (the
+	// periodic step ends it); the next one is.
+	late, _ := requestRun(t, e, A.a, A.sets[0])
+	next, _ := requestRun(t, e, A.a, A.sets[1])
+	if err := e.exec(`UPDATE command_requests SET expires_at = ? WHERE id = ?`, time.Now().Unix()-1, late); err != nil {
+		t.Fatal(err)
+	}
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{next}) {
+		t.Fatalf("answer with a queued request past its expiry: %v", got)
+	}
+	wantStates(t, e, "past its expiry", A.a.ID, late, models.RequestQueued)
+	r, _ := models.GetCommandRequest(e.c.db.Read(), A.a.ID, next)
+	if r.DeliveredAt == 0 {
+		t.Fatalf("delivered_at of a handed request: %+v", r)
+	}
+}
+
+// Requests of other agents play no role: an agent's request is handed over at
+// its first sync with free_worker, whatever other agents have queued or
+// delivered and whether they sync at all (one keeps five requests delivered
+// without answering them, one went silent, one never synced). The built-in
+// agent is handed its requests the same way. Nothing of the other agents
+// changes.
+func TestRequestsOfOtherAgentsDoNotMatter(t *testing.T) {
+	e := newTestEnv(t)
+	busy := newQueueAgent(t, e, "busy", 5)
+	silent := newQueueAgent(t, e, "silent", 2)
+	never := newQueueAgent(t, e, "never", 2)
+	B := newQueueAgent(t, e, "b", 1)
+	for _, q := range []*queueAgent{busy, silent, B} {
+		syncFree(t, e, q.tok)
+	}
+	var held []int64
+	for _, s := range busy.sets {
+		id, _ := requestRun(t, e, busy.a, s)
+		held = append(held, id)
+		syncFree(t, e, busy.tok)
+	}
+	var waiting []int64
+	for _, q := range []*queueAgent{silent, never} {
+		for _, s := range q.sets {
+			id, _ := requestRun(t, e, q.a, s)
+			waiting = append(waiting, id)
+		}
+	}
+	setLastSync(t, e, silent.a.ID, time.Now().Unix()-100000)
+	b1, _ := requestRun(t, e, B.a, B.sets[0])
+	if got := handedIDs(syncFree(t, e, B.tok)); !slices.Equal(got, []int64{b1}) {
+		t.Fatalf("B's first sync with free_worker: %v", got)
+	}
+
+	b, err := models.GetBuiltinAgent(e.c.db.Read())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bsets := addQueueSets(t, e, b, 1)
+	bt := &inProcessTransport{c: e.c, agentID: b.ID}
+	r1, _ := requestRun(t, e, b, bsets[0])
+	resp, err := bt.Sync(&modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}})
+	if err != nil || len(resp.CommandRequests) != 0 {
+		t.Fatalf("built-in sync without free_worker: %v %+v", err, resp.CommandRequests)
+	}
+	resp, err = bt.Sync(&modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}, FreeWorker: true})
+	if err != nil || len(resp.CommandRequests) != 1 || resp.CommandRequests[0].ID != r1 {
+		t.Fatalf("built-in sync with free_worker: %v %+v", err, resp.CommandRequests)
+	}
+
+	for _, id := range held {
+		wantStates(t, e, "busy agent", busy.a.ID, id, models.RequestDelivered)
+	}
+	for i, id := range waiting {
+		q := silent
+		if i >= 2 {
+			q = never
+		}
+		wantStates(t, e, "agents that do not sync", q.a.ID, id, models.RequestQueued)
+	}
+}
+
+// An agent that never synced is not responding: its request waits queued;
+// its first sync with free_worker makes it responding and hands the request
+// over.
 func TestQueueNeverSyncedAgent(t *testing.T) {
 	e := newTestEnv(t)
 	A := newQueueAgent(t, e, "never-a", 1)
-	B := newQueueAgent(t, e, "never-b", 2)
-	syncWith(t, e, B.tok, modules.SyncRequest{})
 	a1, st := requestRun(t, e, A.a, A.sets[0])
 	if st != models.RequestQueued {
 		t.Fatalf("request of an agent that never synced: %s", st)
@@ -459,14 +269,10 @@ func TestQueueNeverSyncedAgent(t *testing.T) {
 	if list := e.admin("GET", "/agents/"+itoa64(A.a.ID)+"/command-sets", nil); list["agent_responding"] != false {
 		t.Fatalf("agent_responding: %v", list["agent_responding"])
 	}
-	b1, st := requestRun(t, e, B.a, B.sets[0])
-	if st != models.RequestPending {
-		t.Fatalf("request of B behind A's: %s", st)
-	}
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 1 || got[0] != a1 {
+	if got := handedIDs(syncFree(t, e, A.tok)); len(got) != 1 || got[0] != a1 {
 		t.Fatalf("first sync's answer: %v", got)
 	}
-	wantStates(t, e, "after the first sync", A.a.ID, a1, models.RequestDelivered, B.a.ID, b1, models.RequestPending)
+	wantStates(t, e, "after the first sync", A.a.ID, a1, models.RequestDelivered)
 	if list := e.admin("GET", "/agents/"+itoa64(A.a.ID)+"/command-sets", nil); list["agent_responding"] != true {
 		t.Fatalf("agent_responding after the sync: %v", list["agent_responding"])
 	}
@@ -514,10 +320,11 @@ func TestQueueInterval(t *testing.T) {
 func TestQueueRunningEndsBySync(t *testing.T) {
 	e := newTestEnv(t)
 	A := newQueueAgent(t, e, "held", 2)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
 	r1, _ := requestRun(t, e, A.a, A.sets[0])
 	r2, _ := requestRun(t, e, A.a, A.sets[1])
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
+	syncFree(t, e, A.tok)
 	reportAgent(t, e, A.tok, modules.ReportRequest{CommandRequestAcks: []modules.CommandRequestAck{
 		{RequestID: r1, Status: modules.RequestAckStarted, RunUID: "run-1", At: 1}}})
 	wantStates(t, e, "start", A.a.ID, r1, models.RequestRunning, A.a.ID, r2, models.RequestDelivered)
@@ -555,54 +362,47 @@ func TestQueueRunningEndsBySync(t *testing.T) {
 // A sync whose running_requests the agent read before the run started (the
 // agent gave up waiting for its answer and sent the report that made the
 // request running; the central carried the sync out after that report) does
-// not end the running request, so its worker is not given to another
-// request while the run goes on. A later sync ends it.
+// not end the running request. A later sync ends it.
 func TestQueueStaleSyncKeepsRunning(t *testing.T) {
 	e := newTestEnv(t)
-	if err := e.exec(`INSERT INTO settings (key, value) VALUES ('config.workers', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`); err != nil {
-		t.Fatal(err)
-	}
-	e.c.reloadConfig()
 	A := newQueueAgent(t, e, "stale-a", 1)
-	B := newQueueAgent(t, e, "stale-b", 1)
-	syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})
-	syncWith(t, e, B.tok, modules.SyncRequest{RunningRequests: []int64{}})
+	syncFree(t, e, A.tok)
 	ra, _ := requestRun(t, e, A.a, A.sets[0])
-	rb, _ := requestRun(t, e, B.a, B.sets[0])
 	entered := time.Now().Unix() - 1 // the stale sync's handling began
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})); len(got) != 1 || got[0] != ra {
+	if got := handedIDs(syncFree(t, e, A.tok)); len(got) != 1 || got[0] != ra {
 		t.Fatalf("handed over: %v", got)
 	}
 	reportAgent(t, e, A.tok, modules.ReportRequest{CommandRequestAcks: []modules.CommandRequestAck{
 		{RequestID: ra, Status: modules.RequestAckStarted, RunUID: "r-a", At: 1}}})
-	wantStates(t, e, "started", A.a.ID, ra, models.RequestRunning, B.a.ID, rb, models.RequestQueued)
+	wantStates(t, e, "started", A.a.ID, ra, models.RequestRunning)
 	if r, _ := models.GetCommandRequest(e.c.db.Read(), A.a.ID, ra); r.RunningAt <= entered {
 		t.Fatalf("running_at %d, sync began %d", r.RunningAt, entered)
 	}
 	if _, err := e.c.centralSync(A.a, nil, &modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}}, entered); err != nil {
 		t.Fatal(err)
 	}
-	wantStates(t, e, "after the stale sync", A.a.ID, ra, models.RequestRunning, B.a.ID, rb, models.RequestQueued)
+	wantStates(t, e, "after the stale sync", A.a.ID, ra, models.RequestRunning)
 	if _, err := e.c.centralSync(A.a, nil, &modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}}, time.Now().Unix()+1); err != nil {
 		t.Fatal(err)
 	}
-	wantStates(t, e, "after a later sync", A.a.ID, ra, models.RequestDone, B.a.ID, rb, models.RequestPending)
+	wantStates(t, e, "after a later sync", A.a.ID, ra, models.RequestDone)
 }
 
-// What a report does to run requests (1.7).
+// What a report does to run requests.
 func TestQueueReportTransitions(t *testing.T) {
 	e := newTestEnv(t)
 	A := newQueueAgent(t, e, "rep-a", 4)
 	B := newQueueAgent(t, e, "rep-b", 1)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
-	syncWith(t, e, B.tok, modules.SyncRequest{})
-	setConfig(e, func(c *modules.CentralConfig) { c.Workers = 10 })
+	syncFree(t, e, A.tok)
+	syncFree(t, e, B.tok)
 	var ids []int64
 	for _, s := range A.sets {
 		id, _ := requestRun(t, e, A.a, s)
 		ids = append(ids, id)
 	}
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	for range ids {
+		syncFree(t, e, A.tok)
+	}
 
 	// Ack started: running with the run's uid; a run report that is not
 	// finished: running too; the run's end: done.
@@ -661,96 +461,38 @@ func TestQueueReportTransitions(t *testing.T) {
 	}
 }
 
-// Q6: a lowered worker count takes nothing back; a raised one takes effect
-// in the answer of PUT /config, or after the reload and the periodic step
-// when the settings row is changed by central config.
-func TestQueueWorkersChange(t *testing.T) {
-	e := newTestEnv(t)
-	A := newQueueAgent(t, e, "wc", 7)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
-	var ids []int64
-	for _, s := range A.sets[:3] {
-		id, _ := requestRun(t, e, A.a, s)
-		ids = append(ids, id)
-	}
-	wantStates(t, e, "workers 2", A.a.ID, ids[0], models.RequestPending, A.a.ID, ids[1], models.RequestPending, A.a.ID, ids[2], models.RequestQueued)
-
-	e.admin("PUT", "/config", map[string]any{"set": map[string]string{"workers": "1"}})
-	if e.c.conf().Workers != 1 {
-		t.Fatalf("workers in use: %d", e.c.conf().Workers)
-	}
-	wantStates(t, e, "lowered", A.a.ID, ids[0], models.RequestPending, A.a.ID, ids[1], models.RequestPending, A.a.ID, ids[2], models.RequestQueued)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
-	finishRun(t, e, A.tok, A.sets[0], ids[0])
-	wantStates(t, e, "one ended", A.a.ID, ids[2], models.RequestQueued)
-	finishRun(t, e, A.tok, A.sets[1], ids[1])
-	wantStates(t, e, "both ended", A.a.ID, ids[2], models.RequestPending)
-
-	// Raised on the settings screen: granted in that request.
-	for _, s := range A.sets[3:5] {
-		id, _ := requestRun(t, e, A.a, s)
-		ids = append(ids, id)
-	}
-	wantStates(t, e, "before the raise", A.a.ID, ids[3], models.RequestQueued, A.a.ID, ids[4], models.RequestQueued)
-	out := e.admin("PUT", "/config", map[string]any{"set": map[string]string{"workers": "3"}})
-	for _, it := range out["items"].([]any) {
-		if m := it.(map[string]any); m["name"] == "workers" && (m["restart"] != false || m["pending"] != false) {
-			t.Fatalf("workers item: %v", m)
-		}
-	}
-	wantStates(t, e, "raised", A.a.ID, ids[3], models.RequestPending, A.a.ID, ids[4], models.RequestPending)
-
-	// Raised by a settings row (central config set): after the reload and
-	// the step "run requests".
-	for _, s := range A.sets[5:7] {
-		id, _ := requestRun(t, e, A.a, s)
-		ids = append(ids, id)
-	}
-	if err := e.exec(`UPDATE settings SET value = '5' WHERE key = 'config.workers'`); err != nil {
-		t.Fatal(err)
-	}
-	e.c.runRequestsStep(time.Now())
-	wantStates(t, e, "row changed, not reloaded", A.a.ID, ids[5], models.RequestQueued)
-	e.c.reloadConfig()
-	e.c.runRequestsStep(time.Now())
-	wantStates(t, e, "reloaded", A.a.ID, ids[5], models.RequestPending, A.a.ID, ids[6], models.RequestPending)
-}
-
-// Expiry of requests not handed over, discard and set deletion free their
-// workers at once.
+// Expiry of queued requests, discard and set deletion: a queued request can
+// be discarded (also with its set) and expires after its expiry; a delivered
+// one of a responding agent is neither discarded nor expired.
 func TestQueueExpiryAndDiscard(t *testing.T) {
 	e := newTestEnv(t)
 	A := newQueueAgent(t, e, "exp", 5)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
 	path := "/agents/" + itoa64(A.a.ID)
 	d1, _ := requestRun(t, e, A.a, A.sets[0])
-	syncWith(t, e, A.tok, modules.SyncRequest{}) // d1 delivered
-	p1, _ := requestRun(t, e, A.a, A.sets[1])
-	q1, _ := requestRun(t, e, A.a, A.sets[2])
-	q2, _ := requestRun(t, e, A.a, A.sets[3])
-	wantStates(t, e, "start", A.a.ID, d1, models.RequestDelivered, A.a.ID, p1, models.RequestPending,
-		A.a.ID, q1, models.RequestQueued, A.a.ID, q2, models.RequestQueued)
+	syncFree(t, e, A.tok) // d1 delivered
+	q1, _ := requestRun(t, e, A.a, A.sets[1])
+	q2, _ := requestRun(t, e, A.a, A.sets[2])
+	q3, _ := requestRun(t, e, A.a, A.sets[3])
+	wantStates(t, e, "start", A.a.ID, d1, models.RequestDelivered, A.a.ID, q1, models.RequestQueued,
+		A.a.ID, q2, models.RequestQueued, A.a.ID, q3, models.RequestQueued)
 
-	// Discard of a delivered request: 409. Discard of the pending one
-	// frees its worker for q1 in the same request.
+	// Discard of a delivered request: 409. Discard of a queued one.
 	if rec := e.cli("DELETE", path+"/command-requests/"+itoa64(d1), nil); rec.Code != 409 {
 		t.Fatalf("discard of delivered: %d", rec.Code)
 	}
-	e.admin("DELETE", path+"/command-requests/"+itoa64(p1), nil)
-	wantStates(t, e, "pending discarded", A.a.ID, p1, models.RequestDiscarded, A.a.ID, q1, models.RequestPending, A.a.ID, q2, models.RequestQueued)
-	// Discard of a queued one.
-	e.admin("DELETE", path+"/command-requests/"+itoa64(q2), nil)
-	wantStates(t, e, "queued discarded", A.a.ID, q2, models.RequestDiscarded)
+	if out := e.admin("DELETE", path+"/command-requests/"+itoa64(q1), nil); out["state"] != models.RequestDiscarded {
+		t.Fatalf("discard answered: %v", out)
+	}
+	wantStates(t, e, "queued discarded", A.a.ID, q1, models.RequestDiscarded, A.a.ID, q2, models.RequestQueued)
 
-	// Set deletion discards its pending request and grants the next.
-	q3, _ := requestRun(t, e, A.a, A.sets[4])
-	wantStates(t, e, "q3", A.a.ID, q3, models.RequestQueued)
+	// Set deletion discards its queued request.
 	e.admin("DELETE", path+"/command-sets/"+itoa64(A.sets[2]), nil)
-	wantStates(t, e, "set deleted", A.a.ID, q1, models.RequestDiscarded, A.a.ID, q3, models.RequestPending)
+	wantStates(t, e, "set deleted", A.a.ID, q2, models.RequestDiscarded, A.a.ID, q3, models.RequestQueued)
 
-	// Expiry: queued and pending past their expiry end, delivered not.
-	q4, _ := requestRun(t, e, A.a, A.sets[1])
-	wantStates(t, e, "q4", A.a.ID, q4, models.RequestQueued)
+	// Expiry: a queued request past its expiry ends, the delivered one of
+	// the responding agent does not.
+	q4, _ := requestRun(t, e, A.a, A.sets[4])
 	past := time.Now().Unix() - 1
 	if err := e.exec(`UPDATE command_requests SET expires_at = ? WHERE id IN (?, ?, ?)`, past, d1, q3, q4); err != nil {
 		t.Fatal(err)
@@ -769,12 +511,12 @@ func TestQueueExpiryAndDiscard(t *testing.T) {
 	}
 }
 
-// unansweredOfSet counts the queued, pending and delivered requests of a set
-// of an agent.
+// unansweredOfSet counts the queued and delivered requests of a set of an
+// agent.
 func unansweredOfSet(t *testing.T, e *testEnv, agentID, setID int64) int {
 	t.Helper()
 	var n int
-	if err := e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE agent_id = ? AND set_id = ? AND state IN ('queued', 'pending', 'delivered')`,
+	if err := e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE agent_id = ? AND set_id = ? AND state IN ('queued', 'delivered')`,
 		agentID, setID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
@@ -784,17 +526,13 @@ func unansweredOfSet(t *testing.T, e *testEnv, agentID, setID int64) int {
 // A run request and the deletion of its set at the same moment: the set is
 // deleted (with its discard of requests) after the run request read it and
 // before it inserted the request. The run request finds the deletion when it
-// reads the set again, discards its request (recorded in the history), frees
-// the worker and answers 404; at the same moment in any order, no request of
-// a deleted set is left.
+// reads the set again, discards its request (recorded in the history) and
+// answers 404; at the same moment in any order, no request of a deleted set
+// is left.
 func TestQueueRunVersusSetDeletion(t *testing.T) {
 	e := newTestEnv(t)
-	if err := e.exec(`INSERT INTO settings (key, value) VALUES ('config.workers', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`); err != nil {
-		t.Fatal(err)
-	}
-	e.c.reloadConfig()
 	A := newQueueAgent(t, e, "del", 2)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
 	path := "/agents/" + itoa64(A.a.ID) + "/command-sets/"
 	deleted := false
 	e.c.runSetLoaded = func() {
@@ -830,14 +568,18 @@ func TestQueueRunVersusSetDeletion(t *testing.T) {
 	if !found {
 		t.Fatalf("no history row of the discard of request %d", id)
 	}
-	// The worker is free: the next request gets it at once.
-	if _, st := requestRun(t, e, A.a, A.sets[1]); st != models.RequestPending {
+	// The other set's request is handed over at the next sync.
+	r2, st := requestRun(t, e, A.a, A.sets[1])
+	if st != models.RequestQueued {
 		t.Fatalf("next request: %s", st)
+	}
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{r2}) {
+		t.Fatalf("answer after the deletion: %v", got)
 	}
 
 	// The two requests sent at the same moment, many times.
 	B := newQueueAgent(t, e, "del-b", 0)
-	syncWith(t, e, B.tok, modules.SyncRequest{})
+	syncFree(t, e, B.tok)
 	for i := range 100 {
 		body := commandSetBody(fmt.Sprintf("d%d", i), "run_only")
 		body["os_user"] = "svc"
@@ -858,17 +600,36 @@ func TestQueueRunVersusSetDeletion(t *testing.T) {
 }
 
 // The central closed and opened again on the same data directory: every
-// request keeps its state and the queue goes on from the stored rows.
+// request keeps its state; the delivered one is sent again and the queued
+// ones are handed over one per sync.
 func TestQueueRestart(t *testing.T) {
 	e := newTestEnv(t)
 	A := newQueueAgent(t, e, "rs", 3)
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
 	r1, _ := requestRun(t, e, A.a, A.sets[0])
-	syncWith(t, e, A.tok, modules.SyncRequest{})
+	syncFree(t, e, A.tok)
 	r2, _ := requestRun(t, e, A.a, A.sets[1])
 	r3, _ := requestRun(t, e, A.a, A.sets[2])
-	wantStates(t, e, "before", A.a.ID, r1, models.RequestDelivered, A.a.ID, r2, models.RequestPending, A.a.ID, r3, models.RequestQueued)
+	wantStates(t, e, "before", A.a.ID, r1, models.RequestDelivered, A.a.ID, r2, models.RequestQueued, A.a.ID, r3, models.RequestQueued)
 
+	e = reopenCentral(t, e)
+	wantStates(t, e, "after", A.a.ID, r1, models.RequestDelivered, A.a.ID, r2, models.RequestQueued, A.a.ID, r3, models.RequestQueued)
+	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{RunningRequests: []int64{}})); !slices.Equal(got, []int64{r1}) {
+		t.Fatalf("answer after the restart without free_worker: %v", got)
+	}
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{r1, r2}) {
+		t.Fatalf("answer after the restart: %v", got)
+	}
+	finishRun(t, e, A.tok, A.sets[0], r1)
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{r2, r3}) {
+		t.Fatalf("next answer: %v", got)
+	}
+}
+
+// reopenCentral closes the central of e and opens a new one on the same data
+// directory (the central's restart).
+func reopenCentral(t *testing.T, e *testEnv) *testEnv {
+	t.Helper()
 	dir := e.c.dataDir
 	e.c.closeTargets()
 	if err := e.c.db.Close(); err != nil {
@@ -886,11 +647,187 @@ func TestQueueRestart(t *testing.T) {
 	if err := c.writeCLISecret(); err != nil {
 		t.Fatal(err)
 	}
-	e = &testEnv{t: t, c: c, agent: c.agentHandler(), web: c.webHandler(), cliKey: c.cliSecret}
-	wantStates(t, e, "after", A.a.ID, r1, models.RequestDelivered, A.a.ID, r2, models.RequestPending, A.a.ID, r3, models.RequestQueued)
-	if got := handedIDs(syncWith(t, e, A.tok, modules.SyncRequest{})); len(got) != 2 || got[0] != r1 || got[1] != r2 {
-		t.Fatalf("answer after the restart: %v", got)
+	return &testEnv{t: t, c: c, agent: c.agentHandler(), web: c.webHandler(), cliKey: c.cliSecret}
+}
+
+// Many agents (the built-in agent among them) sync and report at the same
+// moment while requests of all of them wait: each sync hands over at most
+// one new request, only when it says free_worker, only one of the syncing
+// agent and the oldest it has queued; a request answered as started is not
+// handed over again; every request runs once and ends done.
+func TestRunRequestsManyAgentsAtOnce(t *testing.T) {
+	e := newTestEnv(t)
+	const agents, sets = 24, 3
+	var ags []*queueAgent
+	for i := range agents - 1 {
+		q := newQueueAgent(t, e, fmt.Sprintf("qc%02d", i), sets)
+		syncFree(t, e, q.tok)
+		ags = append(ags, q)
 	}
-	finishRun(t, e, A.tok, A.sets[0], r1)
-	wantStates(t, e, "queue goes on", A.a.ID, r3, models.RequestPending)
+	b, err := models.GetBuiltinAgent(e.c.db.Read())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ags = append(ags, &queueAgent{a: b, sets: addQueueSets(t, e, b, sets)})
+	bt := &inProcessTransport{c: e.c, agentID: b.ID}
+	if _, err := bt.Sync(&modules.SyncRequest{AgentVersion: "test", RunningRequests: []int64{}}); err != nil {
+		t.Fatal(err)
+	}
+	// All requests at once, in an order mixing the agents.
+	own := map[int64][]int64{}
+	for s := range sets {
+		for _, q := range ags {
+			id, _ := requestRun(t, e, q.a, q.sets[s])
+			own[q.a.ID] = append(own[q.a.ID], id)
+		}
+	}
+
+	var mu sync.Mutex
+	var problems []string
+	runs := map[int64]int{}
+	deadline := time.Now().Add(90 * time.Second)
+	var wg sync.WaitGroup
+	for i, q := range ags {
+		mine := own[q.a.ID]
+		wg.Go(func() {
+			rng := rand.New(rand.NewPCG(uint64(i), 7))
+			fail := func(format string, args ...any) {
+				mu.Lock()
+				problems = append(problems, fmt.Sprintf("agent %d: ", q.a.ID)+fmt.Sprintf(format, args...))
+				mu.Unlock()
+			}
+			doSync := func(req modules.SyncRequest) (*modules.SyncResponse, bool) {
+				req.AgentVersion = "test"
+				if q.tok == "" {
+					r, err := bt.Sync(&req)
+					if err != nil {
+						fail("built-in sync: %v", err)
+						return nil, false
+					}
+					return r, true
+				}
+				rec := e.agentCall("sync", q.tok, "m-"+q.tok[len(q.tok)-6:], req)
+				if rec.Code != 200 {
+					fail("sync: %d %s", rec.Code, rec.Body.String())
+					return nil, false
+				}
+				r := decode[modules.SyncResponse](t, rec)
+				return &r, true
+			}
+			report := func(rep modules.ReportRequest) bool {
+				if q.tok == "" {
+					if err := bt.Report(batchOf(rep)); err != nil {
+						fail("built-in report: %v", err)
+						return false
+					}
+					return true
+				}
+				if rec := e.agentCall("report", q.tok, "m-"+q.tok[len(q.tok)-6:], batchOf(rep)); rec.Code != 200 {
+					fail("report: %d %s", rec.Code, rec.Body.String())
+					return false
+				}
+				return true
+			}
+			workers := 1 + i%2
+			held := map[int64]int64{} // running request -> set
+			known := map[int64]bool{}
+			next := 0
+			sig := ""
+			for time.Now().Before(deadline) {
+				free := len(held) < workers
+				req := modules.SyncRequest{CommandSig: sig, RunningRequests: []int64{}, FreeWorker: free}
+				for id := range held {
+					req.RunningRequests = append(req.RunningRequests, id)
+				}
+				resp, ok := doSync(req)
+				if !ok {
+					return
+				}
+				if resp.CommandSets != nil {
+					sig = resp.CommandSets.Signature
+				}
+				var fresh []modules.CommandRunRequest
+				for _, cr := range resp.CommandRequests {
+					if known[cr.ID] {
+						fail("request %d handed over again after the agent answered it", cr.ID)
+						continue
+					}
+					fresh = append(fresh, cr)
+				}
+				switch {
+				case len(fresh) > 1:
+					fail("%d requests handed over by one sync", len(fresh))
+				case len(fresh) == 1 && !free:
+					fail("request %d handed over by a sync without free_worker", fresh[0].ID)
+				case len(fresh) == 1 && (next >= len(mine) || fresh[0].ID != mine[next]):
+					fail("request %d handed over, the agent's oldest queued is %v", fresh[0].ID, mine[min(next, len(mine)-1)])
+				}
+				var rep modules.ReportRequest
+				for _, cr := range fresh {
+					known[cr.ID] = true
+					next++
+					held[cr.ID] = cr.SetID
+					mu.Lock()
+					runs[cr.ID]++
+					mu.Unlock()
+					uid := "run-" + itoa64(cr.ID)
+					rep.CommandRequestAcks = append(rep.CommandRequestAcks, modules.CommandRequestAck{RequestID: cr.ID, Status: modules.RequestAckStarted, RunUID: uid, At: 1000})
+					rep.CommandRuns = append(rep.CommandRuns, runReport(uid, cr.SetID, "s", cr.ID, []modules.CommandResultReport{}, false, ""))
+				}
+				dropped := false
+				for id, set := range held {
+					if rng.IntN(2) != 0 {
+						continue
+					}
+					// The end comes with a report, or only by a later sync's
+					// list (a closing report the agent lost).
+					if rng.IntN(3) != 0 {
+						rep.CommandRuns = append(rep.CommandRuns, runReport("run-"+itoa64(id), set, "s", id, []modules.CommandResultReport{}, true, modules.ResultSuccess))
+					} else {
+						dropped = true
+					}
+					delete(held, id)
+				}
+				if len(rep.CommandRuns) > 0 || len(rep.CommandRequestAcks) > 0 {
+					if !report(rep) {
+						return
+					}
+				}
+				if next == len(mine) && len(held) == 0 {
+					var open int
+					if err := e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE agent_id = ? AND state != 'done'`, q.a.ID).Scan(&open); err != nil {
+						fail("read: %v", err)
+						return
+					}
+					if open == 0 {
+						return
+					}
+				}
+				if dropped {
+					// A sync's list ends only the requests that became
+					// running before the second its handling began.
+					time.Sleep(1100 * time.Millisecond)
+				} else {
+					time.Sleep(time.Duration(rng.IntN(20)) * time.Millisecond)
+				}
+			}
+			fail("not done before the deadline")
+		})
+	}
+	wg.Wait()
+	if len(problems) > 0 {
+		t.Fatalf("%d problems, first: %s", len(problems), problems[0])
+	}
+	var open int
+	_ = e.c.db.Read().QueryRow(`SELECT count(*) FROM command_requests WHERE state != 'done'`).Scan(&open)
+	if open != 0 {
+		t.Fatalf("%d requests not done", open)
+	}
+	for _, ids := range own {
+		for _, id := range ids {
+			if runs[id] != 1 {
+				t.Fatalf("request %d ran %d times", id, runs[id])
+			}
+		}
+	}
 }

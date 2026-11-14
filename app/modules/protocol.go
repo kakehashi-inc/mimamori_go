@@ -60,6 +60,11 @@ type SyncRequest struct {
 	// runs, so that a central can tell it from an agent that does not send
 	// it.
 	RunningRequests []int64 `json:"running_requests"`
+	// FreeWorker tells that the agent can take a manual run request now:
+	// one of its workers is free and no manual request waits in the agent.
+	// The central hands a new request over only with a sync that says so
+	// (at most one per sync).
+	FreeWorker bool `json:"free_worker"`
 }
 
 // RuleAssignment is the rule version assigned to an agent.
@@ -87,7 +92,9 @@ type SyncResponse struct {
 	// CommandSets carries every command set definition of the target when
 	// the agent's signature differs from the central's.
 	CommandSets *CommandDefinitions `json:"command_sets,omitempty"`
-	// CommandRequests are the manual run requests waiting for the agent.
+	// CommandRequests are the manual run requests handed over to the agent
+	// that it has not answered yet (each one again with every sync until it
+	// is answered), at most one of them handed over with this sync.
 	CommandRequests []CommandRunRequest `json:"command_requests,omitempty"`
 }
 

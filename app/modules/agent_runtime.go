@@ -151,6 +151,7 @@ func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntim
 // MaxAgentWorkers, see LoadAgentWorkers). It is called before Run.
 func (rt *AgentRuntime) SetWorkers(n int) {
 	rt.workers = max(1, min(n, MaxAgentWorkers))
+	rt.sched.setWorkers(rt.workers)
 }
 
 func (rt *AgentRuntime) logf(format string, a ...any) {
@@ -351,7 +352,7 @@ func (rt *AgentRuntime) sync() {
 		return
 	}
 	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.mon.lastApply, CommandSig: rt.sched.signature(),
-		RunningRequests: running}
+		RunningRequests: running, FreeWorker: rt.sched.freeWorker()}
 	if rt.mon.rule != nil {
 		req.RuleID, req.RuleVersion = rt.mon.rule.ID, rt.mon.rule.Version
 	}

@@ -178,7 +178,7 @@ CREATE TABLE command_requests (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id     INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     set_id       INTEGER NOT NULL,
-    state        TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'pending', 'delivered', 'running', 'done', 'expired', 'discarded')),
+    state        TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'delivered', 'running', 'done', 'expired', 'discarded')),
     requested_at INTEGER NOT NULL,
     requested_by TEXT    NOT NULL DEFAULT '',
     expires_at   INTEGER NOT NULL,
@@ -192,7 +192,7 @@ CREATE TABLE command_requests (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE UNIQUE INDEX idx_command_requests_unanswered ON command_requests(agent_id, set_id) WHERE state IN ('queued', 'pending', 'delivered');
+CREATE UNIQUE INDEX idx_command_requests_unanswered ON command_requests(agent_id, set_id) WHERE state IN ('queued', 'delivered');
 -- +goose StatementEnd
 
 -- +goose StatementBegin
