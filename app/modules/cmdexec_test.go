@@ -281,13 +281,6 @@ func TestCommandWithoutTimeLimit(t *testing.T) {
 	}
 }
 
-// closedAfter returns a channel that is closed after d (a stop of the agent).
-func closedAfter(d time.Duration) <-chan struct{} {
-	ch := make(chan struct{})
-	time.AfterFunc(d, func() { close(ch) })
-	return ch
-}
-
 func TestExecuteCommandHooks(t *testing.T) {
 	requireBash(t)
 	user := agentUserName()
@@ -305,11 +298,33 @@ func TestExecuteCommandHooks(t *testing.T) {
 		t.Fatalf("monitoring while the command runs: %+v offered %d", r, offered)
 	}
 
-	hooks = CommandExecHooks{Stop: closedAfter(200 * time.Millisecond)}
-	start := time.Now()
-	r = runTestCommand(t, testCommand("echo started; sleep 30"), user, "/", hooks)
-	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || time.Since(start) > 5*time.Second {
+	// The stop comes when the command has written its output.
+	marker := "mimamori-test-stop-" + strconv.Itoa(os.Getpid())
+	stop, stoppedAt := closeWhen(processNamed(marker))
+	hooks = CommandExecHooks{Stop: stop}
+	r = runTestCommand(t, testCommand("echo started; exec -a "+marker+" sleep 30"), user, "/", hooks)
+	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || time.Since(stoppedAt()) > 5*time.Second {
 		t.Fatalf("stop: %+v %q", r, r.Output)
+	}
+}
+
+// processNamed returns a condition for closeWhen: a process runs whose first
+// argument is name (a command that reached exec -a name).
+func processNamed(name string) func() bool {
+	return func() bool {
+		entries, err := os.ReadDir("/proc")
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			b, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+			if err == nil {
+				if arg0, _, _ := strings.Cut(string(b), "\x00"); arg0 == name {
+					return true
+				}
+			}
+		}
+		return false
 	}
 }
 
@@ -452,14 +467,14 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	signalGroupAsUser = func(string, int, syscall.Signal, func()) error { return syscall.EPERM }
 	t.Cleanup(func() { signalGroupAsUser = signalGroupAs })
 	var logged []string
+	stop, stoppedAt := closeWhen(processNamed(marker))
 	hooks := CommandExecHooks{
-		Stop: closedAfter(200 * time.Millisecond),
+		Stop: stop,
 		Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
 	}
 	cmd = testCommand("trap '' TERM; echo started; exec -a " + marker + " sleep 33")
-	start = time.Now()
 	r = runTestCommand(t, cmd, "nobody", "/", hooks)
-	took := time.Since(start)
+	took := time.Since(stoppedAt())
 	killProcessGroup = syscall.Kill
 	// Clean up what the simulated refusal left running.
 	if pgid := pgidOf(t, marker); pgid > 0 {

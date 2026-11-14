@@ -26,6 +26,35 @@ func closeAfter(d time.Duration) chan struct{} {
 	return ch
 }
 
+// closeWhen returns a stop channel that a flow of the test closes as soon as
+// cond holds (asked every 5 ms, for a minute at most), so that a stop comes
+// when a tool has reached a known point however slow the machine is, and a
+// function that waits for the close and returns its moment.
+func closeWhen(cond func() bool) (chan struct{}, func() time.Time) {
+	ch := make(chan struct{})
+	var at time.Time
+	go func() {
+		limit := time.Now().Add(time.Minute)
+		for !cond() && time.Now().Before(limit) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		at = time.Now()
+		close(ch)
+	}()
+	return ch, func() time.Time {
+		<-ch
+		return at
+	}
+}
+
+// fileExists returns a condition for closeWhen: path exists.
+func fileExists(path string) func() bool {
+	return func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+}
+
 // A tool has no limit on its total running time.
 func TestRunToolNoTimeLimit(t *testing.T) {
 	start := time.Now()
@@ -52,7 +81,9 @@ func TestRunToolDrainAfterEnd(t *testing.T) {
 	if err != nil || string(res.Stdout) != "hi\n" {
 		t.Fatalf("silent child: %q %v", res.Stdout, err)
 	}
-	if took < pipeDrainSilence || took > pipeDrainSilence+time.Second {
+	// The background sleep lasts 30 s: an end within a few seconds of the
+	// silence is the end by the silence.
+	if took < pipeDrainSilence || took > pipeDrainSilence+3*time.Second {
 		t.Fatalf("silent child: RunTool took %v, want about %v", took, pipeDrainSilence)
 	}
 
@@ -92,22 +123,24 @@ func TestRunToolStop(t *testing.T) {
 	}
 }
 
-// A tool that ignores SIGTERM gets SIGKILL after the grace.
+// A tool that ignores SIGTERM gets SIGKILL after the grace. The stop comes
+// when the tool has set its trap.
 func TestRunToolStopGrace(t *testing.T) {
 	prev := toolKillGrace
 	toolKillGrace = 300 * time.Millisecond
 	t.Cleanup(func() { toolKillGrace = prev })
-	start := time.Now()
-	res, err := RunTool(closeAfter(100*time.Millisecond), 1<<20, "sh", "-c", `trap "" TERM; echo ready; sleep 60`)
-	el := time.Since(start)
+	trapped := filepath.Join(t.TempDir(), "trapped")
+	stop, stoppedAt := closeWhen(fileExists(trapped))
+	res, err := RunTool(stop, 1<<20, "sh", "-c", `trap "" TERM; echo ready; : > '`+trapped+`'; sleep 60`)
+	el := time.Since(stoppedAt())
 	if !errors.Is(err, ErrToolStopped) {
 		t.Fatalf("want ErrToolStopped, got %v", err)
 	}
 	if res == nil || strings.TrimSpace(string(res.Stdout)) != "ready" || res.ExitCode != 128+9 {
 		t.Fatalf("result: %+v", res)
 	}
-	if el < 400*time.Millisecond || el > 3*time.Second {
-		t.Fatalf("SIGKILL after the grace expected about 400 ms after the start, got %v", el)
+	if el < toolKillGrace || el > 3*time.Second {
+		t.Fatalf("SIGKILL after the grace expected about %v after the stop, got %v", toolKillGrace, el)
 	}
 }
 
@@ -145,7 +178,8 @@ func TestCollectAuditStoppedKeepsPosition(t *testing.T) {
 	rt, done := openAgentDB(t)
 	defer done()
 	calls := filepath.Join(t.TempDir(), "calls")
-	fakeTool(t, "ausearch", "echo run >> '"+calls+"'\nsleep 60\n")
+	started := calls + ".started"
+	fakeTool(t, "ausearch", "echo run >> '"+calls+"'\n: > '"+started+"'\nsleep 60\n")
 	prev := toolKillGrace
 	toolKillGrace = 300 * time.Millisecond
 	t.Cleanup(func() { toolKillGrace = prev })
@@ -153,12 +187,13 @@ func TestCollectAuditStoppedKeepsPosition(t *testing.T) {
 	setLocalState(t, rt.DB, stateLastAuditEvent, pos)
 	var c RuleContent
 
-	rt.stop = closeAfter(200 * time.Millisecond)
-	start := time.Now()
+	// The stop comes while ausearch runs.
+	stop, stoppedAt := closeWhen(fileExists(started))
+	rt.stop = stop
 	if ds := rt.collectAudit(&c, nil); len(ds) != 0 {
 		t.Fatalf("no detection expected: %+v", ds)
 	}
-	if el := time.Since(start); el > 3*time.Second {
+	if el := time.Since(stoppedAt()); el > 3*time.Second {
 		t.Fatalf("the stop took %v", el)
 	}
 	if got := models.GetLocalState(rt.DB.Read(), stateLastAuditEvent); got != pos {
