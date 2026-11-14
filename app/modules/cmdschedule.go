@@ -138,6 +138,38 @@ func (s *CommandSchedule) Plan(now, armedAt, lastDue time.Time, loc *time.Locati
 	return next, next, true
 }
 
+// Skipped returns the occurrences of a daily, weekly or hourly_at schedule
+// that passed without a run before due (the occurrence a run executes):
+// those after armedAt and after lastDue (the latest occurrence run), and
+// before due. It gives their number and the first and the last of them
+// (zero times when there is none). The other kinds record no skipped
+// occurrence.
+func (s *CommandSchedule) Skipped(due, armedAt, lastDue time.Time, loc *time.Location) (count int, first, last time.Time) {
+	switch s.Kind {
+	case ScheduleDaily, ScheduleWeekly, ScheduleHourlyAt:
+	default:
+		return 0, time.Time{}, time.Time{}
+	}
+	t := armedAt
+	if lastDue.After(t) {
+		t = lastDue
+	}
+	if t.Unix() <= 0 {
+		return 0, time.Time{}, time.Time{}
+	}
+	for {
+		o, ok := s.NextDue(t, loc)
+		if !ok || !o.Before(due) {
+			return count, first, last
+		}
+		if count == 0 {
+			first = o
+		}
+		count++
+		last, t = o, o
+	}
+}
+
 // dayOccurrence returns the occurrence of a weekly or daily schedule on the
 // local date (y, m, d); d may be out of range and is normalized. ok is false
 // when a weekly schedule does not include that weekday.

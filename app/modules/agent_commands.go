@@ -246,19 +246,36 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	}
 	// The schedule mark is written with the run, so that an occurrence is
 	// never run twice and never lost (a run cut short by a crash is reported
-	// as interrupted).
+	// as interrupted). The occurrences skipped before this one are counted
+	// from the schedule state read in the same transaction.
 	err = rt.storeRunRecord(fmt.Sprintf("command set %q: the start of run %s", def.Name, uid), func() error {
-		start := &ReportRequest{CommandRuns: []CommandRunReport{run.base}}
-		if job.requestID > 0 {
-			start.CommandRequestAcks = []CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: uid, At: now}}
-		}
-		return rt.out.queueWith(rt.stamped(start), func(tx models.Writer) error {
+		return rt.out.queueBuilt(func(tx models.Writer) (*ReportRequest, error) {
+			base := run.base
 			if job.trigger == TriggerSchedule {
+				st, err := models.GetCommandSchedule(tx, def.ID)
+				if err != nil {
+					return nil, err
+				}
+				if st != nil && def.Schedule != nil {
+					n, first, last := def.Schedule.Skipped(time.Unix(job.scheduledFor, 0), time.Unix(st.ArmedAt, 0),
+						time.Unix(st.LastDue, 0), rt.location())
+					if n > 0 {
+						base.SkippedCount, base.SkippedFrom, base.SkippedTo = n, first.Unix(), last.Unix()
+					}
+				}
 				if err := models.SetCommandScheduleLastDue(tx, def.ID, job.scheduledFor); err != nil {
-					return err
+					return nil, err
 				}
 			}
-			return models.InsertCommandExecution(tx, exec)
+			if err := models.InsertCommandExecution(tx, exec); err != nil {
+				return nil, err
+			}
+			run.base = base
+			start := &ReportRequest{CommandRuns: []CommandRunReport{base}}
+			if job.requestID > 0 {
+				start.CommandRequestAcks = []CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: uid, At: now}}
+			}
+			return rt.stamped(start), nil
 		})
 	})
 	switch {

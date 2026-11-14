@@ -71,14 +71,41 @@ func (o *outbox) queueWith(req *ReportRequest, fn func(tx models.Writer) error) 
 		over, dropped, err = o.applyCommandLimit(tx)
 		return err
 	})
-	if err == nil && over {
-		if dropped > 0 {
-			o.logf("report storage limit reached: dropped %d command set report(s)", dropped)
-		} else {
-			o.logf("report storage limit reached: dropped the console output of queued command set results")
-		}
-	}
+	o.logLimit(err, over, dropped)
 	return err
+}
+
+// queueBuilt is queueWith for a report that build makes inside the Write,
+// from what it reads there (and with what it writes there); when build fails
+// nothing is stored.
+func (o *outbox) queueBuilt(build func(tx models.Writer) (*ReportRequest, error)) error {
+	var over bool
+	var dropped int
+	err := o.db.Write(func(tx models.Writer) error {
+		req, err := build(tx)
+		if err != nil {
+			return err
+		}
+		if err := o.insert(tx, req); err != nil {
+			return err
+		}
+		over, dropped, err = o.applyCommandLimit(tx)
+		return err
+	})
+	o.logLimit(err, over, dropped)
+	return err
+}
+
+// logLimit logs what the limit of command set reports dropped.
+func (o *outbox) logLimit(err error, over bool, dropped int) {
+	if err != nil || !over {
+		return
+	}
+	if dropped > 0 {
+		o.logf("report storage limit reached: dropped %d command set report(s)", dropped)
+	} else {
+		o.logf("report storage limit reached: dropped the console output of queued command set results")
+	}
 }
 
 // queuePeriodic stores the report of a monitoring step, in one Write: the

@@ -236,6 +236,7 @@ func TestCommandSetsTextOutput(t *testing.T) {
 
 	run := map[string]any{"id": float64(9), "agent_id": float64(3), "agent_name": "web1", "set_id": float64(4), "set_name": "disk",
 		"trigger": "schedule", "scheduled_for": "2026-11-11T03:00:00Z", "request_id": float64(0), "commands_total": float64(3),
+		"skipped_count": float64(3), "skipped_from": "2026-11-08T03:00:00Z", "skipped_to": "2026-11-10T03:00:00Z",
 		"started_at": "2026-11-11T03:00:05Z", "finished_at": "2026-11-11T03:00:09Z", "state": "error", "reason": "",
 		"os_user": "svc", "work_dir": "", "display": display, "not_executed": float64(1),
 		"commands": []any{
@@ -249,7 +250,9 @@ func TestCommandSetsTextOutput(t *testing.T) {
 	renderCommandRun(&b, run)
 	out := b.String()
 	for _, want := range []string{
-		"command set:   disk (id 4)", "trigger:       schedule, due 2026-11-11 12:00:00", "OS user:       svc", "work dir:      (home directory)",
+		"command set:   disk (id 4)", "trigger:       schedule, due 2026-11-11 12:00:00",
+		"skipped:       3 occurrence(s) of the schedule before this one, from 2026-11-08 12:00:00 to 2026-11-10 12:00:00",
+		"OS user:       svc", "work dir:      (home directory)",
 		"started:       2026-11-11 12:00:05", "state:         error", "  version: 1.2,1.3", "  (truncated by the line or size limit)",
 		"--- command 1 of 3: success, exit code 0", "command line:\n  echo a &&\n  echo b\n", "note: first",
 		"console output (13 bytes):\nline 1\nline 2\n", "--- command 2 of 3: error (timeout), no exit code",
@@ -259,13 +262,15 @@ func TestCommandSetsTextOutput(t *testing.T) {
 			t.Errorf("run output lacks %q:\n%s", want, out)
 		}
 	}
-	// A viewer-shaped answer (no command line, OS user) prints without them.
+	// A viewer-shaped answer (no command line, OS user, skipped occurrences)
+	// prints without them; so does a run without skipped occurrences.
 	delete(run, "os_user")
+	delete(run, "skipped_count")
 	cmds := run["commands"].([]any)
 	delete(cmds[0].(map[string]any), "command_line")
 	b.Reset()
 	renderCommandRun(&b, run)
-	if strings.Contains(b.String(), "OS user") || strings.Contains(b.String(), "command line") {
+	if strings.Contains(b.String(), "OS user") || strings.Contains(b.String(), "command line") || strings.Contains(b.String(), "skipped") {
 		t.Errorf("fields printed although absent:\n%s", b.String())
 	}
 }

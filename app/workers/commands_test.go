@@ -571,13 +571,14 @@ func TestCommandImport(t *testing.T) {
 // forbiddenForViewer are the keys a viewer must never receive.
 var forbiddenForViewer = []string{"command_line", "note", "os_user", "work_dir", "schedule", "schedule_summary", "purpose", "description",
 	"patterns", "success", "failure", "on_problems", "timeout_sec", "line_limit", "joiner", "keep_runs", "set_revision",
-	"trigger", "scheduled_for", "request_id", "commands_total"}
+	"trigger", "scheduled_for", "request_id", "commands_total", "skipped_count", "skipped_from", "skipped_to"}
 
 // viewerRunKeys are exactly the keys of a run a viewer receives.
 var viewerRunKeys = []string{"id", "set_id", "set_name", "started_at", "finished_at", "state", "reason", "display", "received_at"}
 
 // adminRunKeys are the keys of a run only administrators and the CLI receive.
-var adminRunKeys = []string{"trigger", "scheduled_for", "request_id", "commands_total", "set_revision", "purpose", "os_user", "work_dir"}
+var adminRunKeys = []string{"trigger", "scheduled_for", "request_id", "commands_total", "set_revision", "purpose", "os_user", "work_dir",
+	"skipped_count", "skipped_from", "skipped_to"}
 
 // runObjects returns the runs of a results, run list or run detail response.
 func runObjects(t *testing.T, doc map[string]any) []map[string]any {
@@ -645,10 +646,14 @@ func TestCommandResultsPermissions(t *testing.T) {
 	ro["os_user"] = "svc"
 	ro["commands"] = []any{map[string]any{"command_line": "true"}}
 	e.admin("POST", base+"/command-sets", ro)
-	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{
-		runReport("v1", setID, "disk", 0, []modules.CommandResultReport{result(0, modules.ResultSuccess, 0, "out0"), result(1, modules.ResultSuccess, 0, "out1")}, true, modules.ResultSuccess),
-	}})
+	// A scheduled run that carries the occurrences skipped before it.
+	v1 := runReport("v1", setID, "disk", 0, []modules.CommandResultReport{result(0, modules.ResultSuccess, 0, "out0"), result(1, modules.ResultSuccess, 0, "out1")}, true, modules.ResultSuccess)
+	v1.SkippedCount, v1.SkippedFrom, v1.SkippedTo = 2, 1794000000, 1794086400
+	reportAgent(t, e, tok, modules.ReportRequest{CommandRuns: []modules.CommandRunReport{v1}})
 	run, _ := models.GetCommandRunByUID(e.mustTDB(a).Read(), "v1")
+	if run.SkippedCount != 2 || run.SkippedFrom != 1794000000 || run.SkippedTo != 1794086400 {
+		t.Fatalf("stored skipped occurrences: %+v", run)
+	}
 	viewer := newViewer(t, e)
 	admin := login(t, e, testAdminEmail, "Admin-pass-123")
 
@@ -702,6 +707,9 @@ func TestCommandResultsPermissions(t *testing.T) {
 				}
 				if run["trigger"] != "schedule" || run["scheduled_for"] == nil || run["commands_total"] != float64(2) {
 					t.Errorf("%s %s run: %v", who, p, run)
+				}
+				if run["skipped_count"] != float64(2) || run["skipped_from"] != "2026-11-06T21:20:00Z" || run["skipped_to"] != "2026-11-07T21:20:00Z" {
+					t.Errorf("%s %s skipped occurrences: %v %v %v", who, p, run["skipped_count"], run["skipped_from"], run["skipped_to"])
 				}
 			}
 		}

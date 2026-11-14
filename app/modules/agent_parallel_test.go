@@ -177,18 +177,6 @@ func allReports(t *testing.T, rt *AgentRuntime, tr *parTransport) []ReportReques
 	return append(out, queuedReports(t, rt)...)
 }
 
-// periodicItems returns the periodic reports among the reports (the
-// monitoring steps that queued them).
-func periodicItems(reports []ReportRequest) []ReportRequest {
-	var out []ReportRequest
-	for _, r := range reports {
-		if len(r.CommandRuns) == 0 && len(r.CommandRequestAcks) == 0 && r.CommandApply == nil {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // TestRoundsWhileWorkersBusy (C3, TO-3, MON-1, UNITS): with three workers all
 // running long sets, the rounds go on every interval on the communication
 // flow (never inside the wait for a command), one at a time; the monitoring

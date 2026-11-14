@@ -275,7 +275,7 @@ func localizeText(s string) string {
 // isTimeKey reports whether a field of the API holds a timestamp.
 func isTimeKey(key string) bool {
 	switch key {
-	case "at", "not_before", "not_after", "locked_until", "switch_after", "scheduled_for":
+	case "at", "not_before", "not_after", "locked_until", "switch_after", "scheduled_for", "skipped_from", "skipped_to":
 		return true
 	}
 	return strings.HasSuffix(key, "_at") || strings.HasSuffix(key, "ctime")

@@ -44,14 +44,18 @@ func commandRequestOut(q *models.CommandRequest) *commandRequestJSON {
 
 // commandRunJSON is a run. The fields with omitempty are given to
 // administrators and the CLI only: a viewer does not receive the keys at
-// all. ScheduledFor is a pointer to a pointer so that administrators still
-// receive the key with null when a run was not started by the schedule.
+// all. ScheduledFor, SkippedFrom and SkippedTo are pointers to pointers so
+// that administrators still receive the keys with null when there is no
+// time.
 type commandRunJSON struct {
 	ID            int64                 `json:"id"`
 	SetID         int64                 `json:"set_id"`
 	SetName       string                `json:"set_name"`
 	Trigger       *string               `json:"trigger,omitempty"`
 	ScheduledFor  **string              `json:"scheduled_for,omitempty"`
+	SkippedCount  *int                  `json:"skipped_count,omitempty"`
+	SkippedFrom   **string              `json:"skipped_from,omitempty"`
+	SkippedTo     **string              `json:"skipped_to,omitempty"`
 	RequestID     *int64                `json:"request_id,omitempty"`
 	CommandsTotal *int                  `json:"commands_total,omitempty"`
 	StartedAt     *string               `json:"started_at"`
@@ -86,6 +90,8 @@ func commandRunOut(run *models.CommandRun, full bool) *commandRunJSON {
 	if full {
 		trigger, due, request, total := run.Trigger, ts(run.ScheduledFor), run.RequestID, run.CommandsTotal
 		out.Trigger, out.ScheduledFor, out.RequestID, out.CommandsTotal = &trigger, &due, &request, &total
+		skipped, from, to := run.SkippedCount, ts(run.SkippedFrom), ts(run.SkippedTo)
+		out.SkippedCount, out.SkippedFrom, out.SkippedTo = &skipped, &from, &to
 		rev, purpose, user, dir := run.SetRevision, run.Purpose, run.OSUser, run.WorkDir
 		out.SetRevision, out.Purpose, out.OSUser, out.WorkDir = &rev, &purpose, &user, &dir
 	}

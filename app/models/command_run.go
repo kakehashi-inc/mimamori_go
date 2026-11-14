@@ -14,6 +14,9 @@ const RunStateRunning = "running"
 // copied (SetName, Purpose, Joiner, OSUser, WorkDir). FinishedAt is 0 while
 // the run is going on. DisplayRows is the JSON of the display value
 // (modules.DisplayValue; empty for run_only sets and unfinished runs).
+// SkippedCount, SkippedFrom and SkippedTo record the occurrences of the
+// set's schedule that passed without a run before this scheduled run (their
+// number, the first and the last; 0 when there is none).
 type CommandRun struct {
 	ID               int64
 	RunUID           string
@@ -27,6 +30,9 @@ type CommandRun struct {
 	Trigger          string
 	RequestID        int64
 	ScheduledFor     int64
+	SkippedCount     int
+	SkippedFrom      int64
+	SkippedTo        int64
 	CommandsTotal    int
 	StartedAt        int64
 	FinishedAt       int64
@@ -39,13 +45,15 @@ type CommandRun struct {
 }
 
 const commandRunCols = `id, run_uid, set_id, set_revision, set_name, purpose, joiner, os_user, work_dir, run_trigger, request_id,
-	scheduled_for, commands_total, started_at, finished_at, state, reason, display_rows, display_truncated, received_at, updated_at`
+	scheduled_for, skipped_count, skipped_from, skipped_to, commands_total, started_at, finished_at, state, reason, display_rows,
+	display_truncated, received_at, updated_at`
 
 func scanCommandRun(s rowScanner) (*CommandRun, error) {
 	r := &CommandRun{}
 	var trunc int
 	if err := s.Scan(&r.ID, &r.RunUID, &r.SetID, &r.SetRevision, &r.SetName, &r.Purpose, &r.Joiner, &r.OSUser, &r.WorkDir,
-		&r.Trigger, &r.RequestID, &r.ScheduledFor, &r.CommandsTotal, &r.StartedAt, &r.FinishedAt, &r.State, &r.Reason,
+		&r.Trigger, &r.RequestID, &r.ScheduledFor, &r.SkippedCount, &r.SkippedFrom, &r.SkippedTo, &r.CommandsTotal, &r.StartedAt,
+		&r.FinishedAt, &r.State, &r.Reason,
 		&r.DisplayRows, &trunc, &r.ReceivedAt, &r.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -66,10 +74,11 @@ func EnsureCommandRun(db Writer, r *CommandRun, now int64) (*CommandRun, bool, e
 		return nil, false, err
 	}
 	res, err := db.Exec(`INSERT INTO command_runs (run_uid, set_id, set_revision, set_name, purpose, joiner, os_user, work_dir,
-		run_trigger, request_id, scheduled_for, commands_total, started_at, state, received_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_uid) DO NOTHING`,
+		run_trigger, request_id, scheduled_for, skipped_count, skipped_from, skipped_to, commands_total, started_at, state,
+		received_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_uid) DO NOTHING`,
 		r.RunUID, r.SetID, r.SetRevision, r.SetName, r.Purpose, r.Joiner, r.OSUser, r.WorkDir, r.Trigger, r.RequestID,
-		r.ScheduledFor, r.CommandsTotal, r.StartedAt, RunStateRunning, now, now)
+		r.ScheduledFor, r.SkippedCount, r.SkippedFrom, r.SkippedTo, r.CommandsTotal, r.StartedAt, RunStateRunning, now, now)
 	if err != nil {
 		return nil, false, err
 	}

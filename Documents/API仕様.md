@@ -335,11 +335,14 @@ interface CommandRun {
   set_name: string;                   // 実行したときの名前
   trigger?: 'manual' | 'schedule';    // A のみ
   scheduled_for?: string | null;      // A のみ。定期の予定時刻（手動は null）
+  skipped_count?: number;             // A のみ。この定期の実行の前に、実行されずに過ぎた予定の数（毎日、毎週、毎時 n 分だけ。ほかは 0。システム仕様.md の 12.5.4）
+  skipped_from?: string | null;       // A のみ。その最初の予定（無ければ null）
+  skipped_to?: string | null;         // A のみ。その最後の予定（無ければ null）
   request_id?: number;                // A のみ。手動の実行指示の ID（定期は 0）
   commands_total?: number;            // A のみ。実行したときのセットのコマンドの数
   started_at: string; finished_at: string | null;   // 実行中は null
   state: 'running' | 'success' | 'failure' | 'error';   // 終わった実行は、実行したコマンドの最も悪い区分
-  reason: string;                     // 実行全体の理由。停止の指示かエージェントの終了で途中で終わった実行（コマンドの途中、コマンドとコマンドの間、次の起動で終わっていなかった実行）は "interrupted"（state は error）、それ以外は ""（制限時間、起動の失敗、作業ディレクトリの失敗はコマンドの reason だけ）
+  reason: string;                     // 実行全体の理由。停止の指示かエージェントの終了で途中で終わった実行（コマンドの途中、コマンドとコマンドの間、次の起動で終わっていなかった実行）は "interrupted"、エージェントの内部のエラー（パニック）で処理が終わった実行は "internal_error"（どちらも state は error）、それ以外は ""（制限時間、起動の失敗、作業ディレクトリの失敗はコマンドの reason だけ）
   display: DisplayValue | null;       // 出力収集の終わった実行だけ
   received_at: string;                // 最初の報告を受け取った日時（保存期間の基準）
   set_revision?: number; purpose?: string; os_user?: string; work_dir?: string;   // A のみ。実行したときの値
@@ -363,7 +366,7 @@ interface CommandRunDetail extends CommandRun {
   commands: {
     position: number;                 // セットの中の位置（0 から）
     kind: 'success' | 'failure' | 'error';
-    reason: string;                   // error の理由: unexpected_code、start_failed、workdir_failed、timeout、signaled、interrupted
+    reason: string;                   // error の理由: unexpected_code、start_failed、workdir_failed、timeout、signaled、interrupted、internal_error（処理中にエージェントの内部のエラーがあったコマンド。戻り値と出力はコマンド自身のもの）
     exit_code: number | null;         // 正常に終了しなかった場合は null
     started_at: string; finished_at: string;
     output: string;                   // コンソール出力（1 MiB まで。不正な UTF-8 は置換文字にする）
@@ -739,6 +742,7 @@ interface CommandRunReport {
   set_id: number; set_revision: number; set_name: string; purpose: string; joiner: string;
   os_user: string; work_dir: string;
   trigger: 'manual' | 'schedule'; request_id: number; scheduled_for: number;
+  skipped_count: number; skipped_from: number; skipped_to: number;   // この定期の実行の前に、実行されずに過ぎた予定の数と最初と最後（無ければ 0）
   commands_total: number; started_at: number;
   finished: boolean;                   // 実行の最後の報告
   finished_at: number; state: 'success' | 'failure' | 'error'; reason: string;   // finished のとき

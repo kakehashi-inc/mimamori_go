@@ -325,6 +325,11 @@ func (c *CtlCommandSetsRunsCmd) Run(p *CtlCmd) error {
 	for _, r := range runs {
 		if rm, ok := r.(map[string]any); ok {
 			rm["values"] = oneLineDisplay(rm["display"])
+			if n, _ := rm["skipped_count"].(float64); n <= 0 {
+				rm["skipped"] = nil
+			} else {
+				rm["skipped"] = n
+			}
 		}
 	}
 	deleted := ""
@@ -332,7 +337,7 @@ func (c *CtlCommandSetsRunsCmd) Run(p *CtlCmd) error {
 		deleted = " (deleted)"
 	}
 	fmt.Printf("%v / %v%s\n\n", m["agent_name"], m["set_name"], deleted)
-	cl.show(runs, "id", "trigger", "scheduled_for", "started_at", "finished_at", "state", "reason", "values")
+	cl.show(runs, "id", "trigger", "scheduled_for", "skipped", "started_at", "finished_at", "state", "reason", "values")
 	if next, ok := m["next_before"].(float64); ok {
 		fmt.Printf("(older runs: --before %s)\n", formatNumber(next))
 	}
@@ -403,6 +408,10 @@ func renderCommandRun(w io.Writer, m map[string]any) {
 		trigger += ", request " + formatNumber(id)
 	}
 	fmt.Fprintf(w, "trigger:       %s\n", trigger)
+	if n, _ := m["skipped_count"].(float64); n > 0 {
+		fmt.Fprintf(w, "skipped:       %s occurrence(s) of the schedule before this one, from %s to %s\n", formatNumber(n),
+			text("skipped_from"), text("skipped_to"))
+	}
 	if user, ok := m["os_user"].(string); ok {
 		dir, _ := m["work_dir"].(string)
 		if dir == "" {

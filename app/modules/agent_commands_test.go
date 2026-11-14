@@ -2,6 +2,7 @@ package modules
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -885,5 +886,91 @@ func TestAgentStopEndsLeftoverReading(t *testing.T) {
 	}
 	if processAlive(writer) {
 		t.Fatal("the writer left behind did not get SIGTERM at the stop")
+	}
+}
+
+// TestScheduledRunsCarrySkipped: the run of a scheduled set carries how many
+// occurrences were skipped before it and their range: for hourly_at the
+// occurrences that passed while the set's own run took long or while its
+// entry waited for a worker, for daily the earlier days; never for the
+// interval kinds.
+func TestScheduledRunsCarrySkipped(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skip("no time zone data")
+	}
+	requireBash(t)
+	rt := newCommandRuntime(t, &cmdTransport{})
+	rt.loc = loc
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 11, day, hh, mm, 0, 0, loc) }
+	now := at(12, 9, 0)
+	rt.clock = func() time.Time { return now }
+	hourly := testSet(1, PurposeRunOnly, "true")
+	hourly.RunMode, hourly.Schedule = RunModeSchedule, &CommandSchedule{Kind: ScheduleHourlyAt, Minute: intPtr(30)}
+	every := testSet(2, PurposeRunOnly, "true")
+	every.RunMode, every.Schedule = RunModeSchedule, &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 15}
+	daily := testSet(3, PurposeRunOnly, "true")
+	daily.RunMode, daily.Schedule = RunModeSchedule, &CommandSchedule{Kind: ScheduleDaily, Time: "08:00"}
+	rt.storeCommandDefinitions(defsOf(hourly, every, daily))
+	// The daily set last ran three days ago.
+	execOnDB(t, rt.DB, fmt.Sprintf(`UPDATE command_schedules SET armed_at = %d, last_due = %d WHERE set_id = 3`,
+		at(1, 0, 0).Unix(), at(9, 8, 0).Unix()))
+	rt.sched.acceptDefinitions(rt.sched.defs, rt.sched.valid)
+	skipped := func(setID int64) (int, int64, int64) {
+		t.Helper()
+		var last *CommandRunReport
+		for _, r := range runReports(queuedReports(t, rt)) {
+			if r.SetID == setID && r.Finished {
+				r := r
+				last = &r
+			}
+		}
+		if last == nil {
+			t.Fatalf("no run of set %d", setID)
+		}
+		return last.SkippedCount, last.SkippedFrom, last.SkippedTo
+	}
+	// The daily set: today's 08:00 at once, carrying the two earlier days.
+	if !runNext(rt) {
+		t.Fatal("the daily set did not run")
+	}
+	if n, from, to := skipped(3); n != 2 || from != at(10, 8, 0).Unix() || to != at(11, 8, 0).Unix() {
+		t.Fatalf("daily: %d %d %d", n, from, to)
+	}
+	// 09:30: the hourly set and the 09:15 entry of the every-15-minutes set
+	// (taken late, with its own occurrence): nothing skipped. Their runs take
+	// long: they end at 11:45.
+	now = at(12, 9, 30)
+	var jobs []*commandJob
+	for job := nextCommandJob(rt); job != nil; job = nextCommandJob(rt) {
+		rt.runCommandJob(job)
+		jobs = append(jobs, job)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("jobs at 09:30: %d", len(jobs))
+	}
+	now = at(12, 11, 45)
+	for _, job := range jobs {
+		rt.sched.doneRun(job)
+	}
+	if n, _, _ := skipped(1); n != 0 {
+		t.Fatalf("first hourly run: %d skipped", n)
+	}
+	if e := entryOf(rt, 1); e == nil || e.scheduledFor != at(12, 12, 30).Unix() {
+		t.Fatalf("hourly entry after the long run: %+v", e)
+	}
+	if e := entryOf(rt, 2); e == nil || e.scheduledFor != at(12, 12, 0).Unix() {
+		t.Fatalf("every-15-minutes entry after the long run: %+v", e)
+	}
+	// 12:30: the hourly run carries 10:30 and 11:30; the every-15-minutes
+	// run (12:00, skipping 09:45 to 11:45) carries nothing.
+	now = at(12, 12, 30)
+	for runNext(rt) {
+	}
+	if n, from, to := skipped(1); n != 2 || from != at(12, 10, 30).Unix() || to != at(12, 11, 30).Unix() {
+		t.Fatalf("hourly after the long run: %d %d %d", n, from, to)
+	}
+	if n, from, to := skipped(2); n != 0 || from != 0 || to != 0 {
+		t.Fatalf("every 15 minutes: %d %d %d", n, from, to)
 	}
 }

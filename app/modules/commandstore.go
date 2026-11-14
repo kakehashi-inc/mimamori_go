@@ -163,6 +163,7 @@ func CommandRunRow(r *CommandRunReport) *models.CommandRun {
 	return &models.CommandRun{
 		RunUID: r.RunUID, SetID: r.SetID, SetRevision: r.SetRevision, SetName: r.SetName, Purpose: r.Purpose, Joiner: r.Joiner,
 		OSUser: r.OSUser, WorkDir: r.WorkDir, Trigger: r.Trigger, RequestID: r.RequestID, ScheduledFor: r.ScheduledFor,
+		SkippedCount: max(r.SkippedCount, 0), SkippedFrom: r.SkippedFrom, SkippedTo: r.SkippedTo,
 		CommandsTotal: r.CommandsTotal, StartedAt: r.StartedAt,
 	}
 }

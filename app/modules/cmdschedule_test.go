@@ -176,6 +176,65 @@ func TestSchedulePlan(t *testing.T) {
 	}
 }
 
+// TestScheduleSkipped: the occurrences skipped before a run's occurrence:
+// for daily (earlier days), weekly (all not run before the latest, older or
+// within 7 days) and hourly_at (also those that passed while the set's own
+// run took long) after the armed time and the last run; never for once and
+// the interval kinds.
+func TestScheduleSkipped(t *testing.T) {
+	tokyo := mustLoc(t, "Asia/Tokyo")
+	ny := mustLoc(t, "America/New_York")
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 11, day, hh, mm, 0, 0, tokyo) }
+	utc := func(s string) time.Time {
+		v, err := time.Parse("2006-01-02 15:04", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	none := time.Unix(0, 0)
+	daily := &CommandSchedule{Kind: ScheduleDaily, Time: "09:00"}
+	monday := &CommandSchedule{Kind: ScheduleWeekly, Weekdays: []string{"mon"}, Time: "03:00"}
+	hourly := &CommandSchedule{Kind: ScheduleHourlyAt, Minute: intPtr(30)}
+	tests := []struct {
+		name                string
+		s                   *CommandSchedule
+		loc                 *time.Location
+		due, armed, lastDue time.Time
+		count               int
+		first, last         time.Time
+	}{
+		{"daily same day", daily, tokyo, at(12, 9, 0), at(1, 0, 0), at(11, 9, 0), 0, time.Time{}, time.Time{}},
+		{"daily earlier days", daily, tokyo, at(12, 9, 0), at(1, 0, 0), at(9, 9, 0), 2, at(10, 9, 0), at(11, 9, 0)},
+		{"daily earlier days before armed", daily, tokyo, at(12, 9, 0), at(10, 12, 0), none, 1, at(11, 9, 0), at(11, 9, 0)},
+		{"weekly within 7 days", monday, tokyo, at(9, 3, 0), at(1, 0, 0), at(2, 3, 0), 0, time.Time{}, time.Time{}},
+		{"weekly beyond 7 days", monday, tokyo, at(16, 3, 0), at(1, 0, 0), at(2, 3, 0), 1, at(9, 3, 0), at(9, 3, 0)},
+		{"weekly two weekdays within 7 days", &CommandSchedule{Kind: ScheduleWeekly, Weekdays: []string{"mon", "fri"}, Time: "03:00"},
+			tokyo, at(13, 3, 0), at(1, 0, 0), at(6, 3, 0), 1, at(9, 3, 0), at(9, 3, 0)},
+		{"hourly_at skipped", hourly, tokyo, at(12, 12, 30), at(1, 0, 0), at(12, 9, 30), 2, at(12, 10, 30), at(12, 11, 30)},
+		{"hourly_at before armed", hourly, tokyo, at(12, 12, 30), at(12, 11, 0), none, 1, at(12, 11, 30), at(12, 11, 30)},
+		{"hourly_at none", hourly, tokyo, at(12, 10, 30), at(1, 0, 0), at(12, 9, 30), 0, time.Time{}, time.Time{}},
+		{"every minutes never counted", &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 15}, tokyo,
+			at(12, 12, 0), at(1, 0, 0), at(12, 9, 0), 0, time.Time{}, time.Time{}},
+		{"every hours never counted", &CommandSchedule{Kind: ScheduleEveryHours, Every: 1}, tokyo,
+			at(12, 12, 0), at(1, 0, 0), at(11, 9, 0), 0, time.Time{}, time.Time{}},
+		{"once never counted", &CommandSchedule{Kind: ScheduleOnce, At: FormatScheduleAt(at(12, 9, 0))}, tokyo,
+			at(12, 9, 0), at(1, 0, 0), none, 0, time.Time{}, time.Time{}},
+		// New York, 2026-11-01: the hour 01:00-02:00 repeats; hourly_at 30
+		// has an occurrence in each pass (05:30Z and 06:30Z).
+		{"hourly_at in the repeated hour", hourly, ny, utc("2026-11-01 07:30"), utc("2026-10-01 00:00"), utc("2026-11-01 04:30"),
+			2, utc("2026-11-01 05:30"), utc("2026-11-01 06:30")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			n, first, last := tc.s.Skipped(tc.due, tc.armed, tc.lastDue, tc.loc)
+			if n != tc.count || !first.Equal(tc.first) || !last.Equal(tc.last) {
+				t.Fatalf("skipped %d %v %v, want %d %v %v", n, first, last, tc.count, tc.first, tc.last)
+			}
+		})
+	}
+}
+
 func TestWallTime(t *testing.T) {
 	ny := mustLoc(t, "America/New_York")
 	tests := []struct {

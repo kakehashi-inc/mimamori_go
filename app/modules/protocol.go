@@ -187,19 +187,26 @@ type CommandRequestAck struct {
 // each command and when it finishes. The set's values at the start are
 // copied so that the result does not depend on later changes.
 type CommandRunReport struct {
-	RunUID        string `json:"run_uid"`
-	SetID         int64  `json:"set_id"`
-	SetRevision   int64  `json:"set_revision"`
-	SetName       string `json:"set_name"`
-	Purpose       string `json:"purpose"`
-	Joiner        string `json:"joiner"`
-	OSUser        string `json:"os_user"`
-	WorkDir       string `json:"work_dir"`
-	Trigger       string `json:"trigger"`
-	RequestID     int64  `json:"request_id"`
-	ScheduledFor  int64  `json:"scheduled_for"`
-	CommandsTotal int    `json:"commands_total"`
-	StartedAt     int64  `json:"started_at"`
+	RunUID       string `json:"run_uid"`
+	SetID        int64  `json:"set_id"`
+	SetRevision  int64  `json:"set_revision"`
+	SetName      string `json:"set_name"`
+	Purpose      string `json:"purpose"`
+	Joiner       string `json:"joiner"`
+	OSUser       string `json:"os_user"`
+	WorkDir      string `json:"work_dir"`
+	Trigger      string `json:"trigger"`
+	RequestID    int64  `json:"request_id"`
+	ScheduledFor int64  `json:"scheduled_for"`
+	// SkippedCount is the number of occurrences of the set's schedule that
+	// passed without a run before ScheduledFor (daily, weekly and hourly_at
+	// only), SkippedFrom and SkippedTo the first and the last of them (0
+	// when there is none).
+	SkippedCount  int   `json:"skipped_count"`
+	SkippedFrom   int64 `json:"skipped_from"`
+	SkippedTo     int64 `json:"skipped_to"`
+	CommandsTotal int   `json:"commands_total"`
+	StartedAt     int64 `json:"started_at"`
 	// Finished is set on the last report of the run, with FinishedAt, State
 	// (the worst result kind of the executed commands; error when Reason is
 	// set), Reason (interrupted when the stop or the end of the agent cut the
