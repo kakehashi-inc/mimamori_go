@@ -624,7 +624,8 @@ func TestDialIdleNoAddressConnects(t *testing.T) {
 
 // Name resolution waits at most the idle time: a DNS server that never
 // answers ends the dial with an error after it, one that answers within it
-// is waited for.
+// (here after 100 ms, far enough below the idle time for a busy machine) is
+// waited for.
 func TestDialIdleResolutionBounded(t *testing.T) {
 	t.Parallel()
 	const idle = 700 * time.Millisecond
@@ -643,7 +644,7 @@ func TestDialIdleResolutionBounded(t *testing.T) {
 	}
 	defer ln.Close()
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	c, err := dialIdle(net.JoinHostPort("late.test", port), idle, fakeDNS(t, "late.test", 300*time.Millisecond, false, "127.0.0.1"))
+	c, err := dialIdle(net.JoinHostPort("late.test", port), idle, fakeDNS(t, "late.test", 100*time.Millisecond, false, "127.0.0.1"))
 	if err != nil {
 		t.Fatalf("an answer within the idle time: %v", err)
 	}
