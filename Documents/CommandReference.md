@@ -8,7 +8,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 - `--data-dir DIR`: data directory. Default: `data/` next to the executable (`data/` in the current directory when the executable's directory cannot be determined). An empty value is an argument error (exit code 2).
 - `mimamori <command> --help` shows the help of each command.
-- Numbers in arguments and flag values, and the values of `central config set`, are whole numbers written in decimal with the digits 0-9 only (`010` is ten; `+3`, spaces, `0x10`, `1_0`, `1e1`, `1.5` and an empty value are argument errors, exit code 2), and a negative number is written as it is, with its leading `-` (`--limit -5`, `ctl rules show -1`): an argument that begins with `-` and a digit is always a value, never a flag.
+- A number in an argument, in a flag value or in a value of `central config set` is a whole number written in decimal with the digits 0-9 only (`010` is ten; `+3`, spaces, `0x10`, `1_0`, `1e1`, `1.5` and an empty value are argument errors, exit code 2), and a negative number is written as it is, with its leading `-` (`--limit -5`, `ctl rules show -1`): an argument that begins with `-` and a digit is always a value, never a flag.
 
 ## Getting started
 
