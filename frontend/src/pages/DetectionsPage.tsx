@@ -323,7 +323,9 @@ export function DetectionsPage() {
                                                         {d.file.mode} {d.file.owner}
                                                     </span>
                                                     <span className='text-muted'>
-                                                        ctime {formatDateTime(d.file.ctime)}
+                                                        {t('detections.fileCtime', {
+                                                            time: formatDateTime(d.file.ctime),
+                                                        })}
                                                     </span>
                                                 </div>
                                             ) : (

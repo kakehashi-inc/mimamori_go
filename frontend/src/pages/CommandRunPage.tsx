@@ -60,9 +60,8 @@ function RunBody({ run }: { run: CommandRunDetail }) {
     const reasonText = useReasonText();
     const commands = run.commands ?? [];
     const finished = run.state !== 'running';
-    // When the agent was stopped or ended during the run, the set itself did not stop.
-    const interrupted =
-        run.reason === 'interrupted' || (commands.length > 0 && commands[commands.length - 1].reason === 'interrupted');
+    // A run cut by the agent's stop or end has the reason interrupted: the set itself did not stop.
+    const interrupted = run.reason === 'interrupted';
 
     return (
         <div className='flex flex-col gap-4'>
