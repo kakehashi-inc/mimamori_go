@@ -379,13 +379,15 @@
         "notFound": "コマンドセットが見つかりません。削除された可能性があります。",
         "importedFrom": "{{source}} からインポートしました。",
         "runNow": "今すぐ実行",
-        "requested": "{{name}} の実行を指示しました。エージェントは次の接続の後に実行します。",
+        "requested": "{{name}} の実行を指示しました。セントラルのワーカーが空いていれば、エージェントの次の接続で渡します。",
         "requestConflict": "このコマンドセットの実行は、すでに指示しています。",
         "discard": "指示を破棄",
         "discarded": "{{name}} の実行の指示を破棄しました",
         "request": "実行の指示",
         "requestState": {
-            "pending": "エージェントへの配信待ち",
+            "queued": "セントラルのワーカーの空き待ち",
+            "queuedAgentSilent": "エージェントの接続待ち",
+            "pending": "エージェントの取得待ち",
             "delivered": "エージェントに配信済み"
         },
         "whenRun": "実行のタイミング",

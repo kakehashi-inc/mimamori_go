@@ -666,7 +666,7 @@ export interface CommandSetSpec {
 export interface CommandRequest {
     id: number;
     set_id: number;
-    state: 'pending' | 'delivered' | 'done' | 'expired' | 'discarded';
+    state: 'queued' | 'pending' | 'delivered' | 'running' | 'done' | 'expired' | 'discarded';
     requested_at: string | null;
     requested_by: string;
     expires_at: string | null;
@@ -701,5 +701,7 @@ export interface CommandSetList {
     time_zone: string;
     utc_offset_sec: number;
     definitions_delivered: boolean;
+    /** Whether the agent synced within three check intervals and 600 seconds; while false its run requests wait without a worker of the central. */
+    agent_responding: boolean;
     sets: CommandSet[] | null;
 }

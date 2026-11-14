@@ -13,7 +13,14 @@ import { Alert, EmptyState, ErrorAlert, Loading } from '../../components/StateVi
 import { Table, TBody, Td, Th, THead, Tr } from '../../components/Table';
 import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
-import type { AgentDetail, CommandRun, CommandRunDetail, CommandRunItem, CommandSet } from '../../types';
+import type {
+    AgentDetail,
+    CommandRequest,
+    CommandRun,
+    CommandRunDetail,
+    CommandRunItem,
+    CommandSet,
+} from '../../types';
 import { errorMessage, formatDateTime } from '../../utils/format';
 import { codedText, codedTexts } from '../../utils/serverText';
 import { deleteCommandSet, discardCommandRequest, importCommandSets, listCommandSets, requestCommandRun } from '../api';
@@ -153,13 +160,14 @@ export function CommandSetsSection({ agent, reload: reloadPage }: { agent: Agent
                                                 <div className='flex flex-col items-start gap-1'>
                                                     <Badge tone='accent' icon='schedule_send'>
                                                         {t(
-                                                            `commandSets.requestState.${s.request.state === 'delivered' ? 'delivered' : 'pending'}`
+                                                            `commandSets.requestState.${requestStateKey(s.request, data.agent_responding)}`
                                                         )}
                                                     </Badge>
                                                     <span className='text-muted'>
                                                         {formatDateTime(s.request.requested_at)}
                                                     </span>
-                                                    {s.request.state === 'pending' && (
+                                                    {(s.request.state === 'queued' ||
+                                                        s.request.state === 'pending') && (
                                                         <Button
                                                             size='sm'
                                                             variant='ghost'
@@ -264,6 +272,23 @@ export function CommandSetsSection({ agent, reload: reloadPage }: { agent: Agent
 interface ImportRow {
     checked: boolean;
     name: string;
+}
+
+// The badge of an unanswered run request: a queued request waits for a free
+// worker of the central, or for the agent to connect while the agent is not
+// responding (it then takes no worker).
+function requestStateKey(
+    request: CommandRequest,
+    agentResponding: boolean
+): 'queued' | 'queuedAgentSilent' | 'pending' | 'delivered' {
+    switch (request.state) {
+        case 'queued':
+            return agentResponding ? 'queued' : 'queuedAgentSilent';
+        case 'pending':
+            return 'pending';
+        default:
+            return 'delivered';
+    }
 }
 
 function ImportDialog({
