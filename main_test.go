@@ -635,3 +635,38 @@ func TestHelpUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// The --help of the list commands states the default and the range of
+// --limit and --offset (the central holds a value outside the range at its
+// nearest end).
+func TestListFlagsHelpStatesDefaultAndRange(t *testing.T) {
+	var cli CLI
+	var out bytes.Buffer
+	p := testParser(t, &cli, &out)
+	for _, tc := range []struct {
+		path []string
+		want []string
+	}{
+		{[]string{"ctl", "history"}, []string{"--limit=50", "Maximum rows (1 to 500)", "--offset=0", "Rows to skip (0 to 10000000)"}},
+		{[]string{"ctl", "detections", "list"}, []string{"--limit=100", "Maximum rows (1 to 500)", "--offset=0", "Rows to skip (0 to 1000000)"}},
+		{[]string{"ctl", "command-sets", "runs"}, []string{"--limit=50", "Maximum rows (1 to 500)"}},
+	} {
+		out.Reset()
+		func() {
+			defer func() {
+				if v := recover(); v != nil {
+					if _, ok := v.(exitCalled); !ok {
+						panic(v)
+					}
+				}
+			}()
+			_, _ = p.Parse(append(append([]string{}, tc.path...), "--help"))
+		}()
+		help := strings.Join(strings.Fields(out.String()), " ")
+		for _, w := range tc.want {
+			if !strings.Contains(help, w) {
+				t.Errorf("help of %q lacks %q:\n%s", tc.path, w, out.String())
+			}
+		}
+	}
+}

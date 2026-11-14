@@ -894,8 +894,8 @@ type CtlDetectionsListCmd struct {
 	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
 	Acknowledged string `help:"true or false" enum:",true,false" default:""`
 	Suppressed   string `help:"true or false" enum:",true,false" default:""`
-	Limit        int    `help:"Maximum rows" default:"100"`
-	Offset       int    `help:"Rows to skip"`
+	Limit        int    `help:"Maximum rows (1 to 500)" default:"100"`
+	Offset       int    `help:"Rows to skip (0 to 1000000)" default:"0"`
 }
 type CtlDetectionsShowCmd struct {
 	Agent int64 `arg:""`
@@ -922,7 +922,7 @@ func parseCtlTime(flag, s string) (string, error) {
 			return t.UTC().Format(time.RFC3339), nil
 		}
 	}
-	return "", NewExitErrorf(ExitArgument, "invalid --%s %q: use \"YYYY-MM-DD HH:MM:SS\", \"YYYY-MM-DD HH:MM\", YYYY-MM-DD (local time) or RFC3339", flag, s)
+	return "", NewExitErrorf(ExitArgument, "invalid --%s %q: use \"YYYY-MM-DD HH:MM:SS\", \"YYYY-MM-DD HH:MM\", YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM, YYYY-MM-DD (local time) or RFC3339", flag, s)
 }
 
 func (c *CtlDetectionsListCmd) Run(p *CtlCmd) error {
@@ -1166,8 +1166,8 @@ func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/cer
 
 type CtlHistoryCmd struct {
 	Category string `help:"account, rule, token, certificate, rejected, template, suppression, detection, config or command"`
-	Limit    int    `help:"Maximum rows" default:"50"`
-	Offset   int    `help:"Rows to skip"`
+	Limit    int    `help:"Maximum rows (1 to 500)" default:"50"`
+	Offset   int    `help:"Rows to skip (0 to 10000000)" default:"0"`
 }
 
 func (c *CtlHistoryCmd) Run(p *CtlCmd) error {

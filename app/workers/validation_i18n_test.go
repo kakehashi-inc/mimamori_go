@@ -94,6 +94,13 @@ func TestValidationListsCarryProblems(t *testing.T) {
 	if got := codesOf(out.ErrorsI18n); len(got) != 1 || got[0] != "rule.content.wrong_type" {
 		t.Errorf("rules validate decode: %q", got)
 	}
+	// Content that is not an object (or none): 200 with the problem.
+	for _, body := range []map[string]any{{"content": nil}, {"content": []any{}}, {"content": "x"}, {}} {
+		out = checkProblems(t, "rules validate not an object", e.cli("POST", "/rules/validate", body), 200)
+		if got := codesOf(out.ErrorsI18n); len(got) != 1 || got[0] != "rule.content.not_object" {
+			t.Errorf("rules validate %v: %q", body, got)
+		}
+	}
 	out = checkProblems(t, "rules validate valid", e.cli("POST", "/rules/validate", map[string]any{"content": map[string]any{}}), 200)
 	if len(out.Errors) != 0 {
 		t.Errorf("rules validate valid: %q", out.Errors)

@@ -112,6 +112,16 @@ func TestCtlParseTime(t *testing.T) {
 	if got, err := parseCtlTime("to", ""); got != "" || err != nil {
 		t.Errorf("empty value = %q, %v", got, err)
 	}
+	// The refusal names every form that is accepted.
+	_, err := parseCtlTime("from", "garbage")
+	for _, form := range []string{`"YYYY-MM-DD HH:MM:SS"`, `"YYYY-MM-DD HH:MM"`, "YYYY-MM-DDTHH:MM:SS,", "YYYY-MM-DDTHH:MM,", "YYYY-MM-DD (local time)", "RFC3339"} {
+		if err == nil || !strings.Contains(err.Error(), form) {
+			t.Errorf("the refusal %v does not name %s", err, form)
+		}
+	}
+	if len(ctlTimeLayouts) != 5 {
+		t.Errorf("%d layouts: name every form in the refusal and in the help", len(ctlTimeLayouts))
+	}
 }
 
 // AGENT_ID:ID must be two integers.

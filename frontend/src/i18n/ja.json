@@ -395,7 +395,7 @@
         "count": "回数"
     },
     "accountErrors": {
-        "emailInvalid": "name@example.com のような 1 つのメールアドレスを入力してください（254 文字まで。空白と \" < > , は使えません）。",
+        "emailInvalid": "name@example.com のような 1 つのメールアドレスを入力してください（254 バイトまで。空白と \" < > , は使えません）。",
         "displayNameInvalid": "表示名は 1〜64 文字で入力してください（制御文字は使えません）。",
         "emailUnchanged": "現在のメールアドレスと同じです。",
         "wrongCurrentPassword": "現在のパスワードが正しくありません。",
@@ -590,7 +590,7 @@
             "email_duplicate": "このメールアドレスは、ほかのアカウントで使われています。",
             "email_invalid": "メールアドレスが正しくありません。",
             "email_required": "メールアドレスを入力してください。",
-            "email_too_long": "メールアドレスは {{max}} 文字以内にしてください。",
+            "email_too_long": "メールアドレスは {{max}} バイト以内にしてください。",
             "email_unchanged": "現在のメールアドレスと同じです。",
             "language_invalid": "表示言語は auto、en、ja のいずれかにしてください。",
             "password_too_long": "パスワードが長すぎます。",

@@ -45,7 +45,7 @@ Commands for the central. Run them on the central host.
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. `ADDRESS` is the e-mail address used to log in; `NAME` is the name shown on the screens. `--language` defaults to `auto`. Only while no administrator exists. The password is read from the terminal or the first line of standard input |
 | `central reset-password --email ADDRESS` | Reset the password of the administrator with this e-mail address (case is ignored), enable the account and invalidate its sessions, trusted browsers and pending verification codes |
 | `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
-| `central config get NAME` | Print the value of one item |
+| `central config get NAME` | Print the value of one item. `smtp.password` is not displayed (`smtp.password is not displayed`, exit code 2; `central config list` shows whether it is set) |
 | `central config set NAME [VALUE]` | Set one item. Lists are comma separated. `smtp.password` is read from the terminal or standard input |
 | `central config unset NAME` | Remove one item so its default applies again |
 
@@ -121,7 +121,7 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error. `--agent` 0 or less means all agents. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error that names these forms. `--agent` 0 or less means all agents. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 and is held between 0 and 1000000 |
 | `ctl detections show AGENT_ID ID` | Show a detection |
 | `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be positive integers written with digits only, with nothing after them. When any of the given detections does not exist, nothing is acknowledged, the missing ones are named, and the exit code is 2 (as for any object that does not exist). Detections that are already acknowledged count as existing |
 
@@ -190,7 +190,7 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | Command | Description |
 | --- | --- |
 | `ctl certs status` | Show the CA and server certificate status |
-| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command` |
+| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0 and is held between 0 and 10000000). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command` |
 
 ## version
 

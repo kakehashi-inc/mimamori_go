@@ -45,7 +45,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する。`ADDRESS` はログインに使うメールアドレス、`NAME` は画面に表示する名前。`--language` の既定は `auto`。管理者が 1 人もいない場合だけ。パスワードは端末または標準入力の 1 行目から読む |
 | `central reset-password --email ADDRESS` | このメールアドレス（大文字と小文字は区別しない）の管理者のパスワードを再設定し、アカウントを有効にして、セッション、信頼済みのブラウザ、送信済みの確認コードを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |
-| `central config get NAME` | 1 項目の値を表示する |
+| `central config get NAME` | 1 項目の値を表示する。`smtp.password` は表示しない（`smtp.password is not displayed`、終了コード 2。設定済みかどうかは `central config list` が示す） |
 | `central config set NAME [VALUE]` | 1 項目を設定する。一覧はカンマ区切り。`smtp.password` は端末または標準入力から読む |
 | `central config unset NAME` | 1 項目を既定値に戻す |
 
@@ -121,7 +121,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type T] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は、これらの形を示す引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 で、0 から 1000000 の範囲に収められる |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
 | `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は数字だけで書いた正の整数で、後ろに何も付けない。指定した検知のどれかが存在しない場合は、どれも確認済みにせず、存在しないものを示して終了コード 2 で終わる（他のコマンドで対象が存在しない場合と同じ）。確認済みの検知は存在するものとして扱う |
 
@@ -190,7 +190,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl certs status` | 独自 CA とサーバー証明書の状態を表示する |
-| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config`、`command` |
+| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0 で、0 から 10000000 の範囲に収められる）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config`、`command` |
 
 ## version
 

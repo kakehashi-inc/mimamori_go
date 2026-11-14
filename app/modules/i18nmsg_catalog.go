@@ -16,7 +16,7 @@ var msgCatalog = map[string]msgDef{
 	"account.email_duplicate":                       {en: "an account with this e-mail address already exists"},
 	"account.email_invalid":                         {en: "the e-mail address is not valid"},
 	"account.email_required":                        {en: "an e-mail address is required"},
-	"account.email_too_long":                        {en: "the e-mail address must be at most {{max}} characters"},
+	"account.email_too_long":                        {en: "the e-mail address must be at most {{max}} bytes"},
 	"account.email_unchanged":                       {en: "the e-mail address is unchanged"},
 	"account.language_invalid":                      {en: "language must be auto, en or ja"},
 	"account.last_admin_delete":                     {en: "the last enabled administrator cannot be deleted", admin: true},

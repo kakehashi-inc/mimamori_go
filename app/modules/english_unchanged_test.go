@@ -14,9 +14,10 @@ import (
 // The inputs and expected texts of TestEnglishUnchanged. The expected texts
 // were produced by running the validators of the version before they were
 // given coded messages (commit c7fa753) on these inputs: the English of the
-// coded messages must be exactly the same. The time limit of a command is
-// the exception: its range starts at 0 (no limit), so 0 is valid and the
-// text of a value out of range names 0.
+// coded messages must be exactly the same. Two texts are exceptions: the time
+// limit of a command, whose range starts at 0 (no limit), so 0 is valid and
+// the text of a value out of range names 0; and email/2, which names bytes,
+// the unit in which the limit of an address counts.
 
 // englishLong is the long value of the inputs below; in the expected texts
 // it is written as englishLongMark.
@@ -321,7 +322,7 @@ var englishWant = map[string][]string{
 	"email/1":             {"an e-mail address is required"},
 	"email/10":            {"the e-mail address is not valid"},
 	"email/11":            {"the e-mail address is not valid"},
-	"email/2":             {"the e-mail address must be at most 254 characters"},
+	"email/2":             {"the e-mail address must be at most 254 bytes"},
 	"email/3":             {"the e-mail address must not contain spaces, control characters or \" < > ,"},
 	"email/4":             {"the e-mail address must not contain spaces, control characters or \" < > ,"},
 	"email/5":             {"the e-mail address must not contain spaces, control characters or \" < > ,"},

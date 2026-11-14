@@ -395,7 +395,7 @@
         "count": "Count"
     },
     "accountErrors": {
-        "emailInvalid": "Enter a single e-mail address such as name@example.com (up to 254 characters, without spaces or the characters \" < > ,).",
+        "emailInvalid": "Enter a single e-mail address such as name@example.com (up to 254 bytes, without spaces or the characters \" < > ,).",
         "displayNameInvalid": "Enter a display name of 1 to 64 characters without control characters.",
         "emailUnchanged": "This is already your current e-mail address.",
         "wrongCurrentPassword": "The current password is incorrect.",
@@ -590,7 +590,7 @@
             "email_duplicate": "an account with this e-mail address already exists",
             "email_invalid": "the e-mail address is not valid",
             "email_required": "an e-mail address is required",
-            "email_too_long": "the e-mail address must be at most {{max}} characters",
+            "email_too_long": "the e-mail address must be at most {{max}} bytes",
             "email_unchanged": "the e-mail address is unchanged",
             "language_invalid": "language must be auto, en or ja",
             "password_too_long": "password is too long",

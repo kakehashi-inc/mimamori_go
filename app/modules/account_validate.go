@@ -8,7 +8,7 @@ import (
 )
 
 // MaxEmailLength and MaxDisplayNameLength bound the account fields (the
-// display name is counted in characters).
+// e-mail address is counted in bytes, the display name in characters).
 const (
 	MaxEmailLength       = 254
 	MaxDisplayNameLength = 64

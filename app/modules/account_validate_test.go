@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mimamori/app/models"
 )
@@ -46,6 +47,17 @@ func TestValidateEmail(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Errorf("ValidateEmail(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
 		}
+	}
+	// The limit counts bytes, and the refusal says so: 130 characters of
+	// two bytes each make 270 bytes.
+	wide := strings.Repeat("\u00e9", 130) + "@x.example"
+	if _, err := ValidateEmail(wide); err == nil || err.Error() != "the e-mail address must be at most 254 bytes" {
+		t.Errorf("an address of %d characters and %d bytes: %v", utf8.RuneCountInString(wide), len(wide), err)
+	}
+	if fits := strings.Repeat("\u00e9", 100) + "@x.example"; len(fits) > MaxEmailLength {
+		t.Fatalf("test address of %d bytes", len(fits))
+	} else if _, err := ValidateEmail(fits); err != nil {
+		t.Errorf("an address of %d bytes: %v", len(fits), err)
 	}
 }
 
