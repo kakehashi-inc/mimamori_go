@@ -275,6 +275,7 @@ var msgCatalog = map[string]msgDef{
 	"rule.content.wrong_type":                       {en: "invalid rule content: {{field}} must be {{expected}}, not {{found}}", admin: true},
 	"rule.diff_from_to":                             {en: "from and to are required"},
 	"rule.in_use":                                   {en: "the rule is applied to an agent and cannot be deleted", admin: true},
+	"rule.name_control":                             {en: "the rule name must not contain control characters", admin: true},
 	"rule.name_invalid":                             {en: "rule name must be 1-100 characters", admin: true},
 	"rule.name_taken":                               {en: "a rule with this name already exists", admin: true},
 	"rule.not_found":                                {en: "rule not found"},

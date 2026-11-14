@@ -193,6 +193,9 @@ const (
 	MinScanInterval  = 60
 	MaxScanInterval  = 7 * 24 * 3600
 	MaxTargetLength  = 512
+	// MaxRuleNameLength bounds the name of a monitoring rule, in
+	// characters.
+	MaxRuleNameLength = 100
 	// AuditBacklogLimit is the backlog size the agent sets (-b).
 	AuditBacklogLimit = 8192
 	// MaxScanEntries bounds the number of entries one scan visits.

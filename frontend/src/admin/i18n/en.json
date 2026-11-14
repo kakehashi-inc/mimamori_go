@@ -772,6 +772,7 @@
                 "wrong_type": "invalid rule content: {{field}} must be {{expected}}, not {{found}}"
             },
             "in_use": "the rule is applied to an agent and cannot be deleted",
+            "name_control": "the rule name must not contain control characters",
             "name_invalid": "rule name must be 1-100 characters",
             "name_taken": "a rule with this name already exists",
             "rule_version_not_found": "rule version not found",

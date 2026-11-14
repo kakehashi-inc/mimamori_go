@@ -470,7 +470,7 @@ interface RuleCreate {
   - 書き込み可能な状態: `writable.base` と `writable.category`
   - 実行されるファイル: `writable.base` と `writable.allowed_paths` と `exec_files.extensions` と `exec_files.other_category`
 - 入力の検証（違反は 400）:
-  - 監視ルール名は制御文字を除く 1〜100 文字です。
+  - 監視ルール名は、前後の空白を除いて 1〜100 文字です（範囲の外は `rule name must be 1-100 characters`）。制御文字（Unicode の制御文字。タブ、改行、NUL、DEL、C1 制御文字を含む。表示名と同じ）を含む名前は `the rule name must not contain control characters`（コード `rule.name_control`）です。
   - `check_interval_sec` は 0 または 10〜3600、`scan_interval_sec` は 0 または 60〜604800 です。
   - `users`、`read.dirs`、`network.executables`、`writable.allowed_paths`、`exec_files.legit` は各 200 件まで、`exec_files.extensions` は 50 件までです。
   - `writable.base` は絶対パスで、`/` は使えません。`read.dirs` と `network.executables` も絶対パスです。

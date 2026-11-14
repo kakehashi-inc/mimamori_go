@@ -9,15 +9,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"mimamori/app/models"
 	"mimamori/app/modules"
 )
 
-var (
-	ruleNameRe  = regexp.MustCompile(`^[^\x00-\x1f]{1,100}$`)
-	tokenNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-)
+var tokenNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ruleNameProblem returns the refusal of a rule name (without surrounding
+// white space): it is 1 to modules.MaxRuleNameLength characters and has no
+// control character (unicode.IsControl, as display names).
+func ruleNameProblem(name string) error {
+	if name == "" || utf8.RuneCountInString(name) > modules.MaxRuleNameLength {
+		return modules.M("rule.name_invalid")
+	}
+	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return modules.M("rule.name_control")
+	}
+	return nil
+}
 
 func itoa(v int) string     { return strconv.Itoa(v) }
 func itoa64(v int64) string { return strconv.FormatInt(v, 10) }
@@ -297,8 +309,8 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
-	if !ruleNameRe.MatchString(in.Name) {
-		writeError(w, http.StatusBadRequest, modules.M("rule.name_invalid"))
+	if err := ruleNameProblem(in.Name); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	var content *modules.RuleContent
