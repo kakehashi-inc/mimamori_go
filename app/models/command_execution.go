@@ -23,15 +23,17 @@ type CommandExecution struct {
 	FinishedAt       int64
 	RunningPosition  int
 	RunningStartedAt int64
+	RunningPgid      int
+	RunningBoot      int64
 }
 
 const commandExecutionCols = `run_uid, set_id, set_revision, request_id, run_trigger, scheduled_for, started_at, finished_at,
-	running_position, running_started_at`
+	running_position, running_started_at, running_pgid, running_boot`
 
 func scanCommandExecution(s rowScanner) (*CommandExecution, error) {
 	e := &CommandExecution{}
 	if err := s.Scan(&e.RunUID, &e.SetID, &e.SetRevision, &e.RequestID, &e.Trigger, &e.ScheduledFor, &e.StartedAt, &e.FinishedAt,
-		&e.RunningPosition, &e.RunningStartedAt); err != nil {
+		&e.RunningPosition, &e.RunningStartedAt, &e.RunningPgid, &e.RunningBoot); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -44,7 +46,7 @@ var ErrAlreadyExecuted = errors.New("the run request was already executed")
 // InsertCommandExecution records the start of a run. It returns
 // ErrAlreadyExecuted when the request ID was already used.
 func InsertCommandExecution(db Writer, e *CommandExecution) error {
-	_, err := db.Exec(`INSERT INTO command_executions (`+commandExecutionCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, -1, 0)`,
+	_, err := db.Exec(`INSERT INTO command_executions (`+commandExecutionCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, -1, 0, 0, 0)`,
 		e.RunUID, e.SetID, e.SetRevision, e.RequestID, e.Trigger, e.ScheduledFor, e.StartedAt, e.FinishedAt)
 	if isUniqueViolation(err) {
 		return ErrAlreadyExecuted
@@ -59,10 +61,17 @@ func SetCommandExecutionRunning(db Writer, runUID string, position int, startedA
 		position, startedAt, runUID)
 }
 
+// SetCommandExecutionGroup records the process group of the running command
+// and the boot time of the host.
+func SetCommandExecutionGroup(db Writer, runUID string, pgid int, boot int64) error {
+	return execOne(db, `UPDATE command_executions SET running_pgid = ?, running_boot = ? WHERE run_uid = ?`, pgid, boot, runUID)
+}
+
 // ClearCommandExecutionRunning records that no command of the run is
 // running (its result was queued).
 func ClearCommandExecutionRunning(db Writer, runUID string) error {
-	return execOne(db, `UPDATE command_executions SET running_position = -1, running_started_at = 0 WHERE run_uid = ?`, runUID)
+	return execOne(db, `UPDATE command_executions SET running_position = -1, running_started_at = 0, running_pgid = 0, running_boot = 0
+		WHERE run_uid = ?`, runUID)
 }
 
 // FinishCommandExecution records the end of a run.

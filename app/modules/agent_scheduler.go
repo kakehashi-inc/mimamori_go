@@ -465,6 +465,14 @@ func (s *agentScheduler) receive(reqs []CommandRunRequest) []CommandRequestAck {
 	return acks
 }
 
+// hold keeps a set from starting while the process group pgid exists (a run
+// of it that survived the agent).
+func (s *agentScheduler) hold(setID int64, pgid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held[setID] = pgid
+}
+
 // setWorkers sets the agent's worker count.
 func (s *agentScheduler) setWorkers(n int) {
 	s.mu.Lock()

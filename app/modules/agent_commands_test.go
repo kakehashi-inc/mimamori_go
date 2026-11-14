@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -972,5 +973,132 @@ func TestScheduledRunsCarrySkipped(t *testing.T) {
 	}
 	if n, from, to := skipped(2); n != 0 || from != 0 || to != 0 {
 		t.Fatalf("every 15 minutes: %d %d %d", n, from, to)
+	}
+}
+
+// startSurvivor starts "sleep 60" in a session of its own (a process group
+// that outlived an agent) and returns it; the test ends it and reaps it.
+func startSurvivor(t *testing.T) *os.Process {
+	t.Helper()
+	sleep, err := LookupCommand("sleep")
+	if err != nil {
+		t.Skip("sleep is not available")
+	}
+	p, err := os.StartProcess(sleep, []string{"sleep", "60"}, &os.ProcAttr{Sys: &syscall.SysProcAttr{Setsid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = p.Kill()
+		_, _ = p.Wait()
+	})
+	return p
+}
+
+// TestSurvivingGroupKeepsSetFromStarting (STOP-2): a run found unfinished at
+// start whose recorded process group still exists in the same boot is
+// reported interrupted, and its set does not start (also not for a manual
+// request) until the group is gone; the group is never signalled. A record
+// of another boot, or of a group that is gone, keeps nothing.
+func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
+	requireBash(t)
+	boot, err := bootTime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	survivor := startSurvivor(t)
+	// A process group that is gone: a process that ended and was reaped.
+	gone, err := os.StartProcess("/bin/sh", []string{"sh", "-c", "exit 0"}, &os.ProcAttr{Sys: &syscall.SysProcAttr{Setsid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gone.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
+		testSet(3, PurposeRunOnly, "echo third")))
+	for _, e := range []struct {
+		uid  string
+		set  int64
+		pgid int
+		boot int64
+	}{{"alive", 1, survivor.Pid, boot}, {"other-boot", 2, survivor.Pid, boot - 3600}, {"gone", 3, gone.Pid, boot}} {
+		insertExecution(t, rt.DB, e.uid, 0, 0)
+		execOnDB(t, rt.DB, fmt.Sprintf(`UPDATE command_executions SET set_id = %d, running_position = 0, running_pgid = %d, running_boot = %d
+			WHERE run_uid = '%s'`, e.set, e.pgid, e.boot, e.uid))
+	}
+	var signalled atomic.Int32
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		if sig != 0 && (pid == -survivor.Pid || pid == survivor.Pid) {
+			signalled.Add(1)
+		}
+		return syscall.Kill(pid, sig)
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+	rt = NewAgentRuntime(rt.DB, tr, nil)
+	rt.SetWorkers(2)
+	rt.link.defaultInterval = 1
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
+		testSet(3, PurposeRunOnly, "echo third"))
+	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	newRuns := func(set int64) int {
+		var n int
+		_ = rt.DB.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE set_id = ? AND request_id > 0 AND finished_at > 0`, set).Scan(&n)
+		return n
+	}
+	waitFor(t, "the sets of the void records", func() bool { return newRuns(2) == 1 && newRuns(3) == 1 })
+	time.Sleep(2 * time.Second)
+	if n := newRuns(1); n != 0 {
+		t.Fatalf("the set of the surviving group started %d time(s) while the group exists", n)
+	}
+	if !processAlive(survivor.Pid) || signalled.Load() != 0 {
+		t.Fatalf("the surviving group was signalled (alive %v, %d signals)", processAlive(survivor.Pid), signalled.Load())
+	}
+	// The group ends: the set starts.
+	_ = survivor.Kill()
+	_, _ = survivor.Wait()
+	waitFor(t, "the set after the group ended", func() bool { return newRuns(1) == 1 })
+	close(stop)
+	<-done
+	interrupted := map[string]bool{}
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished && r.Reason == ReasonInterrupted {
+			interrupted[r.RunUID] = true
+		}
+	}
+	if !interrupted["alive"] || !interrupted["other-boot"] || !interrupted["gone"] {
+		t.Fatalf("runs found unfinished must be reported interrupted: %v", interrupted)
+	}
+}
+
+// TestRunRecordsItsProcessGroup: while a command runs, its process group and
+// the boot time are recorded with the run; after its report nothing is.
+func TestRunRecordsItsProcessGroup(t *testing.T) {
+	requireBash(t)
+	rt := newCommandRuntime(t, &cmdTransport{})
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "echo $$ > "+pidFile+"; sleep 1")))
+	done := runInBackground(rt, &commandJob{def: rt.sched.valid[1], trigger: TriggerManual, requestID: 3})
+	pid := pidFrom(t, pidFile)
+	boot, _ := bootTime()
+	var e *models.CommandExecution
+	waitFor(t, "the recorded group", func() bool {
+		e, _ = models.CommandExecutionByRequest(rt.DB.Read(), 3)
+		return e != nil && e.RunningPgid != 0
+	})
+	if e.RunningPgid != pid || !sameBoot(e.RunningBoot, boot) {
+		t.Fatalf("recorded group %d boot %d, want %d and about %d", e.RunningPgid, e.RunningBoot, pid, boot)
+	}
+	returned(t, done)
+	if e, _ = models.CommandExecutionByRequest(rt.DB.Read(), 3); e.RunningPgid != 0 || e.RunningBoot != 0 {
+		t.Fatalf("after the run: %+v", e)
 	}
 }

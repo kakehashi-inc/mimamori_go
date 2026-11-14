@@ -250,6 +250,11 @@ const (
 	// CommandKillGrace is the time between SIGTERM and SIGKILL when a
 	// command passes its time limit or the agent stops.
 	CommandKillGrace = 60 * time.Second
+	// BootTimeSlack is how far two boot times of the host (the current time
+	// less the uptime) may differ and still name the same boot: the record of
+	// a running command's process group holds only for the boot it was made
+	// in.
+	BootTimeSlack = 60 * time.Second
 	// RunRecordRetryFirst is the first wait before a record of a run (its
 	// start, a command's result, its end) that could not be written is
 	// written again; each further wait doubles, up to RunRecordRetryMax.

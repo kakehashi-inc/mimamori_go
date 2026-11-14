@@ -63,3 +63,26 @@ func StopProcess(lockPath string, timeout time.Duration) (bool, error) {
 	}
 	return true, NewExitErrorf(ExitTimeout, "process %d did not stop within %s", pid, timeout)
 }
+
+// bootTime returns when the host booted (Unix seconds): the current time less
+// the uptime of the kernel (sysinfo; nothing is read from /proc). Successive
+// calls may differ by a second.
+func bootTime() (int64, error) {
+	var info syscall.Sysinfo_t
+	if err := syscall.Sysinfo(&info); err != nil {
+		return 0, err
+	}
+	return time.Now().Unix() - int64(info.Uptime), nil
+}
+
+// sameBoot reports whether two boot times are those of the same boot of the
+// host: they differ by at most BootTimeSlack (the clock may have been set
+// in between; a new boot lies at least the whole uptime of the previous one
+// later).
+func sameBoot(a, b int64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return a > 0 && b > 0 && time.Duration(d)*time.Second <= BootTimeSlack
+}

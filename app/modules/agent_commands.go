@@ -307,7 +307,8 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 			break
 		}
 		run.cur = startCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
-			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add})
+			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add,
+			Started: func(pgid int) { rt.recordGroup(def, uid, i, pgid) }})
 		run.cur.wait()
 		res := run.cur.result(run.collect)
 		run.res = res
@@ -361,6 +362,20 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	}
 	rt.logf("command set %q finished: %s", def.Name, RunState(run.kinds))
 	return true
+}
+
+// recordGroup records the process group of the command that started and the
+// boot time of the host with the run, so that after a forced end of the
+// agent the set does not start again while the group still exists (one
+// attempt: the command runs already; a failure is logged).
+func (rt *AgentRuntime) recordGroup(def *CommandSetDef, uid string, pos, pgid int) {
+	boot, err := bootTime()
+	if err == nil {
+		err = rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionGroup(tx, uid, pgid, boot) })
+	}
+	if err != nil {
+		rt.logf("command set %q: recording the process group of command %d of run %s failed: %v", def.Name, pos+1, uid, err)
+	}
 }
 
 // closeAfterPanic closes a run whose processing panicked. The command that
@@ -441,7 +456,10 @@ func (rt *AgentRuntime) storeRunRecord(what string, write func() error) error {
 // gets an interrupted result (the central keeps a result already reported
 // for its position). The report of a run is queued and the run is recorded
 // as finished in one transaction of the outbox, so that a run is never
-// reported twice nor finished without its report.
+// reported twice nor finished without its report. When the process group
+// recorded for the running command still exists in the same boot of the
+// host, the set counts as running: none of its entries starts until the
+// group is gone. The group is never signalled.
 func (rt *AgentRuntime) recoverInterruptedRuns() {
 	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
 	if err != nil {
@@ -449,7 +467,13 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 		return
 	}
 	now := rt.now().Unix()
+	boot, bootErr := bootTime()
 	for _, e := range runs {
+		if e.RunningPgid > 0 && bootErr == nil && sameBoot(e.RunningBoot, boot) && groupExists(e.RunningPgid) {
+			rt.sched.hold(e.SetID, e.RunningPgid)
+			rt.logf("command set run %s: its command still runs as process group %d; the set does not start until that group is gone",
+				e.RunUID, e.RunningPgid)
+		}
 		rep := CommandRunReport{
 			RunUID: e.RunUID, SetID: e.SetID, SetRevision: e.SetRevision, Trigger: e.Trigger, RequestID: e.RequestID,
 			ScheduledFor: e.ScheduledFor, StartedAt: e.StartedAt, Finished: true, FinishedAt: now,
