@@ -10,13 +10,19 @@ import (
 )
 
 type configItemJSON struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Value   string `json:"value"`   // empty for the secret item
-	IsSet   bool   `json:"is_set"`  // the secret item has a value
-	Default string `json:"default"` // empty for the secret item
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Value string `json:"value"`  // empty for the secret item
+	IsSet bool   `json:"is_set"` // the secret item has a value
+	// Default is the value when the item is not stored (empty for the secret
+	// item); the port of the mail server is the one of the stored security.
+	Default string `json:"default"`
 	Stored  bool   `json:"stored"`  // false: the default applies
 	Restart bool   `json:"restart"` // takes effect when the central restarts
+	// Min and Max are the range of an item of kind int, both accepted (the
+	// validation uses the same); items of other kinds have none.
+	Min *int `json:"min,omitempty"`
+	Max *int `json:"max,omitempty"`
 	// Pending is true when a restart item's stored value differs from the
 	// value the running central uses.
 	Pending bool `json:"pending"`
@@ -36,7 +42,6 @@ func (c *core) configOut() (*configJSON, error) {
 	if err != nil {
 		return nil, err
 	}
-	def := modules.DefaultCentralConfig()
 	running := c.conf()
 	out := &configJSON{Items: []configItemJSON{}}
 	for i := range modules.ConfigFields {
@@ -45,7 +50,11 @@ func (c *core) configOut() (*configJSON, error) {
 		if f.Secret() {
 			item.IsSet = f.Value(cfg) != ""
 		} else {
-			item.Value, item.Default = f.Value(cfg), f.Value(def)
+			item.Value, item.Default = f.Value(cfg), f.Default(cfg)
+		}
+		if f.Kind == "int" {
+			lo, hi := f.Min, f.Max
+			item.Min, item.Max = &lo, &hi
 		}
 		if f.Restart && f.Value(cfg) != f.Value(running) {
 			item.Pending = true

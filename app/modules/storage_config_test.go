@@ -6,6 +6,8 @@ import (
 	"net/smtp"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -155,6 +157,91 @@ func TestCentralConfigValidation(t *testing.T) {
 	}
 	if got := strings.Join(cfg.ServerNames, ","); got != "2001:db8::1,192.0.2.10,central.example.com" {
 		t.Errorf("server_names stored as %q", got)
+	}
+}
+
+// TestConfigIntBounds checks the range of every number item: it holds the
+// default, the validation accepts both ends and refuses the number below
+// and the number above with a message that names the item, and no other
+// kind has a range.
+func TestConfigIntBounds(t *testing.T) {
+	// codes gives the codes of the problems that name each item.
+	codes := func(ps []Problem) map[string][]string {
+		out := map[string][]string{}
+		for _, p := range ps {
+			if n, ok := p.Params["name"].(string); ok {
+				out[n] = append(out[n], p.Code)
+			}
+		}
+		return out
+	}
+	ints := 0
+	for i := range ConfigFields {
+		f := &ConfigFields[i]
+		if f.Kind != "int" {
+			if f.Min != 0 || f.Max != 0 {
+				t.Errorf("%s (%s) has a range %d to %d", f.Name, f.Kind, f.Min, f.Max)
+			}
+			continue
+		}
+		ints++
+		def, _ := strconv.Atoi(f.Default(DefaultCentralConfig()))
+		if f.Min < 1 || f.Min > def || def > f.Max {
+			t.Errorf("%s: min %d default %d max %d", f.Name, f.Min, def, f.Max)
+		}
+		with := func(v int) (*CentralConfig, error) {
+			c := DefaultCentralConfig()
+			// The renewal stays shorter than the validity, so that only the
+			// item's own range decides.
+			c.TokenValidDays, c.TokenRenewBeforeDays = 36500, 1
+			return c, f.set(c, strconv.Itoa(v))
+		}
+		for _, v := range []int{f.Min, f.Max} {
+			c, err := with(v)
+			if err != nil {
+				t.Errorf("%s = %d: %v", f.Name, v, err)
+				continue
+			}
+			for _, code := range codes(c.validationProblems())[f.Name] {
+				if code != "config.renew_before" {
+					t.Errorf("%s = %d refused: %s", f.Name, v, code)
+				}
+			}
+		}
+		for _, v := range []int{f.Min - 1, f.Max + 1} {
+			c, err := with(v)
+			var got []string
+			if err != nil {
+				if m := AsMsg(err); m.Params["name"] == f.Name {
+					got = []string{m.Code}
+				}
+			} else {
+				got = codes(c.validationProblems())[f.Name]
+			}
+			want := map[bool]string{true: "config.int_max", false: "config.int_min"}[v > f.Max]
+			if v < 1 {
+				want = "config.not_positive_int"
+			}
+			if !slices.Contains(got, want) {
+				t.Errorf("%s = %d: refused with %q, want %q", f.Name, v, got, want)
+			}
+		}
+	}
+	if ints != 11 {
+		t.Errorf("%d number items, want 11", ints)
+	}
+	// The port of the mail server is the one of the security.
+	smtp, _ := FindConfigField("smtp.port")
+	for security, want := range map[string]string{"starttls": "587", "tls": "465", "none": "25"} {
+		c := DefaultCentralConfig()
+		c.SMTP.Security, c.SMTP.Port = security, 2525
+		if got := smtp.Default(c); got != want {
+			t.Errorf("smtp.port default with %s: %s, want %s", security, got, want)
+		}
+	}
+	sec, _ := FindConfigField("smtp.security")
+	if got := sec.Default(&CentralConfig{SMTP: SMTPConfig{Security: "none"}}); got != "starttls" {
+		t.Errorf("smtp.security default %q, want starttls", got)
 	}
 }
 

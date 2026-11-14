@@ -625,15 +625,16 @@ interface ConfigItem {
   kind: 'string' | 'int' | 'bool' | 'list' | 'secret';
   value: string;                      // 保存した値または既定値（一覧はカンマ区切り、真偽値は "true" / "false"。secret は常に ""）
   is_set: boolean;                    // secret に値があるか
-  default: string;                    // 既定値（secret は ""）
+  default: string;                    // 保存していないときの値（secret は ""）。smtp.port は保存している smtp.security のポート（starttls 587、tls 465、none 25）
   stored: boolean;                    // false は既定値で動作中
   restart: boolean;                   // true はセントラルの再起動後に反映
+  min?: number; max?: number;         // kind が int の項目だけ。受け付ける値の範囲（両端を含む。保存時の検証と同じ定義から作る）
   pending: boolean;                   // 再起動後に反映する項目で、保存した値がまだ使われていない
 }
 ```
 
 - `set` の値はどの項目も文字列です。`kind` が `int` の項目の値は、数字 0〜9 だけで書いた 10 進数の整数として読みます（先頭の 0 は 10 進数のまま。`"010"` は 10）。`+`、前後の空白、小数、指数、`0x` などの接頭辞、`_` を含む値は数ではなく、400（`<項目> must be a positive integer`）です（[システム仕様.md](システム仕様.md) の 5 章の数の書き方）。
-- `set` と `unset`（既定値に戻す）はまとめて検証し、1 つのトランザクションで保存します。不正な値や組み合わせ、空に意味が無い項目の空の値は 400 で、何も保存しません（検証の内容は [システム仕様.md](システム仕様.md) の設定の表）。設定全体の検証で見つかった問題は、`error`（問題を `; ` でつないだ文）に加えて `errors` と `errors_i18n` で返します。保存の途中でデータベースが失敗した場合は 500（`internal error`）で、データベースの文は返しません。
+- `set` と `unset`（既定値に戻す）はまとめて検証し、1 つのトランザクションで保存します。不正な値や組み合わせ、空に意味が無い項目の空の値は 400 で、何も保存しません（検証の内容は [システム仕様.md](システム仕様.md) の設定の表）。設定全体の検証で見つかった問題は、`error`（問題を `; ` でつないだ文）に加えて `errors` と `errors_i18n` で返します。`kind` が `int` の項目の値が `min` より小さいときは `<項目> must be <min> or more`（`config.int_min`。0 以下の値は `min` にかかわらず上の `must be a positive integer`）、`max` より大きいときは `<項目> must be <max> or less`（`config.int_max`）です。設定のメッセージ（`config.*`）は、問題の項目の名前をパラメーター `name`、`field`、`other` で示します（画面はそこに項目の表示名を入れます）。保存の途中でデータベースが失敗した場合は 500（`internal error`）で、データベースの文は返しません。
 - 即時反映の項目は保存と同時に反映します。変更した項目を、保存した値（一覧は正規化した値）で履歴（`config`）に残します（`smtp.password` は値を残さない）。
 
 ## 13. 導入の案内

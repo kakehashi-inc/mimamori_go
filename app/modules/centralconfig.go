@@ -74,6 +74,10 @@ type ConfigField struct {
 	Name string
 	Kind string // "string", "int", "bool", "list" (comma separated) or "secret"
 	Help string
+	// Min and Max are the smallest and the largest value of an item of kind
+	// "int", both accepted. The validation and the range the screens show
+	// (GET /config) are made from them; other kinds leave them 0.
+	Min, Max int
 	// Restart is true for items read only when the central starts (the
 	// listeners and the built-in agent); the others take effect while the
 	// central is running.
@@ -94,8 +98,10 @@ func init() {
 	}
 }
 
-func cfgIntField(name, help string, p func(c *CentralConfig) *int) ConfigField {
-	return ConfigField{Name: name, Kind: "int", Help: help,
+// cfgIntField makes an item of kind "int" accepting min to max. The upper
+// bounds keep every time computed from the items far from overflowing.
+func cfgIntField(name, help string, min, max int, p func(c *CentralConfig) *int) ConfigField {
+	return ConfigField{Name: name, Kind: "int", Help: help, Min: min, Max: max,
 		get: func(c *CentralConfig) string { return strconv.Itoa(*p(c)) },
 		set: func(c *CentralConfig, v string) error {
 			n, err := ParseWholeInt(v)
@@ -138,12 +144,12 @@ var ConfigFields = []ConfigField{
 			}
 			return nil
 		}},
-	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
-	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
-	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of run requests that ended or whose agent does not respond (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
-	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
-	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", func(c *CentralConfig) *int { return &c.SessionRememberDays }),
-	cfgIntField("two_step_trust_days", "Days a browser marked as trusted at the login code step needs no code", func(c *CentralConfig) *int { return &c.TwoStepTrustDays }),
+	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", 1, 36500, func(c *CentralConfig) *int { return &c.TokenValidDays }),
+	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", 1, 36500, func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
+	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of run requests that ended or whose agent does not respond (days)", 1, 36500, func(c *CentralConfig) *int { return &c.RetentionDays }),
+	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", MinCheckInterval, MaxCheckInterval, func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
+	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", 1, 365, func(c *CentralConfig) *int { return &c.SessionRememberDays }),
+	cfgIntField("two_step_trust_days", "Days a browser marked as trusted at the login code step needs no code", 1, MaxTrustDays, func(c *CentralConfig) *int { return &c.TwoStepTrustDays }),
 	{Name: "builtin_agent", Kind: "bool", Help: "Run the built-in agent (monitoring of the central host)",
 		get: func(c *CentralConfig) string { return strconv.FormatBool(c.BuiltinAgent != nil && *c.BuiltinAgent) },
 		set: func(c *CentralConfig, v string) error {
@@ -153,12 +159,12 @@ var ConfigFields = []ConfigField{
 			}
 			return err
 		}},
-	cfgIntField("notify.min_interval_min", "Shortest interval between notification mails (minutes)", func(c *CentralConfig) *int { return &c.Notify.MinIntervalMin }),
-	cfgIntField("notify.dedupe_hours", "Do not notify the same detection again within (hours)", func(c *CentralConfig) *int { return &c.Notify.DedupeHours }),
-	cfgIntField("notify.max_lines", "Maximum detection lines in one mail", func(c *CentralConfig) *int { return &c.Notify.MaxLines }),
+	cfgIntField("notify.min_interval_min", "Shortest interval between notification mails (minutes)", 1, 43200, func(c *CentralConfig) *int { return &c.Notify.MinIntervalMin }),
+	cfgIntField("notify.dedupe_hours", "Do not notify the same detection again within (hours)", 1, 8760, func(c *CentralConfig) *int { return &c.Notify.DedupeHours }),
+	cfgIntField("notify.max_lines", "Maximum detection lines in one mail", 1, 10000, func(c *CentralConfig) *int { return &c.Notify.MaxLines }),
 	cfgStringField("notify.subject_prefix", "Subject prefix of notification mails", func(c *CentralConfig) *string { return &c.Notify.SubjectPrefix }),
 	cfgStringField("smtp.host", "SMTP server (while empty, no notifications are sent and no verification code is asked for at login)", func(c *CentralConfig) *string { return &c.SMTP.Host }),
-	cfgIntField("smtp.port", "SMTP port", func(c *CentralConfig) *int { return &c.SMTP.Port }),
+	cfgIntField("smtp.port", "SMTP port", 1, 65535, func(c *CentralConfig) *int { return &c.SMTP.Port }),
 	cfgStringField("smtp.security", "starttls, tls or none", func(c *CentralConfig) *string { return &c.SMTP.Security }),
 	{Name: "smtp.auth", Kind: "bool", Help: "Use SMTP authentication",
 		get: func(c *CentralConfig) string { return strconv.FormatBool(c.SMTP.Auth) },
@@ -174,7 +180,7 @@ var ConfigFields = []ConfigField{
 		get: func(c *CentralConfig) string { return c.SMTP.Password },
 		set: func(c *CentralConfig, v string) error { c.SMTP.Password = v; return nil }},
 	cfgStringField("smtp.from", "Sender address", func(c *CentralConfig) *string { return &c.SMTP.From }),
-	cfgIntField("smtp.timeout_sec", "Longest silence of the SMTP server that is waited for (seconds)", func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
+	cfgIntField("smtp.timeout_sec", "Longest silence of the SMTP server that is waited for (seconds)", 1, 3600, func(c *CentralConfig) *int { return &c.SMTP.TimeoutSec }),
 	cfgStringField("smtp.helo_name", "Name sent in HELO/EHLO (empty: localhost)", func(c *CentralConfig) *string { return &c.SMTP.HeloName }),
 }
 
@@ -198,6 +204,28 @@ func (f *ConfigField) Secret() bool { return f.secret }
 
 // Value returns the field's value in c as text.
 func (f *ConfigField) Value(c *CentralConfig) string { return f.get(c) }
+
+// Default returns the field's value when it is not stored while the other
+// items are as in c: the port of the mail server is the one of c's
+// smtp.security.
+func (f *ConfigField) Default(c *CentralConfig) string {
+	d := DefaultCentralConfig()
+	d.SMTP.Port = defaultSMTPPort(c.SMTP.Security)
+	return f.get(d)
+}
+
+// defaultSMTPPort is the port of the mail server for a security (smtp.security)
+// when smtp.port is not stored.
+func defaultSMTPPort(security string) int {
+	switch security {
+	case "tls":
+		return 465
+	case "none":
+		return 25
+	default:
+		return 587
+	}
+}
 
 // DefaultWebListen is the default listen address of the browser screens.
 func DefaultWebListen() string {
@@ -260,34 +288,11 @@ func (c *CentralConfig) applyDefaults() {
 		c.SMTP.Security = "starttls"
 	}
 	if c.SMTP.Port == 0 {
-		switch c.SMTP.Security {
-		case "tls":
-			c.SMTP.Port = 465
-		case "none":
-			c.SMTP.Port = 25
-		default:
-			c.SMTP.Port = 587
-		}
+		c.SMTP.Port = defaultSMTPPort(c.SMTP.Security)
 	}
 	if c.SMTP.TimeoutSec <= 0 {
 		c.SMTP.TimeoutSec = DefaultSMTPTimeoutSec
 	}
-}
-
-// configIntMax is the largest accepted value of each number item. The bounds
-// keep every time computed from the items far from overflowing.
-var configIntMax = map[string]int{
-	"token_valid_days":           36500,
-	"token_renew_before_days":    36500,
-	"retention_days":             36500,
-	"default_check_interval_sec": MaxCheckInterval,
-	"session_remember_days":      365,
-	"two_step_trust_days":        MaxTrustDays,
-	"notify.min_interval_min":    43200,
-	"notify.dedupe_hours":        8760,
-	"notify.max_lines":           10000,
-	"smtp.port":                  65535,
-	"smtp.timeout_sec":           3600,
 }
 
 // emptyAllowed lists the items whose empty value is meaningful (no extra
@@ -351,7 +356,8 @@ func (c *CentralConfig) Validate() error {
 }
 
 // validationProblems returns one problem per problem of the configuration.
-// The item name is part of each message.
+// Each message names its items in parameters (name, field, other), so that
+// the screens can name them by their labels.
 func (c *CentralConfig) validationProblems() []Problem {
 	var errs []Problem
 	add := func(m Msg) { errs = append(errs, Problem{Msg: m}) }
@@ -369,30 +375,34 @@ func (c *CentralConfig) validationProblems() []Problem {
 		}
 	}
 	if c.WebListen == c.AgentListen {
-		add(M("config.listen_same"))
+		add(M("config.listen_same", "name", "web_listen", "other", "agent_listen"))
 	}
 	for _, n := range c.ServerNames {
 		if net.ParseIP(n) == nil && !validHostName(n) {
-			add(M("config.server_name_invalid", "value", strconv.Quote(n)))
+			add(M("config.server_name_invalid", "name", "server_names", "value", strconv.Quote(n)))
 		}
 	}
 	switch c.SMTP.Security {
 	case "starttls", "tls", "none":
 	default:
-		add(M("config.smtp_security"))
+		add(M("config.smtp_security", "name", "smtp.security"))
 	}
 	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validMailHost(h) {
-		add(M("config.smtp_host"))
+		add(M("config.smtp_host", "name", "smtp.host"))
 	}
 	if c.SMTP.From != "" && !validMailAddress(c.SMTP.From) {
-		add(M("config.smtp_from"))
+		add(M("config.smtp_from", "name", "smtp.from"))
 	}
 	for i := range ConfigFields {
 		f := &ConfigFields[i]
 		switch f.Kind {
 		case "int":
-			if n, _ := strconv.Atoi(f.get(c)); n > configIntMax[f.Name] {
-				add(M("config.int_max", "name", f.Name, "max", configIntMax[f.Name]))
+			n, _ := strconv.Atoi(f.get(c))
+			switch {
+			case n < f.Min:
+				add(M("config.int_min", "name", f.Name, "min", f.Min))
+			case n > f.Max:
+				add(M("config.int_max", "name", f.Name, "max", f.Max))
 			}
 		case "string", "list", "secret":
 			if strings.IndexFunc(f.get(c), unicode.IsControl) >= 0 {
@@ -400,11 +410,8 @@ func (c *CentralConfig) validationProblems() []Problem {
 			}
 		}
 	}
-	if c.DefaultCheckIntervalSec < MinCheckInterval {
-		add(M("config.check_interval_min", "min", MinCheckInterval))
-	}
 	if c.TokenRenewBeforeDays >= c.TokenValidDays {
-		add(M("config.renew_before"))
+		add(M("config.renew_before", "name", "token_renew_before_days", "other", "token_valid_days"))
 	}
 	return errs
 }

@@ -14,10 +14,12 @@ import (
 // The inputs and expected texts of TestEnglishUnchanged. The expected texts
 // were produced by running the validators of the version before they were
 // given coded messages (commit c7fa753) on these inputs: the English of the
-// coded messages must be exactly the same. Two texts are exceptions: the time
-// limit of a command, whose range starts at 0 (no limit), so 0 is valid and
-// the text of a value out of range names 0; and email/2, which names bytes,
-// the unit in which the limit of an address counts.
+// coded messages must be exactly the same. Three texts are exceptions: the
+// time limit of a command, whose range starts at 0 (no limit), so 0 is valid
+// and the text of a value out of range names 0; email/2, which names bytes,
+// the unit in which the limit of an address counts; and config/1, which gives
+// the problems of the number items in the order of the items, the lower
+// bound of default_check_interval_sec among them.
 
 // englishLong is the long value of the inputs below; in the expected texts
 // it is written as englishLongMark.
@@ -296,7 +298,7 @@ var englishWant = map[string][]string{
 	"command_set_now0/8":  {"schedule.weekdays: \"xyz\" is not one of sun, mon, tue, wed, thu, fri, sat", "schedule.weekdays: \"Sun\" is not one of sun, mon, tue, wed, thu, fri, sat", "schedule.time: must be a time of day from 00:00 to 23:59"},
 	"command_set_now0/9":  {"schedule.time: must be a time of day from 00:00 to 23:59"},
 	"config/0":            {},
-	"config/1":            {"web_listen: address x: missing port in address; agent_listen: the address must be an IP address; agent_listen: the port must be 1-65535; server_names: \"a b\" is not a host name or IP address; server_names: \"x_y\" is not a host name or IP address; smtp.security must be starttls, tls or none; smtp.host must be a host name or IP address; smtp.from must be one mail address; notify.max_lines must be 10000 or less; smtp.username must not contain control characters; smtp.password must not contain control characters; smtp.helo_name must not contain control characters; default_check_interval_sec must be 10 or more; token_renew_before_days must be less than token_valid_days"},
+	"config/1":            {"web_listen: address x: missing port in address; agent_listen: the address must be an IP address; agent_listen: the port must be 1-65535; server_names: \"a b\" is not a host name or IP address; server_names: \"x_y\" is not a host name or IP address; smtp.security must be starttls, tls or none; smtp.host must be a host name or IP address; smtp.from must be one mail address; default_check_interval_sec must be 10 or more; notify.max_lines must be 10000 or less; smtp.username must not contain control characters; smtp.password must not contain control characters; smtp.helo_name must not contain control characters; token_renew_before_days must be less than token_valid_days"},
 	"config/2":            {"web_listen and agent_listen must differ; retention_days must be 36500 or less"},
 	"config/3":            {"web_listen: the port must be 1-65535; agent_listen: the port must be 1-65535; notify.subject_prefix must not contain control characters"},
 	"config_change/0":     {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen)"},
