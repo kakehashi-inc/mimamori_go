@@ -60,7 +60,7 @@ func TestCommandSetValidate(t *testing.T) {
 		{"valid", func(s *CommandSetSpec) {}, ""},
 		{"empty name", func(s *CommandSetSpec) { s.Name = "" }, "name: is required"},
 		{"long name", func(s *CommandSetSpec) { s.Name = strings.Repeat("a", 101) }, "name: must be at most 100"},
-		{"100 characters", func(s *CommandSetSpec) { s.Name = strings.Repeat("\u3042", 100) }, ""},
+		{"100 characters", func(s *CommandSetSpec) { s.Name = strings.Repeat("あ", 100) }, ""},
 		{"control in name", func(s *CommandSetSpec) { s.Name = "a\tb" }, "name: must not contain control"},
 		{"long description", func(s *CommandSetSpec) { s.Description = strings.Repeat("a", 1001) }, "description: must be at most 1000"},
 		{"multi-line description", func(s *CommandSetSpec) { s.Description = "a\nb" }, ""},

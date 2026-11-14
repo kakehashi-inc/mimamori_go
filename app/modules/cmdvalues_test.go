@@ -145,7 +145,7 @@ func TestValueSizeLimits(t *testing.T) {
 		t.Fatalf("look-ahead: %d values, %d bytes, truncated %v", len(got.Values), size, got.Truncated)
 	}
 	// A cut keeps whole characters.
-	multi := []byte(strings.Repeat("\u3042", MaxCommandValueBytes/3+1))
+	multi := []byte(strings.Repeat("あ", MaxCommandValueBytes/3+1))
 	got = ExtractCommandValues(nil, multi, 1)
 	if !got.Truncated || len(got.Values) != 1 || len(got.Values[0].Value) > MaxCommandValueBytes || !utf8.ValidString(got.Values[0].Value) {
 		t.Fatalf("cut: truncated %v, %d bytes", got.Truncated, len(got.Values[0].Value))
