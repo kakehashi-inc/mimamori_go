@@ -130,9 +130,10 @@ func parseWorkersArg(v string) (int, error) {
 // AgentSetWorkers saves the worker count the argument arg names for the
 // agent in dataDir (agent set-workers), or with builtin that of the built-in
 // agent of the central in dataDir (builtin-agent.db, created when missing;
-// central.db must exist, not be empty and be one of this build). The agent or the central may be
-// running: the count takes effect at its next start, and the line printed
-// says which count the running process uses until then.
+// central.db must exist, not be empty and be one of this build). The agent
+// or the central may be running: the count takes effect at its next start,
+// and the line printed says which count the running process uses until
+// then.
 func AgentSetWorkers(dataDir, arg string, builtin bool) error {
 	n, err := parseWorkersArg(arg)
 	if err != nil {

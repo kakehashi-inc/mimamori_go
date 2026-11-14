@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -95,14 +96,15 @@ func DialIdle(addr string, idle time.Duration) (*IdleConn, error) {
 // dialIdle is DialIdle with the resolver r (tests give one that asks a DNS
 // server of the test).
 func dialIdle(addr string, idle time.Duration, r *net.Resolver) (*IdleConn, error) {
-	host, port, err := net.SplitHostPort(addr)
+	host, service, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: err}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), idle)
 	ips, err := r.LookupIPAddr(ctx, host)
+	port := 0
 	if err == nil {
-		_, err = r.LookupPort(ctx, "tcp", port)
+		port, err = r.LookupPort(ctx, "tcp", service)
 	}
 	cancel()
 	if err != nil {
@@ -111,7 +113,7 @@ func dialIdle(addr string, idle time.Duration, r *net.Resolver) (*IdleConn, erro
 	var first error
 	for _, ip := range ips {
 		d := net.Dialer{Timeout: idle}
-		c, err := d.Dial("tcp", net.JoinHostPort(ip.String(), port))
+		c, err := d.Dial("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 		if err != nil {
 			if first == nil {
 				first = err
