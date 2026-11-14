@@ -201,16 +201,18 @@ func TestClientSilentHandshakeCut(t *testing.T) {
 	}
 }
 
-func TestClientLargeAnswerLimit(t *testing.T) {
+// An answer larger than the largest request body is read completely (the
+// command set definitions of an agent have no total limit).
+func TestClientLargeAnswerComplete(t *testing.T) {
 	sc, cc := clientTestTLS(t)
 	ln := clientTestListener(t, 0)
-	const extra = 1000
+	const size = MaxRequestBody + 5<<20 + 1000
 	serveOne(t, ln, sc, func(c *tls.Conn, req *http.Request) {
 		_, _ = io.Copy(io.Discard, req.Body)
 		bw := bufio.NewWriter(c)
-		_, _ = fmt.Fprintf(bw, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", MaxRequestBody+extra)
+		_, _ = fmt.Fprintf(bw, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", size)
 		chunk := bytes.Repeat([]byte{'a'}, 64<<10)
-		for left := MaxRequestBody + extra; left > 0; left -= len(chunk) {
+		for left := size; left > 0; left -= len(chunk) {
 			if _, err := bw.Write(chunk[:min(left, len(chunk))]); err != nil {
 				return
 			}
@@ -218,8 +220,8 @@ func TestClientLargeAnswerLimit(t *testing.T) {
 		_ = bw.Flush()
 	})
 	status, data, err := testClient(ln, cc).Do("GET", "/x", nil)
-	if err != nil || status != 200 || len(data) != MaxRequestBody {
-		t.Fatalf("want the answer cut at the limit: %d, %d bytes, %v", status, len(data), err)
+	if err != nil || status != 200 || len(data) != size {
+		t.Fatalf("want the whole answer: %d, %d bytes of %d, %v", status, len(data), size, err)
 	}
 }
 

@@ -130,7 +130,9 @@ func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) 
 		return 0, nil, &sentError{err}
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxRequestBody))
+	// The answer is read completely, whatever its size (the command set
+	// definitions of an agent have no total limit).
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, &sentError{err}
 	}
