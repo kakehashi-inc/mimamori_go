@@ -48,6 +48,9 @@ func TestViewerErrorAnswersUseEveryoneCodes(t *testing.T) {
 		{"POST", "/auth/email", map[string]any{"email": "admin2@example.com"}, true},
 		{"POST", "/auth/email/verify", map[string]any{"code": "1"}, true},
 		{"PUT", "/auth/language", "not an object", true},
+		{"PUT", "/auth/language", map[string]any{"language": 5}, true},
+		{"PUT", "/auth/display-name", map[string]any{"display_name": []string{"x"}}, true},
+		{"POST", "/auth/login", map[string]any{"email": "view@example.com", "password": "x", "remember": "yes"}, false},
 	}
 	for _, c := range cases {
 		hdr := map[string]string{csrfHeader: "1"}

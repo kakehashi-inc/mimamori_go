@@ -198,3 +198,57 @@ func TestGateOwnAnswersCarryMessage(t *testing.T) {
 		checkErrorBody(t, c.name, body, c.code)
 	}
 }
+
+// A JSON value of the wrong type is answered 400 with a message that names
+// the field (its path in the body) and the kind of value expected, without
+// the decoder's own wording (Go type and struct names).
+func TestBodyWrongTypeNamesTheField(t *testing.T) {
+	e := newTestEnv(t)
+	e.admin("POST", "/rules", map[string]any{"name": "r1"})
+	cliHdr := map[string]string{"Authorization": "Bearer " + e.cliKey}
+	cases := []struct {
+		name, method, path, body string
+		field                    any // the field parameter: a path, or the message for the whole body
+		kind                     string
+		text                     string
+	}{
+		{"token days", "POST", "/admin/v1/tokens", `{"name":"zz","valid_days":"x"}`, "valid_days", "json.kind.integer", "invalid request body: valid_days must be an integer"},
+		{"token days fraction", "POST", "/admin/v1/tokens", `{"name":"zz","valid_days":1.5}`, "valid_days", "json.kind.integer", "invalid request body: valid_days must be an integer"},
+		{"notify", "PUT", "/admin/v1/accounts/1/notify", `{"notify":"yes"}`, "notify", "json.kind.bool", "invalid request body: notify must be true or false"},
+		{"config value", "PUT", "/admin/v1/config", `{"set":{"retention_days":30}}`, "set.retention_days", "json.kind.string", "invalid request body: set.retention_days must be a string"},
+		{"config set", "PUT", "/admin/v1/config", `{"set":[]}`, "set", "json.kind.object", "invalid request body: set must be an object"},
+		{"rule templates", "POST", "/admin/v1/rules", `{"name":"r","templates":"base"}`, "templates", "json.kind.array", "invalid request body: templates must be an array"},
+		{"list element", "POST", "/admin/v1/rules/1/apply", `{"version":1,"agent_ids":[1,"2"]}`, "agent_ids.1", "json.kind.integer", "invalid request body: agent_ids.1 must be an integer"},
+		{"whole body", "POST", "/admin/v1/tokens", `[1]`, modules.M("json.kind.the_body"), "json.kind.object", "invalid request body: the body must be an object"},
+	}
+	for _, c := range cases {
+		rec := e.rawRequest(e.agent, c.method, c.path, c.body, cliHdr, "127.0.0.1:1")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d (%s), want 400", c.name, rec.Code, rec.Body.String())
+			continue
+		}
+		checkErrorBody(t, c.name, rec.Body.Bytes(), "common.invalid_body_type")
+		var out struct {
+			Error     string      `json:"error"`
+			ErrorI18n modules.Msg `json:"error_i18n"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Error != c.text {
+			t.Errorf("%s: %q, want %q", c.name, out.Error, c.text)
+		}
+		for _, internal := range []string{"Go ", "struct", "unmarshal", "json:", "int64", "string into"} {
+			if strings.Contains(out.Error, internal) {
+				t.Errorf("%s: %q shows the decoder's wording %q", c.name, out.Error, internal)
+			}
+		}
+		field, _ := json.Marshal(out.ErrorI18n.Params["field"])
+		wantField, _ := json.Marshal(c.field)
+		expected, _ := json.Marshal(out.ErrorI18n.Params["expected"])
+		wantExpected, _ := json.Marshal(modules.M(c.kind))
+		if string(field) != string(wantField) || string(expected) != string(wantExpected) {
+			t.Errorf("%s: params field %s expected %s, want %s and %s", c.name, field, expected, wantField, wantExpected)
+		}
+	}
+}

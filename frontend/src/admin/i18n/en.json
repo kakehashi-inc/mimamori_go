@@ -735,15 +735,8 @@
         },
         "json": {
             "kind": {
-                "array": "an array",
-                "bool": "true or false",
-                "integer": "an integer",
-                "number": "a number",
-                "object": "an object",
-                "string": "a string",
                 "the_content": "the content",
-                "the_definition": "the definition",
-                "valid": "a valid value"
+                "the_definition": "the definition"
             }
         },
         "loc": {

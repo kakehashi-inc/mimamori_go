@@ -115,7 +115,7 @@ func ParseRuleContent(data []byte) (*RuleContent, error) {
 			if te.Field == "" {
 				field = M("json.kind.the_content")
 			}
-			return nil, M("rule.content.wrong_type", "field", field, "expected", jsonKindName(te.Type), "found", te.Value)
+			return nil, M("rule.content.wrong_type", "field", field, "expected", JSONKindName(te.Type), "found", te.Value)
 		}
 		return nil, M("rule.content.decode", "detail", strings.TrimPrefix(err.Error(), "json: "))
 	}
@@ -130,9 +130,9 @@ func IsJSONObject(data []byte) bool {
 	return strings.HasPrefix(t, "{")
 }
 
-// jsonKindName names the JSON form expected for a Go type, for messages
+// JSONKindName names the JSON form expected for a Go type, for messages
 // that must not expose Go type names.
-func jsonKindName(t reflect.Type) Msg {
+func JSONKindName(t reflect.Type) Msg {
 	if t == nil {
 		return M("json.kind.valid")
 	}

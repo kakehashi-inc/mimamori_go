@@ -735,15 +735,8 @@
         },
         "json": {
             "kind": {
-                "array": "配列",
-                "bool": "真偽値（true か false）",
-                "integer": "整数",
-                "number": "数値",
-                "object": "オブジェクト",
-                "string": "文字列",
                 "the_content": "内容",
-                "the_definition": "定義",
-                "valid": "正しい値"
+                "the_definition": "定義"
             }
         },
         "loc": {

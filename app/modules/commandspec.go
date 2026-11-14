@@ -468,7 +468,7 @@ func ParseCommandSetSpec(data []byte) (*CommandSetSpec, error) {
 			if te.Field == "" {
 				field = M("json.kind.the_definition")
 			}
-			return nil, M("command.spec.wrong_type", "field", field, "expected", jsonKindName(te.Type), "found", te.Value)
+			return nil, M("command.spec.wrong_type", "field", field, "expected", JSONKindName(te.Type), "found", te.Value)
 		}
 		return nil, M("command.spec.decode", "detail", strings.TrimPrefix(err.Error(), "json: "))
 	}

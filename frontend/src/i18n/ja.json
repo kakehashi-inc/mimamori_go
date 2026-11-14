@@ -662,6 +662,7 @@
             "internal_error": "内部エラーが発生しました。",
             "invalid_body": "リクエストの本文が正しくありません: {{detail}}",
             "invalid_body_trailing": "リクエストの本文が正しくありません: JSON の値の後に余分なデータがあります。",
+            "invalid_body_type": "リクエストの本文が正しくありません: {{field}} は{{expected}}にしてください。",
             "invalid_request": "リクエストが正しくありません。",
             "length_required": "リクエストに本文の長さ（Content-Length）がありません。",
             "lines": "{{lines}}",
@@ -754,6 +755,18 @@
                 "token_renewal_issued": "新しいトークンの値をエージェントに渡しました。有効期限 {{expires}}",
                 "token_renewed": "エージェントが更新後のトークンに切り替えました。以前の値は使えなくなりました",
                 "token_unbound": "エージェントのインスタンスとの紐付けを解除（以前: {{instance}}）"
+            }
+        },
+        "json": {
+            "kind": {
+                "array": "配列",
+                "bool": "真偽値（true か false）",
+                "integer": "整数",
+                "number": "数値",
+                "object": "オブジェクト",
+                "string": "文字列",
+                "the_body": "本文",
+                "valid": "正しい値"
             }
         },
         "loc": {

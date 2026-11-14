@@ -611,9 +611,19 @@ func writeProblems(w http.ResponseWriter, status int, m modules.Msg, ps []module
 }
 
 // invalidBody returns the answer to a request body that could not be
-// decoded: the decoder's text is data, except the refusal of the connection
-// server to read a large body of an unauthenticated request.
+// decoded: a value of the wrong type is named by its field (the path in the
+// body, or "the body" for the whole of it) and the kind of value expected;
+// otherwise the decoder's text is data, except the refusal of the
+// connection server to read a large body of an unauthenticated request.
 func invalidBody(err error) modules.Msg {
+	var te *json.UnmarshalTypeError
+	if errors.As(err, &te) {
+		var field any = te.Field
+		if te.Field == "" {
+			field = modules.M("json.kind.the_body")
+		}
+		return modules.M("common.invalid_body_type", "field", field, "expected", modules.JSONKindName(te.Type))
+	}
 	detail := modules.AsMsg(err)
 	if errors.Is(err, errBodyRefused) {
 		detail = modules.M("common.body_refused")

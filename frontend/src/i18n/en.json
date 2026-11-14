@@ -662,6 +662,7 @@
             "internal_error": "internal error",
             "invalid_body": "invalid request body: {{detail}}",
             "invalid_body_trailing": "invalid request body: unexpected data after the JSON value",
+            "invalid_body_type": "invalid request body: {{field}} must be {{expected}}",
             "invalid_request": "invalid request",
             "length_required": "length required",
             "lines": "{{lines}}",
@@ -754,6 +755,18 @@
                 "token_renewal_issued": "new token value handed to the agent; expires {{expires}}",
                 "token_renewed": "agent switched to the renewed token; the previous value is no longer accepted",
                 "token_unbound": "binding to the agent instance removed (was {{instance}})"
+            }
+        },
+        "json": {
+            "kind": {
+                "array": "an array",
+                "bool": "true or false",
+                "integer": "an integer",
+                "number": "a number",
+                "object": "an object",
+                "string": "a string",
+                "the_body": "the body",
+                "valid": "a valid value"
             }
         },
         "loc": {
