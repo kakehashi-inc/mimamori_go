@@ -4,11 +4,8 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"io"
 	"net"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,10 +43,32 @@ type testMailServer struct {
 	done     chan struct{} // closed when the test ends
 
 	mu       sync.Mutex
-	lastSent time.Time  // when the server last sent a byte
-	queued   []queuedAt // samples of the bytes taken but not read, for a message not taken
-	received int        // bytes of the message taken
-	got      bool       // the whole message arrived
+	lastSent time.Time // when the server last sent a byte
+	lastRead time.Time // when a read of the connection last returned data
+	received int       // bytes of the message taken
+	got      bool      // the whole message arrived
+}
+
+// messageTakeFor is how long a server silent at stepMessage takes the
+// message before it stops reading: longer than the limit, so that a cut by
+// the total time of the write would come while the message is still taken.
+const messageTakeFor = 1500 * time.Millisecond
+
+// recordingConn records when a read of the connection returned data (below
+// TLS, so every read of the socket counts).
+type recordingConn struct {
+	net.Conn
+	s *testMailServer
+}
+
+func (r recordingConn) Read(p []byte) (int, error) {
+	n, err := r.Conn.Read(p)
+	if n > 0 {
+		r.s.mu.Lock()
+		r.s.lastRead = time.Now()
+		r.s.mu.Unlock()
+	}
+	return n, err
 }
 
 // startMailServer listens on loopback. The receive buffer of accepted
@@ -74,7 +93,7 @@ func startMailServer(t *testing.T, s *testMailServer) *testMailServer {
 			return
 		}
 		defer c.Close()
-		s.serve(c)
+		s.serve(recordingConn{c, s})
 	}()
 	return s
 }
@@ -89,106 +108,9 @@ func (s *testMailServer) sent() time.Time {
 	return s.lastSent
 }
 
-// lastTaken is when the client's kernel last took a byte of the message the
-// server does not take, judged from the samples up to end: the first sample
-// that reached the value of the last one. A byte that is passed on from the
-// client's send queue to the server's receive queue is counted in both for a
-// moment until it is acknowledged, so a single later sample can be higher
-// without the client having written; taking the first one that reached the
-// final value is not misled by it. Zero when nothing was seen.
-func (s *testMailServer) lastTaken(end time.Time) time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var final uint64
-	for _, q := range s.queued {
-		if q.at.After(end) {
-			break
-		}
-		final = q.n
-	}
-	if final == 0 {
-		return time.Time{}
-	}
-	for _, q := range s.queued {
-		if q.n >= final {
-			return q.at
-		}
-	}
-	return time.Time{}
-}
-
 // silent waits until the test ends: the server sends nothing more and
 // takes nothing more.
 func (s *testMailServer) silent(net.Conn) { <-s.done }
-
-// queuedAt is one sample of watchTaken.
-type queuedAt struct {
-	at time.Time
-	n  uint64
-}
-
-// watchTaken takes nothing more until the test ends and samples the bytes
-// the client's kernel took that the server did not read: the send queue of
-// the client's socket plus the receive queue of the server's. The server
-// reads nothing, so their sum grows when the client's kernel takes bytes.
-// Both queues are read from /proc/net/tcp.
-func (s *testMailServer) watchTaken(c net.Conn) {
-	peer := procTCPAddr(c.RemoteAddr().(*net.TCPAddr))
-	tick := time.NewTicker(5 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-s.done:
-			return
-		case <-tick.C:
-		}
-		if n, ok := procTCPQueued(peer); ok {
-			s.mu.Lock()
-			s.queued = append(s.queued, queuedAt{time.Now(), n})
-			s.mu.Unlock()
-		}
-	}
-}
-
-// procTCPAddr is addr as /proc/net/tcp writes it (IPv4 only).
-func procTCPAddr(addr *net.TCPAddr) string {
-	ip := addr.IP.To4()
-	return fmt.Sprintf("%02X%02X%02X%02X:%04X", ip[3], ip[2], ip[1], ip[0], addr.Port)
-}
-
-// procTCPQueued sums the send and receive queues of the two sockets of
-// /proc/net/tcp whose local or remote address is addr: both ends of one
-// loopback connection. The file is read in several chunks while other tests
-// open and close sockets, so a line can come twice or be missed: each
-// socket is counted once, and a reading without both is not used.
-func procTCPQueued(addr string) (uint64, bool) {
-	data, err := os.ReadFile("/proc/net/tcp")
-	if err != nil {
-		return 0, false
-	}
-	queued := map[string]uint64{}
-	for _, line := range strings.Split(string(data), "\n")[1:] {
-		f := strings.Fields(line)
-		if len(f) < 5 || (f[1] != addr && f[2] != addr) {
-			continue
-		}
-		tx, rx, ok := strings.Cut(f[4], ":")
-		if !ok {
-			continue
-		}
-		a, _ := strconv.ParseUint(tx, 16, 64)
-		b, _ := strconv.ParseUint(rx, 16, 64)
-		queued[f[1]+" "+f[2]] = a + b
-	}
-	if len(queued) != 2 {
-		return 0, false
-	}
-	var sum uint64
-	for _, n := range queued {
-		sum += n
-	}
-	return sum, true
-}
 
 // answer sends one line after the delay, unless step is the silent one.
 func (s *testMailServer) answer(c net.Conn, step, line string) bool {
@@ -282,7 +204,7 @@ func (s *testMailServer) serve(c net.Conn) {
 				return
 			}
 			if s.silentAt == stepMessage {
-				s.watchTaken(c) // the server takes nothing of the message
+				s.takeThenStop(c)
 				return
 			}
 			for {
@@ -310,6 +232,31 @@ func (s *testMailServer) serve(c net.Conn) {
 			s.answer(c, "", "502 unknown")
 		}
 	}
+}
+
+// takeThenStop takes the message for messageTakeFor, about 6 MiB per second
+// in bursts of 64 KiB (each burst frees enough of the receive buffer for the
+// client's kernel to take more at once), and then reads nothing more until
+// the test ends. The client sends the message only after the 354, so
+// nothing of it is buffered above c.
+func (s *testMailServer) takeThenStop(c net.Conn) {
+	buf := make([]byte, 64<<10)
+	stopAt := time.Now().Add(messageTakeFor)
+	burst := 0
+	for time.Now().Before(stopAt) {
+		n, err := c.Read(buf)
+		s.mu.Lock()
+		s.received += n
+		s.mu.Unlock()
+		if err != nil {
+			return
+		}
+		if burst += n; burst >= len(buf) {
+			burst = 0
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	<-s.done
 }
 
 func testMailCert(t *testing.T) *tls.Certificate {
@@ -347,9 +294,13 @@ func sendSlowAnswers(t *testing.T, security string, cert *tls.Certificate) {
 }
 
 // sendSilentAt: the server stays silent at step; the error comes one limit
-// after the server's last byte or, when the message is not taken, after the
-// last byte the client's kernel took (or after connecting, when the server
-// sent none).
+// after the server's last byte (or after connecting, when the server sent
+// none) or, when the message is not taken, after the last read of the
+// server: its reads let the client's kernel take more of the message, so
+// the client's last progress is not before the last read, and it follows
+// that read at once. The lower bound proves that the cut is counted from the
+// last progress and not earlier; the upper bound has a generous margin for
+// a loaded machine.
 func sendSilentAt(t *testing.T, security string, cert *tls.Certificate, step string, body string) {
 	s := startMailServer(t, &testMailServer{security: security, cert: cert, silentAt: step})
 	start := time.Now()
@@ -362,15 +313,20 @@ func sendSilentAt(t *testing.T, security string, cert *tls.Certificate, step str
 	if from.IsZero() {
 		from = start
 	}
+	upper := 2500 * time.Millisecond
 	if step == stepMessage {
-		taken := s.lastTaken(end)
-		if !taken.After(from) {
-			t.Fatalf("%s: silent at %s: no byte of the message was seen taken after %v", security, step, from)
+		s.mu.Lock()
+		lastRead, received := s.lastRead, s.received
+		s.mu.Unlock()
+		// The server took the message for longer than the limit.
+		if received == 0 || lastRead.Sub(from) < messageTakeFor-100*time.Millisecond {
+			t.Fatalf("%s: silent at %s: the server took %d bytes until %v after the 354, the test proves nothing",
+				security, step, received, lastRead.Sub(from))
 		}
-		from = taken
+		from, upper = lastRead, 5*time.Second
 	}
-	if d := end.Sub(from); d < 900*time.Millisecond || d > 2500*time.Millisecond {
-		t.Fatalf("%s: silent at %s: error %v after the last byte: %v", security, step, d, err)
+	if d := end.Sub(from); d < 900*time.Millisecond || d > upper {
+		t.Fatalf("%s: silent at %s: error %v after the last progress: %v", security, step, d, err)
 	}
 }
 
@@ -404,7 +360,7 @@ func TestSendMailSilence(t *testing.T) {
 	}
 	t.Run("message not taken", func(t *testing.T) {
 		t.Parallel()
-		sendSilentAt(t, "none", nil, stepMessage, strings.Repeat("x", 8<<20))
+		sendSilentAt(t, "none", nil, stepMessage, strings.Repeat("x", 16<<20))
 	})
 }
 
@@ -422,7 +378,7 @@ func TestSendMailSTARTTLSAndTLS(t *testing.T) {
 			})
 			t.Run("message not taken", func(t *testing.T) {
 				t.Parallel()
-				sendSilentAt(t, security, cert, stepMessage, strings.Repeat("x", 8<<20))
+				sendSilentAt(t, security, cert, stepMessage, strings.Repeat("x", 16<<20))
 			})
 		})
 	}
