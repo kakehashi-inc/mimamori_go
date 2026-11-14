@@ -106,14 +106,25 @@ type DetectionReport struct {
 	FileMode  string `json:"file_mode,omitempty"`
 }
 
-// ReportRequest is sent at the end of every cycle (or later from the outbox).
+// ReportBatch is the body of a report request (POST /agent/v1/report): the
+// items of the agent's outbox, oldest first, taken in by the central at
+// once. ReportID is the identity of the batch: 32 lowercase hexadecimal
+// characters (16 random bytes), made when the agent forms the batch and
+// recorded with its items in the agent's local database. Until the central
+// answered, the batch is sent again with the same identity and its items as
+// they are then, also after a restart of the agent; the central stores a
+// batch once. Stopping tells that the agent sends its last report before
+// it ends. Reports is never null (an empty list is a batch without items).
+type ReportBatch struct {
+	ReportID string          `json:"report_id"`
+	Stopping bool            `json:"stopping"`
+	Reports  []ReportRequest `json:"reports"`
+}
+
+// ReportRequest is one item of the agent's outbox: the report of a
+// monitoring step or a report about command sets. It carries no identity of
+// its own; it is sent in a ReportBatch.
 type ReportRequest struct {
-	// ReportID is the identity of the report: 32 lowercase hexadecimal
-	// characters (16 random bytes), made when the report is first written
-	// to the agent's outbox, different for every row there, and kept with
-	// the row when a limit rewrites it, when it is sent again and over a
-	// restart of the agent. A report sent again carries the same ID.
-	ReportID   string            `json:"report_id,omitempty"`
 	CreatedAt  int64             `json:"created_at"`
 	Detections []DetectionReport `json:"detections"`
 	HostInfo   *HostInfo         `json:"host_info,omitempty"`

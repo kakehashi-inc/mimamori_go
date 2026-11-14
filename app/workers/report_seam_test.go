@@ -31,9 +31,9 @@ type handlerTransport struct {
 	tok     string
 	mu      sync.Mutex
 	down    bool
-	lose    func(req *modules.ReportRequest) bool
+	lose    func(batch *modules.ReportBatch) bool
 	lost    map[string]bool
-	reports []string // report ids in the order sent
+	reports []string // batch ids in the order sent
 	syncs   []string // the JSON of every sync request
 }
 
@@ -63,23 +63,23 @@ func (h *handlerTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse
 	return &resp, nil
 }
 
-func (h *handlerTransport) Report(req *modules.ReportRequest) error {
+func (h *handlerTransport) Report(batch *modules.ReportBatch) error {
 	h.mu.Lock()
 	down := h.down
 	h.mu.Unlock()
 	if down {
 		return errAnswerLost
 	}
-	b, _ := json.Marshal(req)
+	b, _ := json.Marshal(batch)
 	rec := h.e.agentCall("report", h.tok, h.machine(), json.RawMessage(b))
 	if rec.Code != 200 {
 		return errors.New(rec.Body.String())
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.reports = append(h.reports, req.ReportID)
-	if h.lose != nil && !h.lost[req.ReportID] && h.lose(req) {
-		h.lost[req.ReportID] = true
+	h.reports = append(h.reports, batch.ReportID)
+	if h.lose != nil && !h.lost[batch.ReportID] && h.lose(batch) {
+		h.lost[batch.ReportID] = true
 		return errAnswerLost
 	}
 	return nil
@@ -131,7 +131,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// A report the central stored but whose answer the agent did not get is sent
+// A batch the central stored but whose answer the agent did not get is sent
 // again by the agent with the same id and is not stored or counted again:
 // the run is stored once, the request ends, the dropped count is added once.
 func TestAgentReportSentAgainEndToEnd(t *testing.T) {
@@ -149,10 +149,15 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, "dropped_pending", "2") }); err != nil {
 		t.Fatal(err)
 	}
-	// The answer of every report that carries something counted is lost
-	// the first time.
-	tr := &handlerTransport{e: e, tok: tok, lost: map[string]bool{}, lose: func(r *modules.ReportRequest) bool {
-		return r.Dropped > 0 || len(r.CommandRuns) > 0 || len(r.CommandRequestAcks) > 0
+	// The answer of every batch that carries something counted is lost the
+	// first time.
+	tr := &handlerTransport{e: e, tok: tok, lost: map[string]bool{}, lose: func(b *modules.ReportBatch) bool {
+		for _, r := range b.Reports {
+			if r.Dropped > 0 || len(r.CommandRuns) > 0 || len(r.CommandRequestAcks) > 0 {
+				return true
+			}
+		}
+		return false
 	}}
 	rt := modules.NewAgentRuntime(db, tr, log.New(io.Discard, "", 0))
 	stop, quit := make(chan struct{}), make(chan struct{})
@@ -200,7 +205,7 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 	}
 	for id := range tr.lost {
 		if times[id] != 2 {
-			t.Fatalf("report %s whose answer was lost was sent %d times", id, times[id])
+			t.Fatalf("batch %s whose answer was lost was sent %d times", id, times[id])
 		}
 		if !strings.Contains(func() string { logMu.Lock(); defer logMu.Unlock(); return logs.String() }(),
 			"report "+id+" of host-seam was already stored; answered without storing it again") {
@@ -209,7 +214,7 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 	}
 	for id, n := range times {
 		if !tr.lost[id] && n != 1 {
-			t.Fatalf("report %s sent %d times", id, n)
+			t.Fatalf("batch %s sent %d times", id, n)
 		}
 	}
 
@@ -232,6 +237,50 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 		if !strings.Contains(s, `"running_requests":[`) {
 			t.Fatalf("sync without running_requests: %s", s)
 		}
+	}
+}
+
+// The central stored a batch and the agent could not delete its items: the
+// agent sends the same batch again, with the same identity and before any
+// other, and the central stores it once (detections, dropped count and its
+// history counted once).
+func TestAgentBatchDeleteFailsEndToEnd(t *testing.T) {
+	e := newTestEnv(t)
+	var logs strings.Builder
+	var logMu sync.Mutex
+	e.c.logger = log.New(lockedWriter{&logs, &logMu}, "", 0)
+	tok, a, _ := commandAgent(t, e, "host-del")
+	db := agentLocalDB(t)
+	exec := func(stmt string) {
+		t.Helper()
+		if err := db.Write(func(tx models.Writer) error { _, err := tx.Exec(stmt); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, "dropped_pending", "2") }); err != nil {
+		t.Fatal(err)
+	}
+	tr := &handlerTransport{e: e, tok: tok}
+	rt := modules.NewAgentRuntime(db, tr, log.New(io.Discard, "", 0))
+	exec(`CREATE TRIGGER keep_outbox BEFORE DELETE ON outbox BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`)
+	rt.Cycle()
+	exec(`DROP TRIGGER keep_outbox`)
+	rt.Cycle()
+	rt.Cycle()
+	tr.mu.Lock()
+	sent := slices.Clone(tr.reports)
+	tr.mu.Unlock()
+	if len(sent) != 3 || sent[0] != sent[1] || sent[2] == sent[0] {
+		t.Fatalf("batches sent: %v, want the first one twice, then a new one", sent)
+	}
+	cur, _ := models.GetAgent(e.c.db.Read(), a.ID)
+	if cur.DroppedTotal != 2 || droppedHistory(t, e) != 1 {
+		t.Fatalf("dropped_total %d, history rows %d", cur.DroppedTotal, droppedHistory(t, e))
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	if !strings.Contains(logs.String(), "report "+sent[0]+" of host-del was already stored; answered without storing it again") {
+		t.Fatalf("log: %q", logs.String())
 	}
 }
 

@@ -81,9 +81,9 @@ func TestTargetOpenDoesNotBlockOthers(t *testing.T) {
 
 	others := make(chan error, 2)
 	go func() {
-		others <- e.c.centralReport(reported, &modules.ReportRequest{Detections: []modules.DetectionReport{
+		others <- e.c.centralReport(reported, batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{
 			{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "while held"},
-		}})
+		}}))
 	}()
 	go func() {
 		db, err := e.c.targetDB(read)

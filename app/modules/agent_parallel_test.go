@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,10 @@ type parTransport struct {
 	resp SyncResponse
 	// syncs records each sync: whether it ran inside the wait loop of a
 	// running command, the flow it ran on and the sets that ran.
-	syncs   []syncSeen
+	syncs []syncSeen
+	// batches are the report requests received, reports their items in
+	// order.
+	batches []*ReportBatch
 	reports []*ReportRequest
 	// reportFlows holds the flow (goroutine number) of each report attempt.
 	reportFlows []uint64
@@ -73,7 +77,7 @@ func (f *parTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 	return &r, nil
 }
 
-func (f *parTransport) Report(r *ReportRequest) error {
+func (f *parTransport) Report(b *ReportBatch) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attempts = append(f.attempts, time.Now())
@@ -81,7 +85,10 @@ func (f *parTransport) Report(r *ReportRequest) error {
 	if f.failReports {
 		return os.ErrDeadlineExceeded
 	}
-	f.reports = append(f.reports, r)
+	f.batches = append(f.batches, b)
+	for i := range b.Reports {
+		f.reports = append(f.reports, &b.Reports[i])
+	}
 	return nil
 }
 
@@ -402,9 +409,9 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 }
 
 // TestOutboxOrderWithWorkers: with four workers running many short sets next
-// to the monitoring steps, the central receives every report once, every
-// run's reports in the order start, commands, close, and the host
-// information in exactly one report per step.
+// to the monitoring steps, the central receives every batch once and one
+// batch per send, every run's reports in the order start, commands, close,
+// and the host information in exactly one report per step.
 func TestOutboxOrderWithWorkers(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -432,14 +439,19 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	seenIDs := map[string]bool{}
+	for _, b := range tr.batches {
+		if !reportIDForm.MatchString(b.ReportID) || seenIDs[b.ReportID] {
+			t.Fatalf("batch identity %q not of its form or received twice", b.ReportID)
+		}
+		seenIDs[b.ReportID] = true
+	}
+	if len(tr.batches) != len(tr.attempts) {
+		t.Fatalf("%d batches for %d report requests", len(tr.batches), len(tr.attempts))
+	}
 	periodic, hostInfos := 0, 0
 	next := map[string]int{} // run UID: the next result position expected (-1: the start)
 	closedRuns := 0
 	for _, r := range tr.reports {
-		if r.ReportID == "" || seenIDs[r.ReportID] {
-			t.Fatalf("report identity %q missing or received twice", r.ReportID)
-		}
-		seenIDs[r.ReportID] = true
 		if len(r.CommandRuns) == 0 && len(r.CommandRequestAcks) == 0 && r.CommandApply == nil {
 			periodic++
 			if r.HostInfo != nil {
@@ -484,30 +496,33 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 }
 
 // shrinkingTransport queues a large command set report and lets the limit
-// shrink the queued rows when the first report of a flush arrives (as
-// another worker would), and records what it receives.
+// shrink the queued rows when the first batch arrives (as another worker
+// would), loses the answer of that first batch and records what it receives.
 type shrinkingTransport struct {
 	rt       *AgentRuntime
-	received []ReportRequest
+	received []ReportBatch
 }
 
 func (f *shrinkingTransport) Sync(*SyncRequest) (*SyncResponse, error) { return &SyncResponse{}, nil }
 
-func (f *shrinkingTransport) Report(r *ReportRequest) error {
-	if len(f.received) == 0 {
+func (f *shrinkingTransport) Report(b *ReportBatch) error {
+	f.received = append(f.received, *b)
+	if len(f.received) == 1 {
 		// Over this the output of the queued run_only reports is dropped,
 		// oldest first, and nothing more.
 		f.rt.out.limit = 2000
 		f.rt.queueCommandReport(&ReportRequest{CommandRuns: []CommandRunReport{{RunUID: "late", Purpose: PurposeRunOnly,
 			Results: []CommandResultReport{{Output: []byte(strings.Repeat("y", 3000))}}}}})
+		return errors.New("the answer was lost")
 	}
-	f.received = append(f.received, *r)
 	return nil
 }
 
-// TestOutboxRewriteShrinksOnly: a limit applied while a flush runs makes the
-// later rows smaller; they are sent as they are now, never with content
-// they no longer hold, and the row the flush did not list is not sent.
+// TestOutboxRewriteShrinksOnly: a limit applied while a batch is recorded
+// makes its items smaller; the batch is sent again with the same identity
+// and its items as they are now, never with content they no longer hold,
+// and the item queued meanwhile does not join it but goes with the next
+// batch.
 func TestOutboxRewriteShrinksOnly(t *testing.T) {
 	tr := &shrinkingTransport{}
 	rt := newCommandRuntime(t, tr)
@@ -520,13 +535,21 @@ func TestOutboxRewriteShrinksOnly(t *testing.T) {
 			Results: []CommandResultReport{{Output: big, OutputBytes: 4000}}}}})
 	}
 	rt.flushOutbox()
-	if len(tr.received) != 3 || len(tr.received[0].CommandRequestAcks) != 1 {
-		t.Fatalf("received: %d reports", len(tr.received))
+	rt.flushOutbox()
+	if len(tr.received) != 2 || tr.received[0].ReportID != tr.received[1].ReportID {
+		t.Fatalf("received %d batches, want the same batch twice", len(tr.received))
 	}
-	for _, r := range tr.received[1:] {
+	if first := tr.received[0].Reports; len(first) != 3 || len(first[1].CommandRuns[0].Results[0].Output) != 4000 {
+		t.Fatalf("first batch: %+v", first)
+	}
+	again := tr.received[1].Reports
+	if len(again) != 3 || len(again[0].CommandRequestAcks) != 1 {
+		t.Fatalf("batch sent again: %d items", len(again))
+	}
+	for _, r := range again[1:] {
 		for _, run := range r.CommandRuns {
 			if run.RunUID == "late" {
-				t.Fatal("a row queued during the flush is sent by the next flush")
+				t.Fatal("an item queued while the batch was recorded joined it")
 			}
 			for _, res := range run.Results {
 				if len(res.Output) != 0 || !res.Truncated {
@@ -534,5 +557,72 @@ func TestOutboxRewriteShrinksOnly(t *testing.T) {
 				}
 			}
 		}
+	}
+	rt.flushOutbox()
+	if len(tr.received) != 3 || tr.received[2].ReportID == tr.received[0].ReportID ||
+		len(tr.received[2].Reports) != 1 || tr.received[2].Reports[0].CommandRuns[0].RunUID != "late" {
+		t.Fatalf("next batch: %+v", tr.received[2:])
+	}
+}
+
+// TestReportOneRequestPerStep: while the central takes no reports, two sets
+// run to their end and many items are queued; every monitoring step, before
+// and after the central takes reports again, makes exactly one report
+// request, and the queued items reach the central.
+func TestReportOneRequestPerStep(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = "echo c"
+	}
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, lines...), testSet(2, PurposeRunOnly, "echo d"))
+	tr.resp.CommandRequests = manualRequests(1, 1, 2)
+	tr.failReports = true
+	steps := func() int {
+		tr.mu.Lock()
+		defer tr.mu.Unlock()
+		return len(tr.syncs)
+	}
+	waitUntil := func(what string, cond func() bool) {
+		deadline := time.Now().Add(30 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- rt.Run(stop) }()
+	waitUntil("both runs", func() bool { all, fin := countRuns(rt.DB); return all == 2 && fin == 2 })
+	n := steps()
+	waitUntil("a step after the runs", func() bool { return steps() > n })
+	tr.mu.Lock()
+	tr.failReports = false
+	tr.resp.CommandRequests = nil
+	tr.mu.Unlock()
+	waitUntil("the queue to empty", func() bool { return models.CountOutbox(rt.DB.Read()) == 0 })
+	close(stop)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.attempts) != len(tr.syncs) {
+		t.Fatalf("%d report requests for %d monitoring steps, want one each", len(tr.attempts), len(tr.syncs))
+	}
+	runs := 0
+	for _, r := range tr.reports {
+		for _, run := range r.CommandRuns {
+			if run.Finished {
+				runs++
+			}
+		}
+	}
+	if runs != 2 {
+		t.Fatalf("closing reports received: %d", runs)
 	}
 }

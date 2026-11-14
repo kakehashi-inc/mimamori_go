@@ -19,8 +19,11 @@ type cmdTransport struct {
 	syncs int
 	// syncReqs records every sync request as it was sent.
 	syncReqs []SyncRequest
-	reports  []*ReportRequest
-	onSync   func(n int)
+	// batches are the report requests received, reports their items in
+	// order.
+	batches []*ReportBatch
+	reports []*ReportRequest
+	onSync  func(n int)
 	// failReports makes every report fail; attempts records when reports
 	// were attempted.
 	failReports bool
@@ -40,12 +43,15 @@ func (f *cmdTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 	return &r, nil
 }
 
-func (f *cmdTransport) Report(r *ReportRequest) error {
+func (f *cmdTransport) Report(b *ReportBatch) error {
 	f.attempts = append(f.attempts, time.Now())
 	if f.failReports {
 		return os.ErrDeadlineExceeded
 	}
-	f.reports = append(f.reports, r)
+	f.batches = append(f.batches, b)
+	for i := range b.Reports {
+		f.reports = append(f.reports, &b.Reports[i])
+	}
 	return nil
 }
 

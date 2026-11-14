@@ -24,7 +24,7 @@ func TestUnassignRule(t *testing.T) {
 		t.Fatalf("sync: %d", rec.Code)
 	}
 	ap := &modules.ApplyResult{Status: "ok", RuleID: 1, Version: 1, At: time.Now().Unix()}
-	if rec := e.agentCall("report", tok, "m1", modules.ReportRequest{Apply: ap}); rec.Code != 200 {
+	if rec := e.agentCall("report", tok, "m1", batchOf(modules.ReportRequest{Apply: ap})); rec.Code != 200 {
 		t.Fatalf("report: %d", rec.Code)
 	}
 	a, _ := models.GetAgentByToken(e.c.db.Read(), int64(issued["token"].(map[string]any)["id"].(float64)))
@@ -49,7 +49,7 @@ func TestUnassignRule(t *testing.T) {
 	}
 	// The agent removed its audit rules and reports it.
 	none := &modules.ApplyResult{Status: modules.ApplyStatusNone, Message: "no rule is assigned; the audit rules were removed", At: time.Now().Unix() + 1}
-	if rec := e.agentCall("report", tok, "m1", modules.ReportRequest{Apply: none}); rec.Code != 200 {
+	if rec := e.agentCall("report", tok, "m1", batchOf(modules.ReportRequest{Apply: none})); rec.Code != 200 {
 		t.Fatalf("report: %d", rec.Code)
 	}
 	got, _ = models.GetAgent(e.c.db.Read(), a.ID)

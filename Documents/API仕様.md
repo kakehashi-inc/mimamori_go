@@ -654,7 +654,7 @@ interface Guide {
 | --- | --- | --- | --- | --- |
 | GET | `/agent/v1/ca` | なし | - | `{"ca_pems":["-----BEGIN CERTIFICATE-----..."]}` |
 | POST | `/agent/v1/sync` | トークン | `SyncRequest` | `SyncResponse` |
-| POST | `/agent/v1/report` | トークン | `ReportRequest` | `{}` |
+| POST | `/agent/v1/report` | トークン | `ReportBatch` | `{}` |
 
 - すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってローカル DB に保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致、インスタンス ID が空または 128 文字を超える場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
 - 要求の本文が JSON として解釈できない場合は 400（`{"error":"invalid request"}`。`error_i18n` のコードは `common.invalid_request`）、セントラルの内部エラーは 500（`{"error":"internal error"}`。コード `common.internal_error`）です。未知のフィールドは無視します。
@@ -712,8 +712,12 @@ interface DetectionReport {
   first_at: number; last_at: number;   // Unix 秒。0 なら受信時刻（last_at は first_at）
   file_ctime?: number; file_owner?: string; file_mode?: string;   // writable と exec_file の検知
 }
-interface ReportRequest {
-  report_id?: string;                  // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の報告に入れたときに作り、送り直しても変わらない。最後に保存した報告と同じなら保存し直さない
+interface ReportBatch {
+  report_id: string;                   // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の項目をまとめたときに作り、セントラルが応答するまで送り直しても変わらない。最後に保存した報告と同じなら保存し直さない
+  stopping: boolean;                   // エージェントが終了する前の最後の報告であること（エージェントは false を送り、セントラルは使わない）
+  reports: ReportRequest[];            // 未送信の項目（古い順）。無ければ []（null にはしない）
+}
+interface ReportRequest {              // 報告の項目（識別子は持たない）
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
   host_info?: HostInfo;                // 4 章の HostInfo と同じ項目（workers を含む）に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
@@ -743,13 +747,14 @@ interface CommandRunReport {
 }
 ```
 
+- 報告は、`report_id` が 16 進数の小文字 32 文字で、`reports` が配列（空でもよい）の `ReportBatch` だけを受け付けます。それ以外（`report_id` が無いか形が違う、`reports` が無いか null、1 件の報告だけの本文）は 400（`common.invalid_request`）で、何も保存しません。項目は `reports` の順に保存します。
 - `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
 - `*_i18n` のフィールド（`message_i18n`、`warnings_i18n`、`problems_i18n`）は省略できます。省略したときは英文だけを保存します。セントラルは、英語にすると英文と一致するものだけを保存し、1 件の JSON が 16 KiB を超えるものは保存しません。
 - `apply.status` が `none` の報告は、適用中の監視ルールを無し（`reported_version` も無し）として記録します。`error` の報告は、それまでに報告された適用中の監視ルールを変えません。
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
 - コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。
-- 報告は、まず `command_request_acks` を、次に `command_runs` を順に指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。最後にセントラルのワーカーの割り当てを行うため、終わった指示のワーカーは同じ報告の中で次の指示に割り当てます。
+- 報告は、項目ごとに順に、まず `command_request_acks` を、次に `command_runs` を指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。最後にセントラルのワーカーの割り当てを行うため、終わった指示のワーカーは同じ報告の中で次の指示に割り当てます。
 - `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
-- `report_id` が、この監視対象で最後に保存した報告と同じ報告は、保存済みとして扱い、`{}` で応答します。報告は監視対象の DB に書く部分とセントラル管理用 DB に書く部分に分けて保存し、どちらもすでに保存した部分は保存し直しません（上の指示の状態の変更とセントラルのワーカーの割り当ては毎回行います）。前の送信でセントラル管理用 DB に書く部分を保存できなかった報告は、その部分をこのときに保存します。`report_id` が無いか、16 進数の小文字 32 文字でない報告は、届くたびに保存します（[システム仕様.md](システム仕様.md) の 12.1）。
+- `report_id` が、この監視対象で最後に保存した報告と同じ報告は、保存済みとして扱い、`{}` で応答します。報告は監視対象の DB に書く部分とセントラル管理用 DB に書く部分に分けて保存し、どちらの部分もすべての項目を 1 つのトランザクションで保存します。どちらもすでに保存した部分は保存し直しません（上の指示の状態の変更とセントラルのワーカーの割り当ては毎回行います）。前の送信でセントラル管理用 DB に書く部分を保存できなかった報告は、その部分をこのときに保存します（[システム仕様.md](システム仕様.md) の 12.1）。
 - コマンドセットの結果について、メールで通知することはありません。
 - 応答は `{}` です。

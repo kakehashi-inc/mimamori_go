@@ -65,12 +65,14 @@ func (c *core) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 		c.agentAuthFailed(w, r, err)
 		return
 	}
-	var req modules.ReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Only a batch with a valid identity is taken; anything else is refused
+	// and nothing of it is stored.
+	var batch modules.ReportBatch
+	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil || validReportBatch(&batch) != nil {
 		writeError(w, http.StatusBadRequest, modules.M("common.invalid_request"))
 		return
 	}
-	if err := c.centralReport(agent, &req); err != nil {
+	if err := c.centralReport(agent, &batch); err != nil {
 		c.internalError(w, r, err)
 		return
 	}
@@ -241,24 +243,28 @@ func findSuppression(list []*models.Suppression, agentID int64, typ, user, exe, 
 	return nil
 }
 
-// centralReport stores a report: detections into the target's own database
-// (aggregated with the open row of the same detection), host information,
-// the rule application result, and command set runs, request answers and
-// the outcome of storing definitions. Command results are never mailed.
+// centralReport stores a report batch: for each item in order, its
+// detections into the target's own database (aggregated with the open row
+// of the same detection), host information, the rule application result,
+// and command set runs, request answers and the outcome of storing
+// definitions. Command results are never mailed. A batch without a valid
+// identity is refused (errInvalidReport) and nothing of it is stored.
 //
-// The reports of one agent are stored one after another: the agent's lock
-// is held for the whole run and the agent row is read again under it, so
-// every decision is taken on the row the previous report left (two
-// overlapping reports with the same application result record it once).
-// Handlers and the built-in agent call this in any number at the same
-// moment; reports of different agents run at once. A report is stored in
-// two parts, in the agent's database and in central.db, and each part
-// remembers the identity of the last report it stored: a report sent again
-// (the agent did not get the answer) is answered as stored, and each part
-// it already stored is not stored or counted again, while a part that was
-// lost (the central failed between the two) is stored now. This check runs
-// inside the lock too, so two copies arriving at once are stored once.
-func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) error {
+// The batches of one agent are stored one after another: the agent's lock is
+// held for the whole run and the agent row is read again under it, so every
+// decision is taken on the row the previous batch left. Handlers and the
+// built-in agent call this in any number at the same moment; batches of
+// different agents run at once. A batch is stored in two parts, each atomic
+// for the whole batch, in the agent's database and in central.db, and each
+// part remembers the identity of the last batch it stored: a batch sent
+// again (the agent did not get the answer) is answered as stored, and each
+// part it already stored is not stored or counted again, while a part that
+// was lost (the central failed between the two) is stored now. This check
+// runs inside the lock too, so two copies arriving at once are stored once.
+func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) error {
+	if err := validReportBatch(batch); err != nil {
+		return err
+	}
 	unlock := c.reportLocks.lock(agent.ID)
 	defer unlock()
 	agent, err := models.GetAgent(c.db.Read(), agent.ID)
@@ -275,40 +281,33 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	}
 	now := time.Now().Unix()
 	dedupe := int64(c.conf().Notify.DedupeHours) * 3600
-	// The identity of the report: the last one stored is remembered in the
-	// agent's database in the transaction that stores the report's part
-	// there, and on the agent's row in the transaction that stores its part
-	// in central.db, so a report the agent sends again because its answer
-	// did not arrive is found and each part is stored once. A report
-	// without a valid identity is stored and not remembered.
-	id := req.ReportID
-	if !validReportID(id) {
-		id = ""
-	}
+	id := batch.ReportID
+	// Part (a), the target's database: the items in order and the identity,
+	// unless the identity is the last one stored there.
 	var ignored []ignoredRun
 	repeated := false
 	err = tdb.Write(func(tx models.Writer) error {
-		if id != "" {
-			last, err := models.LastReceivedReport(tx)
+		ignored, repeated = nil, false
+		last, err := models.LastReceivedReport(tx)
+		if err != nil {
+			return err
+		}
+		if last == id {
+			repeated = true
+			return nil
+		}
+		for i := range batch.Reports {
+			item := &batch.Reports[i]
+			if err := storeDetections(tx, agent, item, sups, now, dedupe); err != nil {
+				return err
+			}
+			skipped, err := storeCommandRuns(tx, item.CommandRuns, now)
 			if err != nil {
 				return err
 			}
-			if last == id {
-				repeated = true
-				return nil
-			}
+			ignored = append(ignored, skipped...)
 		}
-		var err error
-		if err = storeDetections(tx, agent, req, sups, now, dedupe); err != nil {
-			return err
-		}
-		if ignored, err = storeCommandRuns(tx, req.CommandRuns, now); err != nil {
-			return err
-		}
-		if id != "" {
-			return models.SetLastReceivedReport(tx, id, now)
-		}
-		return nil
+		return models.SetLastReceivedReport(tx, id, now)
 	})
 	if err != nil {
 		return err
@@ -321,45 +320,23 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 	for _, r := range ignored {
 		c.logger.Printf("%s: run %s of unknown command set %d ignored", c.agentDisplayName(agent), r.runUID, r.setID)
 	}
-	f := models.AgentReportFields{Now: now, Dropped: int64(max(req.Dropped, 0)), ReportID: id}
-	if hi := req.HostInfo; hi != nil {
-		f.HasHost = true
-		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
-		f.HostOSUser, f.TimeZone, f.UTCOffsetSec = truncate(hi.OSUser, 256), truncate(hi.TimeZone, 64), hi.UTCOffsetSec
-		b, _ := json.Marshal(hi.Auditd)
-		f.AuditdJSON = string(b)
-	}
-	var checked applyI18nJSON
-	if ap := req.Apply; ap != nil {
-		f.HasApply = true
-		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
-		w, _ := json.Marshal(nonNil(ap.Warnings))
-		f.ApplyWarnings = string(w)
-		// The coded texts are checked against the English the agent sent;
-		// the stored message is the English cut at 2000 bytes, and the
-		// screen shows the coded one only while both agree.
-		checked = checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
-		i18n := checked
-		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
-			i18n.MessageI18n = nil
-		}
-		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
-	}
-	// The central part of the report is one transaction that reads the
-	// agent row again and decides from it, so each history row is written
-	// together with the row or not at all. What the report says about run
-	// requests is applied in it and the queue step runs at its end (a
-	// request that ended frees its worker); a request that ended without a
-	// run is recorded in the history after it, with the set's name read
-	// from the agent's database. When the agent's row names this report as
-	// the last one whose central part was stored, only what is safe to
-	// apply twice runs again: the transitions of the run requests (each
-	// conditional on the request's state) and the queue step; a request
-	// that changes here was not changed before, so its history row is
-	// written now.
+	// Part (b), central.db, one transaction that reads the agent row again
+	// and decides from it, so each history row is written together with the
+	// row or not at all. What the items say about run requests is applied
+	// first, every time (each change is conditional on the request's state,
+	// so applying it again changes nothing), and the queue step runs at its
+	// end (a request that ended frees its worker); a request that ended
+	// without a run is recorded in the history after it, with the set's name
+	// read from the agent's database. Unless the agent's row names this
+	// identity as the last stored one, the items are then applied in order,
+	// each on the row the item before it left (two application results each
+	// get their history row), and the identity is remembered.
 	var ended []endedRequest
 	centralRepeated := false
-	transitions := requestTransitions(req)
+	var transitions []reqTransition
+	for i := range batch.Reports {
+		transitions = append(transitions, requestTransitions(&batch.Reports[i])...)
+	}
 	err = c.queueWrite(now, func(tx models.Writer) error {
 		var err error
 		if ended, err = applyRequestTransitions(tx, agent.ID, transitions, now); err != nil {
@@ -369,45 +346,24 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		if err != nil {
 			return err
 		}
-		if id != "" && cur.LastCentralReportID == id {
-			centralRepeated = true
+		centralRepeated = cur.LastCentralReportID == id
+		if centralRepeated {
 			return nil
 		}
-		if req.CommandApply != nil {
-			if err := recordCommandApply(tx, cur, req.CommandApply); err != nil {
-				return err
-			}
-		}
-		if ap := req.Apply; ap != nil {
-			switch ap.Status {
-			case "ok", "warning":
-				f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
-			case modules.ApplyStatusNone:
-				// The agent removed its audit rules: nothing is applied.
-				f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
-			default:
-				f.ReportedRuleID, f.ReportedRuleVersion = cur.ReportedRuleID, cur.ReportedRuleVersion
-			}
-			if ap.At != cur.ApplyAt || ap.Status != cur.ApplyStatus {
-				detail := applyResultText(ap, checked)
-				if ap.RuleID > 0 {
-					ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
-					if r, err := models.GetRule(tx, ap.RuleID); err == nil {
-						ruleName = modules.Raw(r.Name)
-					}
-					detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
-				}
-				if err := models.InsertHistory(tx, c.historyRow(nil, models.HistRule, "apply_result_"+ap.Status, modules.Raw(agentName(tx, cur)), detail)); err != nil {
+		for i := range batch.Reports {
+			if i > 0 {
+				if cur, err = models.GetAgent(tx, agent.ID); err != nil {
 					return err
 				}
 			}
-		}
-		if req.Dropped > 0 {
-			if err := models.InsertHistory(tx, c.historyRow(nil, models.HistDetection, "dropped", modules.Raw(agentName(tx, cur)), modules.M("history.detail.dropped", "count", req.Dropped))); err != nil {
+			if err := c.storeCentralItem(tx, cur, &batch.Reports[i], id, now); err != nil {
 				return err
 			}
 		}
-		return models.RecordAgentReport(tx, cur.ID, f)
+		if len(batch.Reports) == 0 {
+			return models.RecordAgentReport(tx, cur.ID, models.AgentReportFields{Now: now, ReportID: id})
+		}
+		return nil
 	}, nil)
 	if err != nil {
 		return err
@@ -422,6 +378,69 @@ func (c *core) centralReport(agent *models.Agent, req *modules.ReportRequest) er
 		c.historyMsg(nil, models.HistCommand, "request_expired", c.commandTarget(agent, tdb, e.setID), e.why)
 	}
 	return nil
+}
+
+// storeCentralItem applies one item of a batch to central.db inside the
+// batch's transaction tx: the outcome of storing definitions, the summary on
+// the agent row (cur, read in tx) with the batch's identity id, and the
+// history rows of a changed application result and of dropped detections.
+func (c *core) storeCentralItem(tx models.Writer, cur *models.Agent, item *modules.ReportRequest, id string, now int64) error {
+	f := models.AgentReportFields{Now: now, Dropped: int64(max(item.Dropped, 0)), ReportID: id}
+	if hi := item.HostInfo; hi != nil {
+		f.HasHost = true
+		f.Hostname, f.OSName, f.OSVersion, f.AgentVersion = hi.Hostname, hi.OSName, hi.OSVersion, hi.AgentVersion
+		f.HostOSUser, f.TimeZone, f.UTCOffsetSec = truncate(hi.OSUser, 256), truncate(hi.TimeZone, 64), hi.UTCOffsetSec
+		b, _ := json.Marshal(hi.Auditd)
+		f.AuditdJSON = string(b)
+	}
+	if item.CommandApply != nil {
+		if err := recordCommandApply(tx, cur, item.CommandApply); err != nil {
+			return err
+		}
+	}
+	if ap := item.Apply; ap != nil {
+		f.HasApply = true
+		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
+		w, _ := json.Marshal(nonNil(ap.Warnings))
+		f.ApplyWarnings = string(w)
+		// The coded texts are checked against the English the agent sent;
+		// the stored message is the English cut at 2000 bytes, and the
+		// screen shows the coded one only while both agree.
+		checked := checkedApplyI18n(ap.Message, ap.Warnings, ap.MessageI18n, ap.WarningsI18n)
+		i18n := checked
+		if i18n.MessageI18n != nil && f.ApplyMessage != ap.Message {
+			i18n.MessageI18n = nil
+		}
+		f.ApplyI18n = applyI18nText(i18n.MessageI18n, i18n.WarningsI18n)
+		switch ap.Status {
+		case "ok", "warning":
+			f.ReportedRuleID, f.ReportedRuleVersion = ap.RuleID, ap.Version
+		case modules.ApplyStatusNone:
+			// The agent removed its audit rules: nothing is applied.
+			f.ReportedRuleID, f.ReportedRuleVersion = 0, 0
+		default:
+			f.ReportedRuleID, f.ReportedRuleVersion = cur.ReportedRuleID, cur.ReportedRuleVersion
+		}
+		if ap.At != cur.ApplyAt || ap.Status != cur.ApplyStatus {
+			detail := applyResultText(ap, checked)
+			if ap.RuleID > 0 {
+				ruleName := modules.M("history.detail.rule_fallback", "id", ap.RuleID)
+				if r, err := models.GetRule(tx, ap.RuleID); err == nil {
+					ruleName = modules.Raw(r.Name)
+				}
+				detail = modules.M("history.detail.apply_result", "rule", ruleName, "version", ap.Version, "result", detail)
+			}
+			if err := models.InsertHistory(tx, c.historyRow(nil, models.HistRule, "apply_result_"+ap.Status, modules.Raw(agentName(tx, cur)), detail)); err != nil {
+				return err
+			}
+		}
+	}
+	if item.Dropped > 0 {
+		if err := models.InsertHistory(tx, c.historyRow(nil, models.HistDetection, "dropped", modules.Raw(agentName(tx, cur)), modules.M("history.detail.dropped", "count", item.Dropped))); err != nil {
+			return err
+		}
+	}
+	return models.RecordAgentReport(tx, cur.ID, f)
 }
 
 // storeDetections stores the detections and the host information of a
@@ -519,6 +538,20 @@ func applyResultText(ap *modules.ApplyResult, checked applyI18nJSON) modules.Msg
 		}
 	}
 	return historyParts(parts)
+}
+
+// errInvalidReport refuses a report that is not a batch with a valid
+// identity.
+var errInvalidReport = errors.New("a report must be a batch with a valid identity")
+
+// validReportBatch returns errInvalidReport unless the batch has a valid
+// identity and a list of items (an empty list is a batch without items; a
+// body of another form has none).
+func validReportBatch(b *modules.ReportBatch) error {
+	if !validReportID(b.ReportID) || b.Reports == nil {
+		return errInvalidReport
+	}
+	return nil
 }
 
 // validReportID reports whether id has the form of a report identity: 32

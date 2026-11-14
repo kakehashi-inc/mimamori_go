@@ -185,7 +185,7 @@ func TestReportCentralPartIsOneStep(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = tr.Report(rep)
+			errs[i] = tr.Report(batchOf(*rep))
 		}()
 	}
 	wg.Wait()
@@ -274,7 +274,7 @@ func TestHandlersOfDifferentKindsAtOnce(t *testing.T) {
 		now := time.Now().Unix()
 		rep := modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "normal", OSUser: "u", Exe: "/bin/x",
 			Target: fmt.Sprintf("/f/%d/%d", flow, round), Count: 1, FirstAt: now, LastAt: now}}}
-		rec := e.agentCall("report", toks[i], fmt.Sprintf("m-%d", i), rep)
+		rec := e.agentCall("report", toks[i], fmt.Sprintf("m-%d", i), batchOf(rep))
 		if rec.Code != http.StatusOK {
 			fail("report", rec.Code, rec.Body.String())
 			return

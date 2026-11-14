@@ -209,7 +209,7 @@ func TestHandlersOfAllKindsAtOnce(t *testing.T) {
 		i := flow % nAgents
 		rep := modules.ReportRequest{Detections: []modules.DetectionReport{detection("report", flow, round)},
 			HostInfo: &modules.HostInfo{Hostname: fmt.Sprintf("host-%d", i), OSName: "Test", OSVersion: "1"}}
-		if code, body := c.agentCall("report", agents[i].token, agents[i].machine, rep); code != http.StatusOK {
+		if code, body := c.agentCall("report", agents[i].token, agents[i].machine, batchOf(rep)); code != http.StatusOK {
 			fail("report", code, body)
 			return
 		}
@@ -223,7 +223,7 @@ func TestHandlersOfAllKindsAtOnce(t *testing.T) {
 	})
 	run("built-in agent", 2, func(flow, round int) {
 		if flow == 0 {
-			if err := inProc.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{detection("builtin", flow, round)}}); err != nil {
+			if err := inProc.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{detection("builtin", flow, round)}})); err != nil {
 				fail("built-in report: "+err.Error(), 0, "")
 				return
 			}
@@ -348,10 +348,10 @@ func TestReportsOfOneAgentSerialised(t *testing.T) {
 	unlock := cr.reportLocks.lock(agents[0].id)
 	held := make(chan int, 1)
 	go func() {
-		code, _ := c.agentCall("report", agents[0].token, agents[0].machine, rep("/held"))
+		code, _ := c.agentCall("report", agents[0].token, agents[0].machine, batchOf(rep("/held")))
 		held <- code
 	}()
-	if code, body := c.agentCall("report", agents[1].token, agents[1].machine, rep("/other")); code != http.StatusOK {
+	if code, body := c.agentCall("report", agents[1].token, agents[1].machine, batchOf(rep("/other"))); code != http.StatusOK {
 		t.Fatalf("report of another agent while the lock is held: %d %s", code, body)
 	}
 	select {
@@ -382,7 +382,7 @@ func TestReportsOfOneAgentSerialised(t *testing.T) {
 			defer wg.Done()
 			r := rep(fmt.Sprintf("/apply/%d", i))
 			r.Apply = &modules.ApplyResult{Status: modules.ApplyStatusNone, Message: "nothing applied", At: at}
-			codes[i], _ = c.agentCall("report", agents[0].token, agents[0].machine, r)
+			codes[i], _ = c.agentCall("report", agents[0].token, agents[0].machine, batchOf(r))
 		}()
 	}
 	wg.Wait()

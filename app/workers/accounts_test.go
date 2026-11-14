@@ -239,7 +239,7 @@ func TestViewerSeesDisplayNames(t *testing.T) {
 	e.admin("POST", "/tokens", map[string]any{"name": "host-a"})
 	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
-	if err := tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "read", Category: "normal", Target: "/etc/x"}}}); err != nil {
+	if err := tr.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "read", Category: "normal", Target: "/etc/x"}}})); err != nil {
 		t.Fatal(err)
 	}
 	ack := map[string]any{"items": []map[string]int64{{"agent_id": b.ID, "id": 1}}}

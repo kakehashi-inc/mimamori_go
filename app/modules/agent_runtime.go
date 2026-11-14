@@ -18,7 +18,7 @@ import (
 // agent uses HTTPS; the central's built-in agent hands them over in process.
 type AgentTransport interface {
 	Sync(req *SyncRequest) (*SyncResponse, error)
-	Report(req *ReportRequest) error
+	Report(batch *ReportBatch) error
 }
 
 // Local state keys of the agent database.
@@ -30,6 +30,9 @@ const (
 	stateScanPrevRoots  = "scan_prev_roots"
 	stateDroppedPending = "dropped_pending"
 	stateLastAuditEvent = "last_audit_event"
+	// The batch of queued items being sent: its identity and the ids of its
+	// items (outboxBatch as JSON), until the central answered it.
+	stateOutboxBatch = "outbox_batch"
 	// A writable scan split over several checks: where the next check
 	// continues and the pass in progress (start time, roots found so far).
 	stateWritableResume = "writable_resume"
@@ -452,8 +455,8 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	case errors.As(err, &he) && he.Status == 401:
 		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another agent instance). Re-initialize the agent with a valid token", op)
 	case IsSilenceCut(err):
-		// The row of a cut report stays queued and is sent again at the next
-		// monitoring step.
+		// The batch of a cut report stays recorded and is sent again at the
+		// next monitoring step.
 		rt.logf("%s: the central sent nothing for %d seconds: %v", op, int(IdleTimeout/time.Second), err)
 	case IsCertificateError(err):
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
@@ -1161,20 +1164,21 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The dropped count is read, reported in the queued report and reset in
 	// the outbox's one transaction, so that a count is neither lost nor
 	// reported twice.
+	// What is queued is sent in the one report request of the step, also
+	// when this report could not be queued.
 	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.mon.lastApply}
 	dropped, err := rt.out.queuePeriodic(req)
-	if err != nil {
+	switch {
+	case err != nil:
 		rt.logf("failed to queue the report: %v", err)
-		return
-	}
-	if dropped > 0 {
+	case dropped > 0:
 		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
 	}
 	rt.flushOutbox()
 }
 
-// flushOutbox sends the queued reports (see outbox.flush); a failure is
-// logged as a failed report.
+// flushOutbox sends the queued items in one report request (see
+// outbox.flush); a failure is logged as a failed report.
 func (rt *AgentRuntime) flushOutbox() {
 	rt.out.flush(rt.mon.transport, func(err error) { rt.logConnectionError("report", err) })
 }

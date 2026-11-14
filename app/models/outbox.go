@@ -5,8 +5,8 @@ import (
 	"errors"
 )
 
-// OutboxItem is a row of the outbox table of the agent's local database: a
-// report not yet delivered to the central (JSON of modules.ReportRequest).
+// OutboxItem is a row of the outbox table of the agent's local database: an
+// item not yet delivered to the central (JSON of modules.ReportRequest).
 // CommandBytes is the size of the payload when it carries command set runs
 // (0 otherwise); their total is bounded.
 type OutboxItem struct {
@@ -36,6 +36,26 @@ func ListOutbox(db Reader) ([]*OutboxItem, error) {
 	return collect(rows, err, func(s rowScanner) (*OutboxItem, error) {
 		o := &OutboxItem{}
 		if err := s.Scan(&o.ID, &o.CreatedAt, &o.Payload, &o.AlertCount, &o.NormalCount, &o.CommandBytes); err != nil {
+			return nil, err
+		}
+		return o, nil
+	})
+}
+
+// OutboxSize is the id of a queued report and the size of its payload in
+// bytes.
+type OutboxSize struct {
+	ID    int64
+	Bytes int64
+}
+
+// ListOutboxSizes returns the ids and payload sizes of the queued reports,
+// oldest first, without reading the payloads.
+func ListOutboxSizes(db Reader) ([]*OutboxSize, error) {
+	rows, err := db.Query(`SELECT id, length(CAST(payload AS BLOB)) FROM outbox ORDER BY id`)
+	return collect(rows, err, func(s rowScanner) (*OutboxSize, error) {
+		o := &OutboxSize{}
+		if err := s.Scan(&o.ID, &o.Bytes); err != nil {
 			return nil, err
 		}
 		return o, nil

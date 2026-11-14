@@ -47,8 +47,8 @@ type Agent struct {
 	UTCOffsetSec    int
 	CommandSig      string
 	CommandProblems string
-	// LastCentralReportID is the report_id of the last report whose part
-	// in the central database was stored ("" when that report had none).
+	// LastCentralReportID is the report_id of the last report batch whose
+	// part in the central database was stored ("" when none was yet).
 	LastCentralReportID string
 	CreatedAt           int64
 }
@@ -172,7 +172,7 @@ type AgentReportFields struct {
 	HasHost, HasApply                                     bool
 	Dropped                                               int64
 	Now                                                   int64
-	ReportID                                              string // the report's report_id ("" when none)
+	ReportID                                              string // the report_id of the batch
 }
 
 // RecordAgentReport stores the summary of a report on the agent row.

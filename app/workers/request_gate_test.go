@@ -79,10 +79,10 @@ func closeWrite(t *testing.T, c net.Conn) {
 	}
 }
 
-// paddedAgentReport is an agent report of about n bytes (the agent API
+// paddedAgentReport is an agent report batch of about n bytes (the agent API
 // ignores unknown fields).
 func paddedAgentReport(n int) []byte {
-	return []byte(`{"created_at":1,"detections":[],"dropped":0,"padding":"` + strings.Repeat("p", n) + `"}`)
+	return []byte(`{"report_id":"` + strings.Repeat("ab", 16) + `","stopping":false,"reports":[],"padding":"` + strings.Repeat("p", n) + `"}`)
 }
 
 // A large body is read only from a peer authenticated for its route: an

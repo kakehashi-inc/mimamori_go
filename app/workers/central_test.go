@@ -175,12 +175,12 @@ func TestAgentFlow(t *testing.T) {
 		HostInfo: &modules.HostInfo{Hostname: "host-a.example", OSName: "Rocky Linux", OSVersion: "9.4"},
 		Apply:    &modules.ApplyResult{Status: "ok", RuleID: 1, Version: 1, At: time.Now().Unix()},
 	}
-	if rec := e.agentCall("report", tok, "machine-1", rep); rec.Code != 200 {
+	if rec := e.agentCall("report", tok, "machine-1", batchOf(rep)); rec.Code != 200 {
 		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
 	}
 	rep.Detections = rep.Detections[:1]
 	rep.Detections[0].Count, rep.Detections[0].LastAt = 3, 300
-	if rec := e.agentCall("report", tok, "machine-1", rep); rec.Code != 200 {
+	if rec := e.agentCall("report", tok, "machine-1", batchOf(rep)); rec.Code != 200 {
 		t.Fatalf("report 2: %d", rec.Code)
 	}
 	list := e.admin("GET", "/detections?category=alert", nil)
@@ -348,7 +348,7 @@ func TestBuiltinTransport(t *testing.T) {
 	if err != nil || resp.Rule == nil || resp.TokenRenewal != nil || resp.AgentName != modules.BuiltinAgentName {
 		t.Fatalf("builtin sync: %+v %v", resp, err)
 	}
-	if err := tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "read", Category: "normal", Target: "/etc/ssh/x"}}}); err != nil {
+	if err := tr.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "read", Category: "normal", Target: "/etc/ssh/x"}}})); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.admin("GET", "/detections?agent_id="+itoa64(b.ID), nil); got["total"].(float64) != 1 {
@@ -360,10 +360,10 @@ func TestNotificationCompose(t *testing.T) {
 	e := newTestEnv(t)
 	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
-	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{
+	_ = tr.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{
 		{Type: "exec", Category: "normal", OSUser: "nginx", Exe: "/bin/sh", Target: "sh -c id"},
 		{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"},
-	}})
+	}}))
 	e.c.composeNotification(time.Now())
 	list, _ := models.ListUnsentNotifications(e.c.db.Read())
 	if len(list) != 1 || !strings.Contains(list[0].Subject, "ALERT") {
@@ -374,7 +374,7 @@ func TestNotificationCompose(t *testing.T) {
 		t.Fatalf("alerts must come first:\n%s", body)
 	}
 	// Re-reporting within the dedupe period does not notify again.
-	_ = tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"}}})
+	_ = tr.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "curl x"}}}))
 	tdb, _ := e.c.targetDB(b)
 	pending, _ := models.ListPendingNotify(tdb.Read())
 	if len(pending) != 0 {

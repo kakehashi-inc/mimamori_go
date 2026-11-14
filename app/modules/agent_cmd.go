@@ -63,8 +63,8 @@ func (t *RemoteTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 }
 
 // Report implements AgentTransport.
-func (t *RemoteTransport) Report(req *ReportRequest) error {
-	return t.client.JSON("POST", "/agent/v1/report", req, nil)
+func (t *RemoteTransport) Report(batch *ReportBatch) error {
+	return t.client.JSON("POST", "/agent/v1/report", batch, nil)
 }
 
 // AgentInitOptions are the arguments of "agent init".

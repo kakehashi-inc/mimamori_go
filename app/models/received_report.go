@@ -3,11 +3,12 @@ package models
 import "database/sql"
 
 // ReceivedReport is the single row of the received_report table of a
-// per-target database: the identity of the last report of the agent that the
-// central stored, written in the transaction that stored the report. The
-// agent sends its reports one at a time and the next only after the previous
-// one was answered, so only this one can have been stored without its answer
-// reaching the agent; a report with the same identity is not stored again.
+// per-target database: the identity of the last report batch of the agent
+// that the central stored, written in the transaction that stored the items
+// of the batch. The agent sends the same batch again until it was answered
+// and forms the next one only then, so only this one can have been stored
+// without its answer reaching the agent; a batch with the same identity is
+// not stored again.
 type ReceivedReport struct {
 	ID         int64
 	ReportID   string

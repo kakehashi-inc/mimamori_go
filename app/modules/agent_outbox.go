@@ -7,23 +7,29 @@ import (
 	"mimamori/app/models"
 )
 
-// The outbox of the agent: the reports that wait for the central, in the
-// table outbox of the agent's local database. It is the only owner of that
-// table: every change goes through its methods, each one Write. Reports
-// about command sets are queued by queue (from any flow), the report of a
-// monitoring step by queuePeriodic; only the monitoring step and the final
-// send at the stop call flush, never at the same time, so reports leave one
-// at a time in the order they were queued.
+// The outbox of the agent: the items that wait for the central, in the table
+// outbox of the agent's local database, and the batch being sent, in the
+// state key outbox_batch. It is the only owner of both: every change goes
+// through its methods, each one Write. Reports about command sets are
+// queued by queue (from any flow), the report of a monitoring step by
+// queuePeriodic; only the monitoring step and the final send at the stop
+// call flush, never at the same time.
+//
+// flush sends one batch in one request (ReportBatch). The batch is formed in
+// one Write: the oldest queued items whose payloads together fit in
+// MaxReportBatchBytes (always at least one; none when nothing is queued),
+// under a new identity, recorded with the ids of its items. While a batch is
+// recorded, it is sent again with the same identity and its items as they
+// are then; nothing joins it, and items queued meanwhile go with the next
+// batch. After the central answered, the items of the batch are deleted and
+// the record cleared in one Write. So the central, which remembers the last
+// batch it stored, receives a batch it stored again only as the last one,
+// and stores it once.
 //
 // The content of a queued row only shrinks: host information is removed
 // from all but the newest periodic row, and the limits drop output, runs
-// and detections. A row is never given more content.
-//
-// Every row carries its own report identity (ReportRequest.ReportID), made
-// when the report is first written here and kept in the stored payload: a
-// limit that rewrites the row, a send that fails and a restart of the agent
-// do not change it, so a report sent again is the same report for the
-// central.
+// and detections or delete rows (also rows of the recorded batch). A row is
+// never given more content.
 
 // outbox stores and sends the agent's reports.
 type outbox struct {
@@ -109,52 +115,114 @@ func (o *outbox) queuePeriodic(req *ReportRequest) (int, error) {
 	return dropped, nil
 }
 
-// flush sends the reports queued when it starts, in the order of their rows,
-// one request each, and deletes a row (one Write) after the central answered
-// it. It stops at the first failure, which it hands to onError; that row and
-// the later ones stay queued and are sent again, with the same identity,
-// next time. Each row is read again just before it is sent, so a row that
-// a limit shrank meanwhile (command set reports are queued by other workers
-// during a flush) is sent as it is now, and a row the limit deleted is not
-// sent. A row that cannot be parsed is deleted. The rows are read on the
-// read side; no request to the central is made inside a Write.
+// outboxBatch is the record of the batch being sent (state key
+// outbox_batch): its identity and the ids of its items, oldest first.
+type outboxBatch struct {
+	ReportID string  `json:"report_id"`
+	Items    []int64 `json:"items"`
+}
+
+// flush sends the batch takeBatch returns in one request. After the central
+// answered, the items of the batch are deleted and its record cleared in one
+// Write. A failed request is handed to onError; then, and when that Write
+// fails, the batch stays recorded and is sent again, with the same identity,
+// next time. No request to the central is made inside a Write.
 func (o *outbox) flush(tr AgentTransport, onError func(error)) {
-	items, err := models.ListOutbox(o.db.Read())
+	batch, items, err := o.takeBatch()
 	if err != nil {
+		o.logf("report: the queued items cannot be read: %v", err)
 		return
 	}
-	deleteItem := func(id int64) {
-		_ = o.db.Write(func(tx models.Writer) error { return models.DeleteOutbox(tx, id) })
+	if err := tr.Report(batch); err != nil {
+		onError(err)
+		return
 	}
-	for _, listed := range items {
-		it, err := models.GetOutbox(o.db.Read(), listed.ID)
-		if err != nil {
-			return
+	if err := o.db.Write(func(tx models.Writer) error {
+		for _, id := range items {
+			if err := models.DeleteOutbox(tx, id); err != nil {
+				return err
+			}
 		}
-		if it == nil {
-			continue
-		}
-		var req ReportRequest
-		if err := json.Unmarshal([]byte(it.Payload), &req); err != nil {
-			deleteItem(it.ID)
-			continue
-		}
-		if err := tr.Report(&req); err != nil {
-			onError(err)
-			return
-		}
-		deleteItem(it.ID)
+		return models.DeleteLocalState(tx, stateOutboxBatch)
+	}); err != nil {
+		o.logf("report %s was stored by the central, but removing its items from the queue failed (it is sent again and stored once): %v",
+			batch.ReportID, err)
 	}
 }
 
-// insert gives req a new report identity and stores it as a new row, inside
-// the write transaction tx.
-func (o *outbox) insert(tx models.Writer, req *ReportRequest) error {
-	id, err := RandomHex(16)
+// takeBatch returns the batch to send and the ids of its items, in one
+// Write: the recorded batch with the items it still has, as they are now;
+// otherwise a new batch of the oldest items whose payloads together fit in
+// MaxReportBatchBytes (at least one, none when nothing is queued), under a
+// new identity, recorded before it is returned. An item that cannot be
+// parsed is deleted and not sent.
+func (o *outbox) takeBatch() (*ReportBatch, []int64, error) {
+	var batch *ReportBatch
+	var items []int64
+	err := o.db.Write(func(tx models.Writer) error {
+		reports := []ReportRequest{}
+		items = []int64{}
+		// add appends the item id to items and its report to reports; an
+		// item that is gone is skipped, one that cannot be parsed deleted.
+		add := func(id int64) error {
+			it, err := models.GetOutbox(tx, id)
+			if err != nil || it == nil {
+				return err
+			}
+			var req ReportRequest
+			if json.Unmarshal([]byte(it.Payload), &req) != nil {
+				return models.DeleteOutbox(tx, id)
+			}
+			items, reports = append(items, id), append(reports, req)
+			return nil
+		}
+		if v := models.GetLocalState(tx, stateOutboxBatch); v != "" {
+			var rec outboxBatch
+			if json.Unmarshal([]byte(v), &rec) == nil && rec.ReportID != "" {
+				for _, id := range rec.Items {
+					if err := add(id); err != nil {
+						return err
+					}
+				}
+				batch = &ReportBatch{ReportID: rec.ReportID, Reports: reports}
+				return nil
+			}
+		}
+		sizes, err := models.ListOutboxSizes(tx)
+		if err != nil {
+			return err
+		}
+		var total int64
+		for _, s := range sizes {
+			if len(items) > 0 && total+s.Bytes > MaxReportBatchBytes {
+				break
+			}
+			n := len(items)
+			if err := add(s.ID); err != nil {
+				return err
+			}
+			if len(items) > n {
+				total += s.Bytes
+			}
+		}
+		id, err := RandomHex(16)
+		if err != nil {
+			return err
+		}
+		if err := saveJSONState(tx, stateOutboxBatch, &outboxBatch{ReportID: id, Items: items}); err != nil {
+			return err
+		}
+		batch = &ReportBatch{ReportID: id, Reports: reports}
+		return nil
+	})
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	req.ReportID = id
+	return batch, items, nil
+}
+
+// insert stores req as a new row, inside the write transaction tx.
+func (o *outbox) insert(tx models.Writer, req *ReportRequest) error {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return err

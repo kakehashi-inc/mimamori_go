@@ -249,4 +249,8 @@ const (
 	// MaxOutboxCommandBytes bounds the queued reports of command set runs on
 	// the agent (their console output is dropped first, oldest first).
 	MaxOutboxCommandBytes = 64 << 20
+	// MaxReportBatchBytes bounds the items of one report request: the agent
+	// forms a batch of the oldest queued items whose payloads together fit
+	// (always at least one), so that the request stays below MaxRequestBody.
+	MaxReportBatchBytes = 24 << 20
 )

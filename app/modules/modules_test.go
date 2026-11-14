@@ -217,7 +217,10 @@ func TestScans(t *testing.T) {
 }
 
 type fakeTransport struct {
-	fail    bool
+	fail bool
+	// batches are the report requests received, reports their items in
+	// order.
+	batches []*ReportBatch
 	reports []*ReportRequest
 }
 
@@ -227,11 +230,14 @@ func (f *fakeTransport) Sync(*SyncRequest) (*SyncResponse, error) {
 	}
 	return &SyncResponse{AgentName: "t"}, nil
 }
-func (f *fakeTransport) Report(r *ReportRequest) error {
+func (f *fakeTransport) Report(b *ReportBatch) error {
 	if f.fail {
 		return os.ErrDeadlineExceeded
 	}
-	f.reports = append(f.reports, r)
+	f.batches = append(f.batches, b)
+	for i := range b.Reports {
+		f.reports = append(f.reports, &b.Reports[i])
+	}
 	return nil
 }
 

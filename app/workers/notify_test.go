@@ -19,7 +19,7 @@ func reportAlert(t *testing.T, e *testEnv, target string) {
 		t.Fatal(err)
 	}
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
-	if err := tr.Report(&modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: target}}}); err != nil {
+	if err := tr.Report(batchOf(modules.ReportRequest{Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: target}}})); err != nil {
 		t.Fatal(err)
 	}
 }

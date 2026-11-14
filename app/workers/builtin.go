@@ -38,12 +38,12 @@ func (t *inProcessTransport) Sync(req *modules.SyncRequest) (*modules.SyncRespon
 	return t.c.centralSync(a, nil, req, entered)
 }
 
-func (t *inProcessTransport) Report(req *modules.ReportRequest) error {
+func (t *inProcessTransport) Report(batch *modules.ReportBatch) error {
 	a, err := t.agent()
 	if err != nil {
 		return err
 	}
-	return t.c.centralReport(a, req)
+	return t.c.centralReport(a, batch)
 }
 
 // clearDisabledBuiltin removes the audit rules and the rules file once when

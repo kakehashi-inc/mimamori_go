@@ -331,11 +331,11 @@ func TestQueueConcurrentSyncs(t *testing.T) {
 					continue
 				}
 				if q.tok == "" {
-					if err := bt.Report(&rep); err != nil {
+					if err := bt.Report(batchOf(rep)); err != nil {
 						fail("built-in report: %v", err)
 						return
 					}
-				} else if rec := e.agentCall("report", q.tok, "m-"+q.tok[len(q.tok)-6:], rep); rec.Code != 200 {
+				} else if rec := e.agentCall("report", q.tok, "m-"+q.tok[len(q.tok)-6:], batchOf(rep)); rec.Code != 200 {
 					fail("report: %d %s", rec.Code, rec.Body.String())
 					return
 				}

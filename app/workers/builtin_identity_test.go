@@ -18,7 +18,7 @@ import (
 type recordingTransport struct {
 	inner   *inProcessTransport
 	syncs   []modules.SyncRequest
-	reports []modules.ReportRequest
+	reports []modules.ReportBatch
 }
 
 func (r *recordingTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse, error) {
@@ -26,15 +26,15 @@ func (r *recordingTransport) Sync(req *modules.SyncRequest) (*modules.SyncRespon
 	return r.inner.Sync(req)
 }
 
-func (r *recordingTransport) Report(req *modules.ReportRequest) error {
-	r.reports = append(r.reports, *req)
-	return r.inner.Report(req)
+func (r *recordingTransport) Report(batch *modules.ReportBatch) error {
+	r.reports = append(r.reports, *batch)
+	return r.inner.Report(batch)
 }
 
 // TestBuiltinAgentSendsIdentityAndRunning: the built-in agent's direct calls
 // carry what the agent sends over HTTP: the sync lists the manual runs that
-// are started and not finished, every report has its own identity, and the
-// central takes both.
+// are started and not finished, every report is a batch with its own
+// identity, and the central takes both.
 func TestBuiltinAgentSendsIdentityAndRunning(t *testing.T) {
 	e := newTestEnv(t)
 	b, _ := models.GetBuiltinAgent(e.c.db.Read())
@@ -74,8 +74,8 @@ func TestBuiltinAgentSendsIdentityAndRunning(t *testing.T) {
 		}
 		ids = append(ids, r.ReportID)
 	}
-	if len(ids) < 2 {
-		t.Fatalf("reports: %d", len(ids))
+	if len(ids) != 2 {
+		t.Fatalf("report requests: %d, want one per step", len(ids))
 	}
 	// The central answered every report: nothing is left queued.
 	if n := models.CountOutbox(db.Read()); n != 0 {

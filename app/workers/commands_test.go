@@ -62,9 +62,19 @@ func syncAgent(t *testing.T, e *testEnv, tok, sig string) modules.SyncResponse {
 
 func reportAgent(t *testing.T, e *testEnv, tok string, rep modules.ReportRequest) {
 	t.Helper()
-	if rec := e.agentCall("report", tok, "m-"+tok[len(tok)-6:], rep); rec.Code != 200 {
+	if rec := e.agentCall("report", tok, "m-"+tok[len(tok)-6:], batchOf(rep)); rec.Code != 200 {
 		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// batchOf returns a report batch of the items under a new identity, as the
+// agent sends it.
+func batchOf(items ...modules.ReportRequest) *modules.ReportBatch {
+	id, err := modules.RandomHex(16)
+	if err != nil {
+		panic(err)
+	}
+	return &modules.ReportBatch{ReportID: id, Reports: append([]modules.ReportRequest{}, items...)}
 }
 
 func intp(v int) *int { return &v }

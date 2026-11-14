@@ -2,8 +2,11 @@ package workers
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,21 +15,25 @@ import (
 	"mimamori/app/modules"
 )
 
-// The identity of reports on the central's side: the last report stored for
-// an agent is remembered (report_id) in the transaction that stores it, and
-// the same report sent again is answered as stored without being stored or
-// counted again.
+// The identity of report batches on the central's side: the last batch
+// stored for an agent is remembered (report_id) in the transaction that
+// stores it, and the same batch sent again is answered as stored without
+// being stored or counted again.
 
-// identityReport is a report with a detection of count 3, a dropped count of
-// 2 and a finished scheduled run of set.
-func identityReport(id string, setID int64) modules.ReportRequest {
-	return modules.ReportRequest{
-		ReportID: id,
+// identityReport is a batch with one item: a detection of count 3, a dropped
+// count of 2 and a finished scheduled run of set.
+func identityReport(id string, setID int64) *modules.ReportBatch {
+	return &modules.ReportBatch{ReportID: id, Reports: []modules.ReportRequest{{
 		Detections: []modules.DetectionReport{{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl",
 			Target: "twice", Count: 3, FirstAt: 1000, LastAt: 1001}},
 		Dropped:     2,
 		CommandRuns: []modules.CommandRunReport{runReport("id-run", setID, "s", 0, []modules.CommandResultReport{}, true, modules.ResultSuccess)},
-	}
+	}}}
+}
+
+// postReport sends a report body of an agent as it is and returns the answer.
+func postReport(e *testEnv, tok string, body any) *httptest.ResponseRecorder {
+	return e.agentCall("report", tok, "m-"+tok[len(tok)-6:], body)
 }
 
 // identityAgent issues a token agent with one set and a central log that the
@@ -106,15 +113,17 @@ const (
 	reportID2 = "fedcba9876543210fedcba9876543210"
 )
 
-// The same report twice counts its detections and its dropped count once and
-// writes its history once; the second answer is 200 {}; a different report
-// after it is stored.
+// The same batch twice (its answer was lost) counts its detections and its
+// dropped count once and writes its history once; the second answer is 200
+// {}; a different batch after it is stored.
 func TestReportStoredOnce(t *testing.T) {
 	e := newTestEnv(t)
 	tok, a, tdb, setID, logs := identityAgent(t, e, "host-once")
 	rep := identityReport(reportID1, setID)
-	reportAgent(t, e, tok, rep)
-	rec := e.agentCall("report", tok, "m-"+tok[len(tok)-6:], rep)
+	if rec := postReport(e, tok, rep); rec.Code != 200 {
+		t.Fatalf("first answer: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := postReport(e, tok, rep)
 	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != "{}" {
 		t.Fatalf("second answer: %d %s", rec.Code, rec.Body.String())
 	}
@@ -126,15 +135,17 @@ func TestReportStoredOnce(t *testing.T) {
 		t.Fatalf("remembered report: %q %v", got, err)
 	}
 
-	// A different report after it is stored and remembered.
-	reportAgent(t, e, tok, identityReport(reportID2, setID))
+	// A different batch after it is stored and remembered.
+	if rec := postReport(e, tok, identityReport(reportID2, setID)); rec.Code != 200 {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
 	wantStoredOnce(t, e, a, tdb, 6, 4, 2)
 	if got, _ := models.LastReceivedReport(tdb.Read()); got != reportID2 {
 		t.Fatalf("remembered report: %q", got)
 	}
 }
 
-// Two copies of one report arriving at once (the agent gave up waiting and
+// Two copies of one batch arriving at once (the agent gave up waiting and
 // sent it again) are stored once.
 func TestReportStoredOnceConcurrent(t *testing.T) {
 	e := newTestEnv(t)
@@ -146,7 +157,7 @@ func TestReportStoredOnceConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			codes[i] = e.agentCall("report", tok, "m-"+tok[len(tok)-6:], rep).Code
+			codes[i] = postReport(e, tok, rep).Code
 		}()
 	}
 	wg.Wait()
@@ -174,25 +185,112 @@ func TestReportIdentityBuiltin(t *testing.T) {
 	setID := int64(e.admin("POST", "/agents/"+itoa64(b.ID)+"/command-sets", body)["id"].(float64))
 	tr := &inProcessTransport{c: e.c, agentID: b.ID}
 	for range 2 {
-		rep := identityReport(reportID1, setID)
-		if err := tr.Report(&rep); err != nil {
+		if err := tr.Report(identityReport(reportID1, setID)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	wantStoredOnce(t, e, b, tdb, 3, 2, 1)
+	// The built-in agent's batch without a valid identity is refused too.
+	if err := tr.Report(&modules.ReportBatch{Reports: []modules.ReportRequest{}}); !errors.Is(err, errInvalidReport) {
+		t.Fatalf("batch without identity: %v", err)
+	}
 }
 
-// A report without an identity, or with one not of its form, is stored every
-// time it comes and not remembered.
-func TestReportWithoutID(t *testing.T) {
+// Only a batch with a valid identity is taken: a body without an identity,
+// with one not of its form, without the list of items, or in the form of a
+// single report is answered 400 and nothing of it is stored.
+func TestReportOnlyBatchWithIdentity(t *testing.T) {
 	e := newTestEnv(t)
 	tok, a, tdb, setID, _ := identityAgent(t, e, "host-noid")
-	for _, id := range []string{"", "", strings.ToUpper(reportID1), strings.ToUpper(reportID1), reportID1[:31]} {
-		reportAgent(t, e, tok, identityReport(id, setID))
+	item := identityReport(reportID1, setID).Reports[0]
+	single, _ := json.Marshal(item)
+	singleWithID := strings.Replace(string(single), "{", `{"report_id":"`+reportID1+`",`, 1)
+	bodies := []any{
+		&modules.ReportBatch{Reports: []modules.ReportRequest{item}},
+		&modules.ReportBatch{ReportID: strings.ToUpper(reportID1), Reports: []modules.ReportRequest{item}},
+		&modules.ReportBatch{ReportID: reportID1[:31], Reports: []modules.ReportRequest{item}},
+		&modules.ReportBatch{ReportID: reportID1 + "0", Reports: []modules.ReportRequest{item}},
+		json.RawMessage(`{"report_id":"` + reportID1 + `"}`),
+		json.RawMessage(`{"report_id":"` + reportID1 + `","reports":null}`),
+		json.RawMessage(single),
+		json.RawMessage(singleWithID),
+		json.RawMessage(`[{"report_id":"` + reportID1 + `","reports":[]}]`),
 	}
-	wantStoredOnce(t, e, a, tdb, 15, 10, 5)
+	for i, body := range bodies {
+		rec := postReport(e, tok, body)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), `"code":"common.invalid_request"`) {
+			t.Fatalf("body %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if n := detectionCount(t, tdb); n != 0 {
+		t.Fatalf("detections stored: %d", n)
+	}
+	var runs int
+	if err := tdb.Read().QueryRow(`SELECT count(*) FROM command_runs`).Scan(&runs); err != nil || runs != 0 {
+		t.Fatalf("runs %d %v", runs, err)
+	}
+	cur, _ := models.GetAgent(e.c.db.Read(), a.ID)
+	if cur.DroppedTotal != 0 || cur.LastReportAt != 0 || cur.LastCentralReportID != "" || droppedHistory(t, e) != 0 {
+		t.Fatalf("agent row: %+v", cur)
+	}
 	if got, _ := models.LastReceivedReport(tdb.Read()); got != "" {
 		t.Fatalf("remembered report: %q", got)
+	}
+}
+
+// A batch without items is a report: it is answered 200, remembered in both
+// parts and records the time of the report.
+func TestReportEmptyBatch(t *testing.T) {
+	e := newTestEnv(t)
+	tok, a, tdb, _, _ := identityAgent(t, e, "host-empty")
+	if rec := postReport(e, tok, json.RawMessage(`{"report_id":"`+reportID1+`","stopping":false,"reports":[]}`)); rec.Code != 200 {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
+	cur, _ := models.GetAgent(e.c.db.Read(), a.ID)
+	if cur.LastCentralReportID != reportID1 || cur.LastReportAt == 0 {
+		t.Fatalf("agent row: %+v", cur)
+	}
+	if got, _ := models.LastReceivedReport(tdb.Read()); got != reportID1 {
+		t.Fatalf("remembered report: %q", got)
+	}
+}
+
+// The items of one batch are stored in order, each on what the item before
+// it left: two application results each get their history row, detections
+// of the same kind are aggregated, the dropped counts add up, and the host
+// information of the last item that carries it stays.
+func TestReportBatchItemsInOrder(t *testing.T) {
+	e := newTestEnv(t)
+	tok, a, tdb, _, _ := identityAgent(t, e, "host-order")
+	det := modules.DetectionReport{Type: "exec", Category: "alert", OSUser: "nginx", Exe: "/usr/bin/curl", Target: "twice", Count: 1, FirstAt: 1000, LastAt: 1000}
+	batch := &modules.ReportBatch{ReportID: reportID1, Reports: []modules.ReportRequest{
+		{Detections: []modules.DetectionReport{det}, Dropped: 1, HostInfo: &modules.HostInfo{Hostname: "first"},
+			Apply: &modules.ApplyResult{Status: "error", Message: "validation failed: x", At: 100}},
+		{Detections: []modules.DetectionReport{det}, Dropped: 2},
+		{Detections: []modules.DetectionReport{det}, HostInfo: &modules.HostInfo{Hostname: "last"},
+			Apply: &modules.ApplyResult{Status: modules.ApplyStatusNone, Message: "nothing applied", At: 200}},
+	}}
+	if rec := postReport(e, tok, batch); rec.Code != 200 {
+		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
+	}
+	if n := detectionCount(t, tdb); n != 3 {
+		t.Fatalf("detection count %d", n)
+	}
+	cur, _ := models.GetAgent(e.c.db.Read(), a.ID)
+	if cur.DroppedTotal != 3 || droppedHistory(t, e) != 2 || cur.Hostname != "last" || cur.ApplyStatus != modules.ApplyStatusNone {
+		t.Fatalf("agent row: dropped %d (history %d) host %q apply %q", cur.DroppedTotal, droppedHistory(t, e), cur.Hostname, cur.ApplyStatus)
+	}
+	items, _, err := models.ListHistory(e.c.db.Read(), models.HistRule, "", nil, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	for _, h := range items {
+		actions = append(actions, h.Action)
+	}
+	slices.Sort(actions)
+	if !slices.Equal(actions, []string{"apply_result_error", "apply_result_none"}) {
+		t.Fatalf("history of the application results: %v", actions)
 	}
 }
 
@@ -212,10 +310,11 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 		t.Fatalf("handed over: %v", got)
 	}
 	rep := identityReport(reportID1, setID)
-	rep.CommandRuns[0].RequestID, rep.CommandRuns[0].Trigger = reqID, modules.TriggerManual
-	rep.CommandRuns[0].RunUID = "lost-run"
-	rep.CommandRequestAcks = []modules.CommandRequestAck{{RequestID: reqID, Status: modules.RequestAckStarted, RunUID: "lost-run", At: 1000}}
-	rep.CommandApply = &modules.CommandApplyResult{Signature: "sig-lost", At: 1000,
+	item := &rep.Reports[0]
+	item.CommandRuns[0].RequestID, item.CommandRuns[0].Trigger = reqID, modules.TriggerManual
+	item.CommandRuns[0].RunUID = "lost-run"
+	item.CommandRequestAcks = []modules.CommandRequestAck{{RequestID: reqID, Status: modules.RequestAckStarted, RunUID: "lost-run", At: 1000}}
+	item.CommandApply = &modules.CommandApplyResult{Signature: "sig-lost", At: 1000,
 		Problems: []modules.CommandApplyProblem{{SetID: 99, SetName: "broken", Problems: []string{"broken"}}}}
 
 	failed := false
@@ -226,7 +325,7 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 		}
 		return nil
 	}
-	if rec := e.agentCall("report", tok, "m-"+tok[len(tok)-6:], rep); rec.Code != 500 {
+	if rec := postReport(e, tok, rep); rec.Code != 500 {
 		t.Fatalf("first answer: %d %s", rec.Code, rec.Body.String())
 	}
 	if st := reqState(t, e, a.ID, reqID); st != models.RequestDelivered {
@@ -238,7 +337,9 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 	if cur, _ := models.GetAgent(e.c.db.Read(), a.ID); cur.DroppedTotal != 0 || cur.CommandProblems != "" || cur.LastCentralReportID != "" {
 		t.Fatalf("agent row after the lost central part: %+v", cur)
 	}
-	reportAgent(t, e, tok, rep)
+	if rec := postReport(e, tok, rep); rec.Code != 200 {
+		t.Fatalf("repeat: %d %s", rec.Code, rec.Body.String())
+	}
 	if st := reqState(t, e, a.ID, reqID); st != models.RequestDone {
 		t.Fatalf("request after the repeat: %s", st)
 	}
@@ -251,7 +352,9 @@ func TestReportRepeatAfterLostCentralStep(t *testing.T) {
 		t.Fatalf("log: %q", logs())
 	}
 	// A third copy: both parts were stored, nothing is stored again.
-	reportAgent(t, e, tok, rep)
+	if rec := postReport(e, tok, rep); rec.Code != 200 {
+		t.Fatalf("third copy: %d %s", rec.Code, rec.Body.String())
+	}
 	wantStoredOnce(t, e, a, tdb, 3, 2, 1)
 	if !strings.Contains(logs(), "report "+reportID1+" of host-lost was already stored") {
 		t.Fatalf("log: %q", logs())
