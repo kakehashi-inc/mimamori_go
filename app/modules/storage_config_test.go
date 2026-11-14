@@ -176,7 +176,7 @@ func TestCentralConfigRepairable(t *testing.T) {
 	if _, err := LoadCentralConfig(db.Read()); err == nil {
 		t.Fatal("invalid stored values loaded")
 	}
-	if _, err := applyConfig(db, map[string]string{"workers": "65"}, nil); err == nil {
+	if _, err := applyConfig(db, map[string]string{"notify.max_lines": "10001"}, nil); err == nil {
 		t.Fatal("a change adding a problem was accepted")
 	}
 	if _, err := applyConfig(db, map[string]string{"retention_days": "365"}, nil); err != nil {
@@ -351,7 +351,7 @@ func TestRunningConfigStatus(t *testing.T) {
 	if LoadRunningConfig(db.Read()) != nil {
 		t.Fatal("record without a start")
 	}
-	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "workers": "2"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19610", "agent_listen": "127.0.0.1:19611", "retention_days": "2"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	started, err := LoadCentralConfig(db.Read())
@@ -362,7 +362,7 @@ func TestRunningConfigStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A change saved while running waits for a restart.
-	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19612", "workers": "3"}, nil); err != nil {
+	if _, err := applyConfig(db, map[string]string{"web_listen": "127.0.0.1:19612", "retention_days": "3"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := LoadCentralConfig(db.Read())
@@ -370,7 +370,7 @@ func TestRunningConfigStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := LoadRunningConfig(db.Read())
-	if _, ok := run["workers"]; ok || run["web_listen"] != "127.0.0.1:19610" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
+	if _, ok := run["retention_days"]; ok || run["web_listen"] != "127.0.0.1:19610" || run["builtin_agent"] == "" || len(run) != len(restartItems) {
 		t.Fatalf("record: %v", run)
 	}
 	for _, tc := range []struct {
@@ -381,24 +381,21 @@ func TestRunningConfigStatus(t *testing.T) {
 	}{
 		{"web_listen", "http://", saved, run, "http://127.0.0.1:19610 (saved: 127.0.0.1:19612, takes effect after restart)"},
 		{"agent_listen", "https://", saved, run, "https://127.0.0.1:19611"},
-		// workers takes effect while running: always the saved value, also
-		// against a recorded start value.
-		{"workers", "", saved, run, "3"},
-		{"workers", "", saved, nil, "3"},
-		{"workers", "", saved, map[string]string{"workers": "2"}, "3"},
+		// An item that takes effect while running: always the saved value,
+		// also against a recorded start value.
+		{"retention_days", "", saved, run, "3"},
+		{"retention_days", "", saved, nil, "3"},
+		{"retention_days", "", saved, map[string]string{"retention_days": "2"}, "3"},
 	} {
 		if got, ok := statusValue(tc.item, tc.prefix, tc.saved, tc.run); !ok || got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.item, got, tc.want)
 		}
 	}
-	if _, ok := statusValue("workers", "", nil, nil); ok {
+	if _, ok := statusValue("retention_days", "", nil, nil); ok {
 		t.Error("value without saved or running configuration")
 	}
-	if _, ok := statusValue("workers", "", nil, map[string]string{"workers": "2"}); ok {
-		t.Error("workers from a recorded start value")
-	}
-	if DefaultWorkers != 2 || restartItems["workers"] {
-		t.Errorf("workers: default %d, restart item %v", DefaultWorkers, restartItems["workers"])
+	if _, ok := statusValue("retention_days", "", nil, map[string]string{"retention_days": "2"}); ok {
+		t.Error("an item that takes effect while running from a recorded start value")
 	}
 	if err := db.Write(ClearRunningConfig); err != nil || LoadRunningConfig(db.Read()) != nil {
 		t.Fatalf("clear: %v", err)

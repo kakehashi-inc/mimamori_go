@@ -163,7 +163,7 @@ func TestValidationListsCarryProblems(t *testing.T) {
 	if want := `server_names: "a b" is not a host name or IP address; smtp.security must be starttls, tls or none`; out.Error != want {
 		t.Errorf("config: error %q, want %q", out.Error, want)
 	}
-	rec = e.cli("PUT", "/config", map[string]any{"set": map[string]string{"workers": "2"}, "unset": []string{"workers"}})
+	rec = e.cli("PUT", "/config", map[string]any{"set": map[string]string{"retention_days": "2"}, "unset": []string{"retention_days"}})
 	if rec.Code != 400 {
 		t.Fatalf("config set and unset: %d %s", rec.Code, rec.Body.String())
 	}

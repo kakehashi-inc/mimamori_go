@@ -173,7 +173,7 @@ func TestAgentSetWorkersBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := cdb.Write(func(tx models.Writer) error {
-		_, err := ApplyCentralConfigChanges(tx, map[string]string{"workers": "5"}, nil)
+		_, err := ApplyCentralConfigChanges(tx, map[string]string{"retention_days": "90"}, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -209,8 +209,8 @@ func TestAgentSetWorkersBuiltin(t *testing.T) {
 	if after := settings(); after != before {
 		t.Fatalf("central settings changed:\n%s\n%s", before, after)
 	}
-	if c, err := LoadCentralConfig(cdb.Read()); err != nil || c.Workers != 5 {
-		t.Fatalf("central workers: %+v %v", c, err)
+	if c, err := LoadCentralConfig(cdb.Read()); err != nil || c.RetentionDays != 90 {
+		t.Fatalf("central configuration: %+v %v", c, err)
 	}
 	cdb.Close()
 	// No agent.db came into being, and the agent's own count is not set.

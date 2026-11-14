@@ -45,7 +45,7 @@ func builtinWorkersStored(t *testing.T, dir string) string {
 }
 
 // The built-in agent runs with its own worker count from builtin-agent.db
-// and reports it; the central's item workers is a different setting: setting
+// and reports it; the central's configuration is a different thing: setting
 // one changes nothing of the other.
 func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	e := newTestEnv(t)
@@ -53,28 +53,38 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	fakeAuditTools(t)
 	dir := e.c.dataDir
 
-	// The central's workers 5, saved and in use.
-	if _, err := e.c.applyConfigChanges(map[string]string{"workers": "5"}, nil); err != nil {
+	// A saved configuration item of the central.
+	if _, err := e.c.applyConfigChanges(map[string]string{"retention_days": "90"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg := *e.c.conf()
-	cfg.Workers = 5
 	enabled := true
 	cfg.BuiltinAgent = &enabled
 	e.c.cfg.Store(&cfg)
-	centralWorkers := func() string {
-		var v string
-		_ = e.c.db.Read().QueryRow(`SELECT value FROM settings WHERE key = 'config.workers'`).Scan(&v)
-		return v
+	centralSettings := func() string {
+		rows, err := e.c.db.Read().Query(`SELECT key || '=' || value FROM settings WHERE key LIKE 'config.%' ORDER BY key`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var b strings.Builder
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			b.WriteString(s + "\n")
+		}
+		return b.String()
 	}
-	before := centralWorkers()
+	before := centralSettings()
 
 	// The built-in agent's 2, set on the central's host.
 	if err := modules.AgentSetWorkers(dir, "2", true); err != nil {
 		t.Fatal(err)
 	}
-	if got := centralWorkers(); got != before || e.c.conf().Workers != 5 {
-		t.Fatalf("central workers changed by agent set-workers --builtin: %q -> %q", before, got)
+	if got := centralSettings(); got != before {
+		t.Fatalf("central configuration changed by agent set-workers --builtin: %q -> %q", before, got)
 	}
 
 	stop := make(chan struct{})
@@ -103,8 +113,8 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 		t.Fatalf("agent detail host_info: %v", detail["host_info"])
 	}
 
-	// Changing the central's item leaves the built-in agent's count.
-	if _, err := e.c.applyConfigChanges(map[string]string{"workers": "7"}, nil); err != nil {
+	// Changing the central's configuration leaves the built-in agent's count.
+	if _, err := e.c.applyConfigChanges(map[string]string{"retention_days": "120"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if v := builtinWorkersStored(t, dir); v != "2" {

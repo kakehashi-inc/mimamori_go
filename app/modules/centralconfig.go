@@ -54,7 +54,6 @@ type CentralConfig struct {
 	WebListen               string
 	AgentListen             string
 	ServerNames             []string
-	Workers                 int
 	TokenValidDays          int
 	TokenRenewBeforeDays    int
 	RetentionDays           int
@@ -139,7 +138,6 @@ var ConfigFields = []ConfigField{
 			}
 			return nil
 		}},
-	cfgIntField("workers", "Run requests in progress at agents at the same time, all agents together", func(c *CentralConfig) *int { return &c.Workers }),
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
 	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of ended run requests (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
@@ -225,9 +223,6 @@ func (c *CentralConfig) applyDefaults() {
 	if c.AgentListen == "" {
 		c.AgentListen = DefaultAgentListen()
 	}
-	if c.Workers <= 0 {
-		c.Workers = DefaultWorkers
-	}
 	if c.TokenValidDays <= 0 {
 		c.TokenValidDays = DefaultTokenValidDays
 	}
@@ -282,7 +277,6 @@ func (c *CentralConfig) applyDefaults() {
 // configIntMax is the largest accepted value of each number item. The bounds
 // keep every time computed from the items far from overflowing.
 var configIntMax = map[string]int{
-	"workers":                    64,
 	"token_valid_days":           36500,
 	"token_renew_before_days":    36500,
 	"retention_days":             36500,

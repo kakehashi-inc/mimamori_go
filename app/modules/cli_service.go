@@ -76,8 +76,7 @@ func (c *CentralStatusCmd) Run() error {
 			cfg, cfgErr := LoadCentralConfig(db.Read())
 			// While the central runs, the listeners are shown with the
 			// values it started with (a saved value that differs takes
-			// effect after a restart); workers takes effect while running
-			// and is shown as saved.
+			// effect after a restart).
 			var runningValues map[string]string
 			if running {
 				runningValues = LoadRunningConfig(db.Read())
@@ -89,7 +88,6 @@ func (c *CentralStatusCmd) Run() error {
 			for _, line := range []struct{ label, item, prefix string }{
 				{"web:", "web_listen", "http://"},
 				{"agents/admin:", "agent_listen", "https://"},
-				{"workers:", "workers", ""},
 			} {
 				if text, ok := statusValue(line.item, line.prefix, cfg, runningValues); ok {
 					fmt.Printf("%-16s %s\n", line.label, text)
@@ -106,8 +104,8 @@ func (c *CentralStatusCmd) Run() error {
 // statusValue returns the text central status prints for an item: for a
 // restart item the running value when one is recorded (runningValues),
 // marked when the saved value differs, otherwise the saved value; for an
-// item that takes effect while running (workers) the saved value. ok is
-// false when neither is known.
+// item that takes effect while running the saved value. ok is false when
+// neither is known.
 func statusValue(item, prefix string, saved *CentralConfig, runningValues map[string]string) (string, bool) {
 	f, err := FindConfigField(item)
 	if err != nil {

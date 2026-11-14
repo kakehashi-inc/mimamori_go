@@ -136,8 +136,8 @@ func startCentral() error {
 	stopPeriodic := make(chan struct{})
 	waitPeriodic := c.startPeriodic(c.periodicSteps(), stopPeriodic)
 	running = true
-	logger.Printf("%s central %s started: web http://%s, agents and management https://%s, central workers %d",
-		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen, cfg.Workers)
+	logger.Printf("%s central %s started: web http://%s, agents and management https://%s",
+		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen)
 	// Nothing about the built-in agent is logged while it is disabled.
 	builtinEnabled := *c.conf().BuiltinAgent
 	builtinRunning, msg := c.builtinStatus()

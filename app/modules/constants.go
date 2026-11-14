@@ -55,7 +55,6 @@ const (
 	DefaultNotifyIntervalMin  = 30
 	DefaultNotifyDedupeHours  = 24
 	DefaultNotifyMaxLines     = 200
-	DefaultWorkers            = 2
 	DefaultRememberDays       = 30
 	DefaultTrustDays          = 30
 	DefaultSMTPTimeoutSec     = 30
@@ -64,10 +63,9 @@ const (
 
 // --- Worker count of an agent ---
 
-// The worker count of an agent (and of the built-in agent) is stored in that
-// agent's own local database (agent_workers.go). It has nothing to do with
-// the central's item workers (DefaultWorkers and its bound in
-// centralconfig.go): neither is ever read for the other.
+// The worker count of an agent (and of the built-in agent): how many units
+// it processes at the same time, stored in that agent's own local database
+// (agent_workers.go), DefaultAgentWorkers when none is stored.
 const (
 	DefaultAgentWorkers = 1
 	MaxAgentWorkers     = 64

@@ -209,7 +209,7 @@ func englishCommandSets() []*CommandSetSpec {
 var englishConfigSets = [][][2]string{
 	{},
 	{{"web_listen", "x"}, {"agent_listen", "host:0"}, {"server_names", "a b, ok.example.com, x_y"},
-		{"smtp.security", "x"}, {"smtp.host", "a b"}, {"smtp.from", "not mail"}, {"workers", "1000"},
+		{"smtp.security", "x"}, {"smtp.host", "a b"}, {"smtp.from", "not mail"}, {"notify.max_lines", "10001"},
 		{"smtp.helo_name", "a\rb"}, {"smtp.username", "a\x00b"}, {"smtp.password", "p\x01"},
 		{"default_check_interval_sec", "1"}, {"token_valid_days", "5"}, {"token_renew_before_days", "5"}},
 	{{"web_listen", "127.0.0.1:1"}, {"agent_listen", "127.0.0.1:1"}, {"retention_days", "200000"}},
@@ -218,7 +218,7 @@ var englishConfigSets = [][][2]string{
 
 // englishConfigItemInputs are item, value pairs for the check of one value.
 var englishConfigItemInputs = [][2]string{
-	{"nope", ""}, {"workers", "x"}, {"workers", "0"}, {"workers", "-1"}, {"builtin_agent", "maybe"}, {"smtp.auth", ""},
+	{"nope", ""}, {"notify.max_lines", "x"}, {"notify.max_lines", "0"}, {"notify.max_lines", "-1"}, {"builtin_agent", "maybe"}, {"smtp.auth", ""},
 }
 
 // englishConfigChanges are changes for ApplyCentralConfigChanges on a new
@@ -231,8 +231,8 @@ var englishConfigChanges = []struct {
 	{unset: []string{"nope"}},
 	{set: map[string]string{"web_listen": "127.0.0.1:9"}, unset: []string{"web_listen"}},
 	{set: map[string]string{"web_listen": " "}},
-	{set: map[string]string{"workers": "x"}},
-	{set: map[string]string{"workers": "65"}},
+	{set: map[string]string{"notify.max_lines": "x"}},
+	{set: map[string]string{"notify.max_lines": "10001"}},
 	{set: map[string]string{"smtp.security": "x", "web_listen": "a"}},
 	{set: map[string]string{"server_names": "a b,c d"}},
 }
@@ -295,21 +295,21 @@ var englishWant = map[string][]string{
 	"command_set_now0/8":  {"schedule.weekdays: \"xyz\" is not one of sun, mon, tue, wed, thu, fri, sat", "schedule.weekdays: \"Sun\" is not one of sun, mon, tue, wed, thu, fri, sat", "schedule.time: must be a time of day from 00:00 to 23:59"},
 	"command_set_now0/9":  {"schedule.time: must be a time of day from 00:00 to 23:59"},
 	"config/0":            {},
-	"config/1":            {"web_listen: address x: missing port in address; agent_listen: the address must be an IP address; agent_listen: the port must be 1-65535; server_names: \"a b\" is not a host name or IP address; server_names: \"x_y\" is not a host name or IP address; smtp.security must be starttls, tls or none; smtp.host must be a host name or IP address; smtp.from must be one mail address; workers must be 64 or less; smtp.username must not contain control characters; smtp.password must not contain control characters; smtp.helo_name must not contain control characters; default_check_interval_sec must be 10 or more; token_renew_before_days must be less than token_valid_days"},
+	"config/1":            {"web_listen: address x: missing port in address; agent_listen: the address must be an IP address; agent_listen: the port must be 1-65535; server_names: \"a b\" is not a host name or IP address; server_names: \"x_y\" is not a host name or IP address; smtp.security must be starttls, tls or none; smtp.host must be a host name or IP address; smtp.from must be one mail address; notify.max_lines must be 10000 or less; smtp.username must not contain control characters; smtp.password must not contain control characters; smtp.helo_name must not contain control characters; default_check_interval_sec must be 10 or more; token_renew_before_days must be less than token_valid_days"},
 	"config/2":            {"web_listen and agent_listen must differ; retention_days must be 36500 or less"},
 	"config/3":            {"web_listen: the port must be 1-65535; agent_listen: the port must be 1-65535; notify.subject_prefix must not contain control characters"},
-	"config_change/0":     {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen, workers)"},
-	"config_change/1":     {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen, workers)"},
+	"config_change/0":     {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen)"},
+	"config_change/1":     {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen)"},
 	"config_change/2":     {"web_listen is both set and unset"},
 	"config_change/3":     {"a value is required for web_listen"},
-	"config_change/4":     {"workers must be a positive integer"},
-	"config_change/5":     {"workers must be 64 or less"},
+	"config_change/4":     {"notify.max_lines must be a positive integer"},
+	"config_change/5":     {"notify.max_lines must be 10000 or less"},
 	"config_change/6":     {"web_listen: address a: missing port in address; smtp.security must be starttls, tls or none"},
 	"config_change/7":     {"server_names: \"a b\" is not a host name or IP address; server_names: \"c d\" is not a host name or IP address"},
-	"config_item/0":       {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen, workers)"},
-	"config_item/1":       {"workers must be a positive integer"},
-	"config_item/2":       {"workers must be a positive integer"},
-	"config_item/3":       {"workers must be a positive integer"},
+	"config_item/0":       {"unknown configuration item \"nope\" (items: agent_listen, builtin_agent, default_check_interval_sec, notify.dedupe_hours, notify.max_lines, notify.min_interval_min, notify.subject_prefix, retention_days, server_names, session_remember_days, smtp.auth, smtp.from, smtp.helo_name, smtp.host, smtp.password, smtp.port, smtp.security, smtp.timeout_sec, smtp.username, token_renew_before_days, token_valid_days, two_step_trust_days, web_listen)"},
+	"config_item/1":       {"notify.max_lines must be a positive integer"},
+	"config_item/2":       {"notify.max_lines must be a positive integer"},
+	"config_item/3":       {"notify.max_lines must be a positive integer"},
 	"config_item/4":       {"builtin_agent must be true or false"},
 	"config_item/5":       {"smtp.auth must be true or false"},
 	"display_name/0":      {"a display name is required"},

@@ -463,15 +463,18 @@ func TestConfigUpdate(t *testing.T) {
 	if it := item(out, "smtp.password"); it["value"] != "" || it["is_set"] != true {
 		t.Fatalf("password item: %v", it)
 	}
-	for _, it := range out["items"].([]any) {
-		if it.(map[string]any)["name"] == "smtp.to" {
-			t.Fatalf("smtp.to is listed: %v", it)
+	// smtp.to and workers are not items: they are not listed, and setting
+	// one fails like any unknown name.
+	for _, name := range []string{"smtp.to", "workers"} {
+		for _, it := range out["items"].([]any) {
+			if it.(map[string]any)["name"] == name {
+				t.Fatalf("%s is listed: %v", name, it)
+			}
 		}
-	}
-	// smtp.to is not an item: setting it fails like any unknown name.
-	if rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"smtp.to": "a@example.com"}},
-		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000"); rec.Code != http.StatusBadRequest {
-		t.Fatalf("smtp.to set: status %d", rec.Code)
+		if rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{name: "2"}},
+			map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "config.unknown_item") {
+			t.Fatalf("%s set: status %d %s", name, rec.Code, rec.Body.String())
+		}
 	}
 	rec := e.do(e.agent, "PUT", "/admin/v1/config", map[string]any{"set": map[string]string{"web_listen": "127.0.0.1:9443"}},
 		map[string]string{"Authorization": "Bearer " + e.cliKey}, "127.0.0.1:5000")

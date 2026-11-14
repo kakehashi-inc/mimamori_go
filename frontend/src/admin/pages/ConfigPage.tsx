@@ -21,7 +21,7 @@ type ItemKey = keyof typeof ja.config.items;
 const GROUPS: { key: GroupKey; items: string[] }[] = [
     {
         key: 'server',
-        items: ['web_listen', 'agent_listen', 'server_names', 'workers', 'builtin_agent'],
+        items: ['web_listen', 'agent_listen', 'server_names', 'builtin_agent'],
     },
     {
         key: 'agents',
