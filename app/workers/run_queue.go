@@ -148,7 +148,7 @@ func (c *core) runRequestsStep(now time.Time) {
 	var list []*models.CommandRequest
 	var requeued []requeuedRequest
 	err := c.db.Write(func(tx models.Writer) error {
-		requeued = nil
+		// The agents with a delivered request, whenever it was requested.
 		agents, err := models.ListAgentsWithCommandRequests(tx, math.MaxInt64, models.RequestDelivered)
 		if err != nil {
 			return err
