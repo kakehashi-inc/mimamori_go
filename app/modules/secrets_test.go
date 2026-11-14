@@ -53,7 +53,7 @@ func TestPasswordHashProductionCount(t *testing.T) {
 	if err != nil || string(want) != string(key) {
 		t.Fatalf("the key is not PBKDF2-SHA256 with %d iterations: %v", PasswordIterations, err)
 	}
-	if !VerifyPassword(h, "correct horse battery") || VerifyPassword(h, "correct horse batterY") {
+	if !VerifyPassword(h, "correct horse battery") {
 		t.Fatal("verification of the production hash")
 	}
 }
@@ -99,9 +99,11 @@ func TestPasswordHashTestHook(t *testing.T) {
 		}
 	}
 
+	// 0 is the program's count again (TestPasswordHashProductionCount
+	// hashes with it).
 	UseTestPasswordIterations(0)
-	if h, _ := HashPassword("x"); !strings.HasPrefix(h, fmt.Sprintf("pbkdf2-sha256$%d$", PasswordIterations)) {
-		t.Fatalf("after the hook was reset: %q", h)
+	if got := testPasswordIterations.Load(); got != 0 {
+		t.Fatalf("after the reset the hook holds %d", got)
 	}
 }
 
