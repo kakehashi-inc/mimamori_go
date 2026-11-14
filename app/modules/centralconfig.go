@@ -98,7 +98,7 @@ func cfgIntField(name, help string, p func(c *CentralConfig) *int) ConfigField {
 	return ConfigField{Name: name, Kind: "int", Help: help,
 		get: func(c *CentralConfig) string { return strconv.Itoa(*p(c)) },
 		set: func(c *CentralConfig, v string) error {
-			n, err := strconv.Atoi(strings.TrimSpace(v))
+			n, err := ParseWholeInt(v)
 			if err != nil || n <= 0 {
 				return M("config.not_positive_int", "name", name)
 			}
@@ -364,7 +364,7 @@ func (c *CentralConfig) validationProblems() []Problem {
 		if host != "" && net.ParseIP(host) == nil {
 			add(M("config.listen_ip", "field", a.name))
 		}
-		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		if p, err := ParseWholeInt(port); err != nil || p < 1 || p > 65535 {
 			add(M("config.listen_port", "field", a.name))
 		}
 	}

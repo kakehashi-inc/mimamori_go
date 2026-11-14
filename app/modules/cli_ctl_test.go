@@ -119,7 +119,10 @@ func TestCtlParseDetectionRef(t *testing.T) {
 	if a, id, ok := parseDetectionRef("2:5"); !ok || a != 2 || id != 5 {
 		t.Errorf("2:5 = %d %d %v", a, id, ok)
 	}
-	for _, s := range []string{"2:5x", "2:5:7", "2", ":5", "2:", "a:5", "2: 5", "+2:5", "2:-5", "0:5", "2:0", "2:5 ", " 2:5", "2:0x5", "2:99999999999999999999"} {
+	if a, id, ok := parseDetectionRef("010:05"); !ok || a != 10 || id != 5 {
+		t.Errorf("010:05 = %d %d %v", a, id, ok)
+	}
+	for _, s := range []string{"2:5x", "2:5:7", "2", ":5", "2:", "a:5", "2: 5", "+2:5", "2:-5", "0:5", "2:0", "2:5 ", " 2:5", "2:0x5", "2:1_0", "2:\uff15", "2:99999999999999999999"} {
 		if _, _, ok := parseDetectionRef(s); ok {
 			t.Errorf("%q accepted", s)
 		}

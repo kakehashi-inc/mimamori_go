@@ -88,8 +88,10 @@ func TestCtlCommandSetsArguments(t *testing.T) {
 	}
 }
 
+// SET_ID is a whole number of the digits 0-9 (ParseWholeNumber, leading
+// zeros are decimal); the new name after '=' is kept as it is.
 func TestParseImportItems(t *testing.T) {
-	got, err := parseImportItems([]string{"5", " 6 =web=2", "7=  spaced name "})
+	got, err := parseImportItems([]string{"5", "6=web=2", "07=  spaced name "})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +101,7 @@ func TestParseImportItems(t *testing.T) {
 	if !bytes.Equal(gj, wj) {
 		t.Errorf("items = %s, want %s", gj, wj)
 	}
-	for _, bad := range []string{"", "x", "0", "-1", "5=", "5=  ", "=name", "1.5"} {
+	for _, bad := range []string{"", "x", "0", "-1", "5=", "5=  ", "=name", "1.5", " 6 =web", "6 ", "+6", "0x6", "1_0", "1e1", "\uff16"} {
 		_, err := parseImportItems([]string{bad})
 		var ee *ExitError
 		if err == nil || !errors.As(err, &ee) || ee.Code != ExitArgument {

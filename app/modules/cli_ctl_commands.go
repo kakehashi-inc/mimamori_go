@@ -247,12 +247,13 @@ func (c *CtlCommandSetsRunCmd) Run(p *CtlCmd) error {
 }
 
 // parseImportItems reads SET_ID or SET_ID=NEW_NAME arguments. The id must
-// be a positive integer; a new name, when given, must not be empty.
+// be a positive whole number (ParseWholeNumber); a new name, when given,
+// must not be empty.
 func parseImportItems(args []string) ([]map[string]any, error) {
 	items := make([]map[string]any, 0, len(args))
 	for _, a := range args {
 		idText, name, renamed := strings.Cut(a, "=")
-		id, err := strconv.ParseInt(strings.TrimSpace(idText), 10, 64)
+		id, err := ParseWholeNumber(idText, 64)
 		if err != nil || id <= 0 {
 			return nil, NewExitErrorf(ExitArgument, "expected SET_ID or SET_ID=NEW_NAME with a positive integer SET_ID, got %q", a)
 		}

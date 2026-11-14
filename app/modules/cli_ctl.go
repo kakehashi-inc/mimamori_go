@@ -994,8 +994,8 @@ func (cl *ctlClient) ackDetections(items []map[string]int64) error {
 	return nil
 }
 
-// parseDetectionRef reads AGENT_ID:ID; both parts must be positive decimal
-// integers and nothing else may follow.
+// parseDetectionRef reads AGENT_ID:ID; both parts must be positive whole
+// numbers (ParseWholeNumber) and nothing else may follow.
 func parseDetectionRef(s string) (agent, id int64, ok bool) {
 	as, is, found := strings.Cut(s, ":")
 	if !found {
@@ -1009,13 +1009,10 @@ func parseDetectionRef(s string) (agent, id int64, ok bool) {
 	return agent, id, true
 }
 
-// parsePositiveID reads a decimal integer of digits only (no sign, no
-// spaces) that is greater than zero.
+// parsePositiveID reads a whole number (ParseWholeNumber) that is greater
+// than zero.
 func parsePositiveID(s string) (int64, bool) {
-	if s == "" || strings.Trim(s, "0123456789") != "" {
-		return 0, false
-	}
-	n, err := strconv.ParseInt(s, 10, 64)
+	n, err := ParseWholeNumber(s, 64)
 	return n, err == nil && n > 0
 }
 
