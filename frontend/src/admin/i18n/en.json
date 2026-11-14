@@ -546,7 +546,7 @@
             "errorCodes": "Exit codes that are errors: {{codes}}",
             "noErrorCodes": "Every exit code is a success or a failure.",
             "codesOverlap": "These exit codes are both success and failure codes: {{codes}}",
-            "timeoutHint": "1 to 86400. The command is stopped when it runs longer.",
+            "timeoutHint": "Empty or 0: no limit, the command is waited for until it ends. Otherwise, after this many seconds (up to 86400) the command is asked to end, and whatever of it still runs 60 seconds later is ended by force.",
             "lineLimitHint": "Lines of this command's part of the values (1 to 10000).",
             "patternsHint": "Regular expressions applied to the whole console output in this order. Each needs a named group such as (?<name>...); what the groups capture are the values. Without patterns, the console output itself is the value.",
             "noPatterns": "No patterns: the console output is used as the value.",

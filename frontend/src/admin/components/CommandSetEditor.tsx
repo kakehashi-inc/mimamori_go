@@ -652,11 +652,21 @@ function CommandEditor({
                         <input
                             id={`${id}-to`}
                             type='number'
-                            min={1}
+                            min={0}
                             max={86400}
+                            step={1}
+                            inputMode='numeric'
                             className={inputClass}
                             value={command.timeoutSec}
-                            onChange={e => set('timeoutSec', e.target.value)}
+                            // onInput, not onChange: React reports no change while text that is
+                            // no number keeps the value empty, and an empty field means no limit.
+                            onInput={e =>
+                                onChange({
+                                    ...command,
+                                    timeoutSec: e.currentTarget.value,
+                                    timeoutBadInput: e.currentTarget.validity.badInput,
+                                })
+                            }
                         />
                     </Field>
                 </div>

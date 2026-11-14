@@ -23,8 +23,10 @@ export const ON_PROBLEMS: OnProblems[] = ['stop', 'continue_on_failure', 'contin
 
 // Defaults of the server (app/modules/commandspec.go).
 export const DEFAULT_KEEP_RUNS = 100;
-export const DEFAULT_TIMEOUT_SEC = 300;
 export const DEFAULT_LINE_LIMIT = 20;
+// Time limit (seconds) the field of a newly added command shows. The server
+// fills in no time limit: an empty field is sent as 0, which is no limit.
+export const INITIAL_TIMEOUT_SEC = 300;
 
 /** Numbers are kept as typed text so that a field can be empty while editing. */
 export interface CodeDraft {
@@ -42,6 +44,8 @@ export interface CommandDraft {
     failure: CodeDraft;
     onProblems: OnProblems;
     timeoutSec: string;
+    /** The time limit field holds text that is no number (the browser gives it as empty). */
+    timeoutBadInput: boolean;
     lineLimit: string;
     patterns: { key: number; value: string }[];
 }
@@ -92,7 +96,8 @@ export function newCommandDraft(): CommandDraft {
         success: { kind: 'single', a: '0', b: '' },
         failure: { kind: 'min', a: '1', b: '' },
         onProblems: 'stop',
-        timeoutSec: String(DEFAULT_TIMEOUT_SEC),
+        timeoutSec: String(INITIAL_TIMEOUT_SEC),
+        timeoutBadInput: false,
         lineLimit: String(DEFAULT_LINE_LIMIT),
         patterns: [],
     };
@@ -108,7 +113,8 @@ export function isBlankCommandDraft(c: CommandDraft): boolean {
         c.note === '' &&
         c.patterns.length === 0 &&
         c.onProblems === 'stop' &&
-        c.timeoutSec === String(DEFAULT_TIMEOUT_SEC) &&
+        c.timeoutSec === String(INITIAL_TIMEOUT_SEC) &&
+        !c.timeoutBadInput &&
         c.lineLimit === String(DEFAULT_LINE_LIMIT) &&
         c.success.kind === 'single' &&
         c.success.a === '0' &&
@@ -192,6 +198,7 @@ export function setDraftFrom(set: CommandSet): SetDraft {
             failure: codeDraft(c.failure, { kind: 'min', a: 1 }),
             onProblems: c.on_problems,
             timeoutSec: String(c.timeout_sec),
+            timeoutBadInput: false,
             lineLimit: String(c.line_limit),
             patterns: (c.patterns ?? []).map(p => ({ key: newKey(), value: p })),
         })),
@@ -258,7 +265,8 @@ export function draftToSpec(d: SetDraft): CommandSetSpec {
             success: codeSpec(c.success),
             failure: codeSpec(c.failure),
             on_problems: c.onProblems,
-            timeout_sec: num(c.timeoutSec),
+            // An empty time limit is 0: no limit.
+            timeout_sec: c.timeoutSec.trim() === '' ? 0 : num(c.timeoutSec),
             line_limit: collect || isWhole(c.lineLimit) ? num(c.lineLimit) : DEFAULT_LINE_LIMIT,
             patterns: collect ? c.patterns.map(p => p.value) : [],
         })),
@@ -268,8 +276,8 @@ export function draftToSpec(d: SetDraft): CommandSetSpec {
 /**
  * Problems the form finds before the server is asked: number fields that are
  * empty or not whole numbers (JSON would send them as null, which the server
- * takes as "use the default") and a missing once time. Ranges and everything
- * else are checked by the server.
+ * takes as "use the default"; an empty time limit is 0, no limit) and a
+ * missing once time. Ranges and everything else are checked by the server.
  */
 export function draftProblems(t: TFunction, d: SetDraft): string[] {
     const out: string[] = [];
@@ -285,7 +293,10 @@ export function draftProblems(t: TFunction, d: SetDraft): string[] {
     d.commands.forEach((c, i) => {
         const prefix = (p: string) => t('commandSets.local.inCommand', { n: i + 1, problem: p });
         const before = out.length;
-        whole(c.timeoutSec, t('commandSets.fields.timeoutSec'));
+        // An empty time limit is 0 (no limit); text the browser cannot read as a number is not.
+        const timeoutField = t('commandSets.fields.timeoutSec');
+        if (c.timeoutBadInput) out.push(t('commandSets.local.wholeNumber', { field: timeoutField }));
+        else if (c.timeoutSec.trim() !== '') whole(c.timeoutSec, timeoutField);
         if (d.purpose === 'collect_output') whole(c.lineLimit, t('commandSets.fields.lineLimit'));
         for (const [spec, label] of [
             [c.success, t('commandSets.fields.success')],
