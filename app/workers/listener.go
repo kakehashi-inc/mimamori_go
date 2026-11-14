@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -21,7 +20,7 @@ func listenTCP(addr string) (*net.TCPListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	port, err := strconv.Atoi(portStr)
+	port, err := modules.ParseWholeInt(portStr)
 	if err != nil || port < 0 || port > 65535 {
 		return nil, fmt.Errorf("%s: invalid port", addr)
 	}

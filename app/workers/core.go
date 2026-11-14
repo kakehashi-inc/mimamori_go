@@ -631,20 +631,22 @@ func invalidBody(err error) modules.Msg {
 	return modules.M("common.invalid_body", "detail", detail)
 }
 
+// pathID reads the id in the path segment name: a positive whole number
+// (modules.ParseWholeNumber).
 func pathID(r *http.Request, name string) (int64, bool) {
-	v, err := strconv.ParseInt(r.PathValue(name), 10, 64)
+	v, err := modules.ParseWholeNumber(r.PathValue(name), 64)
 	return v, err == nil && v > 0
 }
 
-// queryInt reads an optional integer query parameter, clamped to [min, max].
-// An empty or absent value gives def; a value that is not an integer is an
-// error.
+// queryInt reads an optional integer query parameter (a whole number,
+// modules.ParseWholeNumber), clamped to [min, max]. An empty or absent value
+// gives def; a value that is not a whole number of an int is an error.
 func queryInt(r *http.Request, name string, def, min, max int) (int, error) {
 	s := r.URL.Query().Get(name)
 	if s == "" {
 		return def, nil
 	}
-	v, err := strconv.Atoi(s)
+	v, err := modules.ParseWholeInt(s)
 	if err != nil {
 		return 0, modules.M("common.query_not_integer", "name", name, "value", strconv.Quote(s))
 	}

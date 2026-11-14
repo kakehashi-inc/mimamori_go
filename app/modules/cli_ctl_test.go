@@ -233,7 +233,13 @@ func TestCtlTarget(t *testing.T) {
 			t.Errorf("CtlTarget(%q) = %q, %d, %v; want %q, 9081", c.in, host, port, err, c.host)
 		}
 	}
-	for _, bad := range []string{"9081", "central.example:9081", "0.0.0.0:x", "0.0.0.0:0", "0.0.0.0:70000"} {
+	// The port is read as the number rule says (as central config set
+	// stored it): leading zeros are decimal, a sign or a space is no port.
+	if host, port, err := CtlTarget("127.0.0.1:09081"); err != nil || host != "127.0.0.1" || port != 9081 {
+		t.Errorf("CtlTarget(127.0.0.1:09081) = %q, %d, %v", host, port, err)
+	}
+	for _, bad := range []string{"9081", "central.example:9081", "0.0.0.0:x", "0.0.0.0:0", "0.0.0.0:70000",
+		"0.0.0.0:+9081", "127.0.0.1:+9081", "0.0.0.0: 9081", "0.0.0.0:9081 ", "0.0.0.0:-0", "0.0.0.0:0x2381", "0.0.0.0:9_081"} {
 		if _, _, err := CtlTarget(bad); err == nil {
 			t.Errorf("CtlTarget(%q) accepted", bad)
 		}

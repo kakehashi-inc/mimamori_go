@@ -244,15 +244,17 @@ func FormatScheduleAt(t time.Time) string {
 	return t.UTC().Format(scheduleAtLayout)
 }
 
-// parseTimeOfDay parses "HH:MM" (00:00 to 23:59) into minutes after midnight.
+// parseTimeOfDay parses "HH:MM" (00:00 to 23:59), two of the digits 0-9
+// each, into minutes after midnight.
 func parseTimeOfDay(s string) (int, bool) {
 	h, m, ok := strings.Cut(s, ":")
-	if !ok || len(h) != 2 || len(m) != 2 {
+	if !ok || len(h) != 2 || len(m) != 2 || !decimalDigits(h) || !decimalDigits(m) {
 		return 0, false
 	}
-	hh, err1 := strconv.Atoi(h)
-	mm, err2 := strconv.Atoi(m)
-	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+	// Two digits each: the numbers cannot fail.
+	hh, _ := ParseWholeInt(h)
+	mm, _ := ParseWholeInt(m)
+	if hh > 23 || mm > 59 {
 		return 0, false
 	}
 	return hh*60 + mm, true

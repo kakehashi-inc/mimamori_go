@@ -181,7 +181,7 @@ func (c *core) handleGetRuleVersion(w http.ResponseWriter, r *http.Request) {
 	if rule == nil {
 		return
 	}
-	ver, err := strconv.Atoi(r.PathValue("version"))
+	ver, err := modules.ParseWholeInt(r.PathValue("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, modules.M("rule.version_not_found"))
 		return
@@ -205,8 +205,8 @@ func (c *core) handleRuleDiff(w http.ResponseWriter, r *http.Request) {
 	if rule == nil {
 		return
 	}
-	from, err1 := strconv.Atoi(r.URL.Query().Get("from"))
-	to, err2 := strconv.Atoi(r.URL.Query().Get("to"))
+	from, err1 := modules.ParseWholeInt(r.URL.Query().Get("from"))
+	to, err2 := modules.ParseWholeInt(r.URL.Query().Get("to"))
 	if err1 != nil || err2 != nil {
 		writeError(w, http.StatusBadRequest, modules.M("rule.diff_from_to"))
 		return

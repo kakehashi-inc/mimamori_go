@@ -110,7 +110,7 @@ func CtlTarget(agentListen string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	portNum, err := strconv.Atoi(port)
+	portNum, err := ParseWholeInt(port)
 	if err != nil || portNum <= 0 || portNum > 65535 {
 		return "", 0, fmt.Errorf("%s: invalid port", agentListen)
 	}

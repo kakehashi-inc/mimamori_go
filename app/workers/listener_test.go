@@ -145,3 +145,25 @@ func TestConnLimit(t *testing.T) {
 		t.Fatal("Accept waiting for a place did not return after Close")
 	}
 }
+
+// The port of a listen address is read as the number rule says: leading
+// zeros are decimal; a sign, a space or another spelling is no port.
+func TestListenPortSpelling(t *testing.T) {
+	ln, err := listenTCP("127.0.0.1:00")
+	if err != nil {
+		t.Fatalf("port 00: %v", err)
+	}
+	if port := ln.Addr().(*net.TCPAddr).Port; port == 0 {
+		t.Errorf("port 00 bound %v", ln.Addr())
+	}
+	_ = ln.Close()
+	for _, addr := range []string{"127.0.0.1:+0", "127.0.0.1:+1", "127.0.0.1: 0", "127.0.0.1:0 ", "127.0.0.1:0x0", "127.0.0.1:0_0",
+		"127.0.0.1:x", "127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:"} {
+		if ln, err := listenTCP(addr); err == nil {
+			_ = ln.Close()
+			t.Errorf("%q accepted", addr)
+		} else if !strings.HasSuffix(err.Error(), ": invalid port") {
+			t.Errorf("%q: %v, want invalid port", addr, err)
+		}
+	}
+}

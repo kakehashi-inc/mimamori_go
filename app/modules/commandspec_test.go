@@ -200,6 +200,44 @@ func TestCommandSetValidate(t *testing.T) {
 	}
 }
 
+// The time of day of a daily or weekly schedule is HH:MM with two of the
+// digits 0-9 each: a sign, a space or any other character inside is no
+// time, also where it would read as a number.
+func TestScheduleTimeOfDayDigits(t *testing.T) {
+	good := map[string]int{"00:00": 0, "09:05": 545, "12:30": 750, "23:59": 1439}
+	bad := []string{"+1:30", "-0:30", "01:+5", "01:-5", "+0:00", "-1:00", " 1:30", "1 :30", "01: 5", "01:5 ", "0x:00",
+		"1_:00", "０１:00", "24:00", "12:60", "3:00", "003:00", "03:000", "0300", ""}
+	schedule := func(kind, tod string) *CommandSchedule {
+		if kind == ScheduleWeekly {
+			return &CommandSchedule{Kind: kind, Weekdays: []string{"mon"}, Time: tod}
+		}
+		return &CommandSchedule{Kind: kind, Time: tod}
+	}
+	for _, kind := range []string{ScheduleDaily, ScheduleWeekly} {
+		for tod, want := range good {
+			s := validSpec()
+			s.RunMode, s.Schedule = RunModeSchedule, schedule(kind, tod)
+			if errs := s.Validate(0); len(errs) != 0 {
+				t.Errorf("%s %q refused: %v", kind, tod, errs)
+			}
+			if got := s.Schedule.TimeOfDay(); got != want {
+				t.Errorf("%s %q: %d minutes, want %d", kind, tod, got, want)
+			}
+		}
+		for _, tod := range bad {
+			s := validSpec()
+			s.RunMode, s.Schedule = RunModeSchedule, schedule(kind, tod)
+			errs := s.Validate(0)
+			if len(errs) != 1 || !strings.Contains(errs[0], "schedule.time: must be a time of day from 00:00 to 23:59") {
+				t.Errorf("%s %q: %v, want the time of day refused", kind, tod, errs)
+			}
+			if m, ok := parseTimeOfDay(tod); ok {
+				t.Errorf("parseTimeOfDay(%q) = %d", tod, m)
+			}
+		}
+	}
+}
+
 func TestScheduleNormalize(t *testing.T) {
 	s, err := ParseCommandSetSpec([]byte(`{"name":"x","purpose":"run_only","os_user":"a","commands":[{"command_line":"true"}],
 		"schedule":{"kind":"weekly","weekdays":["FRI","mon","fri"],"time":"03:00","every":5,"at":"x"}}`))

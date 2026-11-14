@@ -97,7 +97,7 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	offset, errs[5] = queryInt(r, "offset", 0, 0, 1000000)
 	var agentID int64
 	if v := q.Get("agent_id"); v != "" {
-		if agentID, errs[6] = strconv.ParseInt(v, 10, 64); errs[6] != nil {
+		if agentID, errs[6] = modules.ParseWholeNumber(v, 64); errs[6] != nil {
 			errs[6] = modules.M("common.query_agent_id", "value", strconv.Quote(v))
 		}
 	}
@@ -662,7 +662,7 @@ func (c *core) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 func (c *core) handleGuide(w http.ResponseWriter, r *http.Request) {
 	_, portText, _ := net.SplitHostPort(c.conf().AgentListen)
-	port, _ := strconv.Atoi(portText)
+	port, _ := modules.ParseWholeInt(portText)
 	// The host names an agent can use for the central are the names of the
 	// server certificate (the loopback names only work on the central host).
 	var hosts []string

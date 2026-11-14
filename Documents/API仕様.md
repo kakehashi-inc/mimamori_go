@@ -25,6 +25,7 @@
 - ブラウザ用と管理用の API では、要求の本文は JSON の値 1 つだけです。その後ろに空白以外のデータが続く場合は 400 を返します。エージェント用の API（14 章）は、本文の最初の JSON の値だけを読み、その後ろのデータは読まずに無視します。
 - ブラウザ用と管理用の API は、要求の JSON に未知のフィールドがあると 400 を返します。エージェント用の API は未知のフィールドを無視します。
 - ブラウザ用と管理用の API は、要求の JSON の値の型が違う（文字列の項目に数、整数の項目に文字列や小数、一覧の項目にオブジェクトなど）と 400 を返し、`error` は `invalid request body: <フィールド> must be <値の種類>` です（コード `common.invalid_body_type`）。`params` の `field` は本文の中の位置を `.` でつないだ値（`valid_days`、`set.retention_days`、一覧の要素は番号で `agent_ids.1`）で、本文の全体の型が違うときはメッセージ `json.kind.the_body`（`the body`）です。`expected` は値の種類のメッセージ（`json.kind.string` `a string`、`json.kind.integer` `an integer`、`json.kind.number` `a number`、`json.kind.bool` `true or false`、`json.kind.array` `an array`、`json.kind.object` `an object`）です。そのほかの読み取りの誤り（JSON として正しくない、未知のフィールドなど）は `invalid request body: <文>`（コード `common.invalid_body`）です。監視ルールの `content` とコマンドセットの定義の中は、それぞれの検証の問題として答えます（6 章、4.1）。
+- パスの ID（`{id}`、`{set}`、`{run}`、`{req}`、監視ルールの版 `{version}` など）とクエリーの整数（`limit`、`offset`、`before`、`agent_id`、`set_id`、差分の `from` と `to`）は、数字 0〜9 だけで書いた 10 進数の整数として読みます。負の数は先頭に `-` を 1 つ付け、先頭の 0 は 10 進数のまま読みます（`007` は 7）。`+`、空白、小数点、指数、`0x` などの接頭辞、`_`、そのほかの文字（全角の数字を含む）を含む値は数ではなく、パスの ID では見つからない ID と同じ 404、クエリーではその項目の 400 です（[システム仕様.md](システム仕様.md) の 5 章の数の書き方）。
 - エラー時は 4xx/5xx と `{"error": "<message>", "error_i18n": {"code": "<コード>", "params": {...}}}` を返します。`error` は英語の文（CLI が表示する文）、`error_i18n` は同じ内容をコードとパラメーターで表したもの（以下、この形を型 `Msg` と呼びます。英文の隣に置く `<フィールド>_i18n` はすべてこの形か、下の `Problem`）です。ブラウザはコードで表示の言語の文にし、知らないコードでは `error` を表示します。コードを持たない文（ほかのプログラムやライブラリの文）は `{"code": "", "params": {"text": "<文>"}}` で、そのまま表示します。以下では `error_i18n` を省略して `error` だけを示します。
   - 検証の問題の一覧を返す応答（`POST /rules/validate`、コマンドセットの検証・作成・変更・インポート、システム設定の変更）は、英語の文の一覧 `errors` の隣に、同じ順で問題をコードで表した `errors_i18n` を返します。1 件の問題（型 `Problem`）は `{"where": [<位置>, ...], "code": "<コード>", "params": {...}}` で、位置（`loc.command` のコマンドの番号、`loc.pattern` の正規表現の番号、`loc.item` のインポートの項目の番号、`loc.field` の項目名など）と本文を順に `: ` でつなぐと `errors` の文になります（例 `command 2: timeout_sec: must be between 0 and 86400`）。項目名（`timeout_sec`、`read.dirs` など）は値で、翻訳しません。問題の一覧を持つエラーの `error_i18n` は、`params` にこの問題の一覧を持ちます。監視ルールとテンプレートの内容の誤り（作成と変更の 400）は `errors` を持たず、`error_i18n`（コード `common.problems`）の `params.problems` に問題の一覧を持ちます。
   - `Msg` の `params` の値は、文字列、数値、真偽値、入れ子の `Msg`（原因の `cause`、型の名前の `expected` など）、`Problem`、またはこれらの一覧です。値（パス、名前、アドレス、コマンドライン、項目名）とほかのプログラムの文はそのまま入り、翻訳しません。英文で引用符付きの値は、引用符を付けた文字列として入ります。一覧は、パラメーター名が `lines` なら改行で、項目がメッセージなら `; `（日本語では `／`）で、それ以外は `, `（日本語では `、`）でつなぎます。パラメーターの無いメッセージは `params` を省略します。
@@ -263,8 +264,8 @@ interface HostInfo {
 type CodeSpec = { kind: 'single' | 'range' | 'min' | 'max'; a: number; b?: number };   // 0〜255。b は range だけ（a < b）
 type CommandSchedule =
   | { kind: 'once'; at: string }                         // RFC3339（オフセット付き）。UTC に正規化して返す
-  | { kind: 'weekly'; weekdays: ('sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat')[]; time: string }   // time は "HH:MM"
-  | { kind: 'daily'; time: string }
+  | { kind: 'weekly'; weekdays: ('sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat')[]; time: string }   // time は "HH:MM"（00:00〜23:59。時と分はそれぞれ数字 0〜9 の 2 桁）
+  | { kind: 'daily'; time: string }                      // time は weekly と同じ
   | { kind: 'every_hours'; every: 1 | 2 | 3 | 4 | 6 | 8 | 12 }
   | { kind: 'every_minutes'; every: 1 | 2 | 3 | 4 | 5 | 6 | 10 | 12 | 15 | 20 | 30 }
   | { kind: 'hourly_at'; minute: number };               // 0〜59
