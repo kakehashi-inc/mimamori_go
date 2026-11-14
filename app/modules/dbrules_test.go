@@ -715,3 +715,30 @@ func TestWriteCallbacksFindsNestedUse(t *testing.T) {
 		}
 	}
 }
+
+// Every call of KeepReadConns in the program passes TargetReadConnsKept, so
+// that the constant is what the per-agent databases keep.
+func TestKeepReadConnsUsesTheConstant(t *testing.T) {
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, dir := range []string{".", "../workers"} {
+		files = append(files, parseGoFiles(t, fset, dir)...)
+	}
+	calls := 0
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || callName(call) != "KeepReadConns" {
+				return true
+			}
+			calls++
+			if len(call.Args) != 1 || lastName(call.Args[0]) != "TargetReadConnsKept" {
+				t.Errorf("%s: KeepReadConns is called without TargetReadConnsKept", fset.Position(call.Pos()))
+			}
+			return true
+		})
+	}
+	if calls == 0 {
+		t.Error("no call of KeepReadConns was found")
+	}
+}

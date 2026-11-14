@@ -278,9 +278,10 @@ func (c *core) openTarget(a *models.Agent) (*modules.DB, error) {
 		return nil, err
 	}
 	// The central holds hundreds of these and reads each about once per
-	// check interval: one idle read connection is kept, further ones are
-	// opened only while several flows read the same agent at once.
-	db.KeepReadConns(1)
+	// check interval: TargetReadConnsKept idle read connections are kept,
+	// further ones are opened only while several flows read the same agent
+	// at once.
+	db.KeepReadConns(modules.TargetReadConnsKept)
 	return db, nil
 }
 
