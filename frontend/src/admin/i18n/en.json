@@ -217,6 +217,11 @@
         "reset": "Reset to default",
         "undoReset": "Undo reset",
         "defaultValue": "Default: {{value}}",
+        "range": "Range: {{min}} to {{max}}.",
+        "intNotWhole": "Enter a whole number written with the digits 0 to 9, from {{min}} to {{max}}.",
+        "intOutOfRange": "Enter a number from {{min}} to {{max}}.",
+        "invalidValues": "Not saved: correct the marked values.",
+        "itemName": "\"{{label}}\"",
         "listHint": "Separate multiple values with commas.",
         "enabled": "Enabled",
         "secretSet": "(set)",
@@ -252,10 +257,6 @@
                 "label": "Server certificate names",
                 "hint": "Host names and IP addresses the agents use to connect. 127.0.0.1, ::1 and localhost are always included. A new server certificate is issued within a minute."
             },
-            "workers": {
-                "label": "Workers of the central",
-                "hint": "Run requests in progress at the agents at the same time, all agents together (up to 64)."
-            },
             "builtin_agent": {
                 "label": "Built-in agent",
                 "hint": "Monitor the central host itself."
@@ -266,7 +267,7 @@
             },
             "token_renew_before_days": {
                 "label": "Renew tokens before (days)",
-                "hint": "A token is renewed automatically when fewer days than this remain."
+                "hint": "A token is renewed automatically when fewer days than this remain. Less than the token validity."
             },
             "default_check_interval_sec": {
                 "label": "Default check interval (seconds)",
@@ -278,11 +279,11 @@
             },
             "session_remember_days": {
                 "label": "Kept login (days)",
-                "hint": "Lifetime of a login with \"Keep me logged in\" (up to 365). Applies to new logins."
+                "hint": "Lifetime of a login with \"Keep me logged in\". Applies to new logins."
             },
             "two_step_trust_days": {
                 "label": "Trusted browser period (days)",
-                "hint": "A browser marked as trusted at the login code step needs no code for this many days (1 to 365). Applies at once."
+                "hint": "A browser marked as trusted at the login code step needs no code for this many days. Applies at once."
             },
             "notify_min_interval_min": {
                 "label": "Minimum interval (minutes)",

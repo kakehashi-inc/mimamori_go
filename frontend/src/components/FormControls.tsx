@@ -12,6 +12,11 @@ export const inputSmClass =
 // next to a growing input in one row (w-full would squeeze the input).
 export const inputSmAutoClass = inputSmClass.replace('w-full', 'w-auto');
 
+// Added to an input whose value is not accepted: a red border that stays
+// while the input has the focus (important, so that it wins over the border
+// colors of the classes above).
+export const invalidInputClass = 'border-danger!';
+
 export const checkboxClass = 'h-4 w-4 rounded border-line accent-accent focus-visible:ring-2 focus-visible:ring-accent';
 
 interface FieldProps {

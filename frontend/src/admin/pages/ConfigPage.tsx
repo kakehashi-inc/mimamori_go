@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { ApiError } from '../../api/client';
 import { getConfig, listAccounts, setAccountNotify, updateConfig } from '../api';
 import { NotifyRecipients } from '../components/NotifyRecipients';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { checkboxClass, Field, inputClass } from '../../components/FormControls';
+import { checkboxClass, Field, inputClass, invalidInputClass } from '../../components/FormControls';
 import { Card, PageHeader } from '../../components/PageHeader';
 import { Alert, ErrorAlert, Loading } from '../../components/StateViews';
 import { useToast } from '../../context/ToastContext';
 import type ja from '../i18n/ja.json';
 import { useApi } from '../../hooks/useApi';
-import type { Account, CentralConfig, ConfigItem } from '../../types';
+import type { Account, CentralConfig, ConfigItem, ServerProblem } from '../../types';
 import { errorMessage } from '../../utils/format';
+import { problemText } from '../../utils/serverText';
 
 // Items grouped by subject, in display order. Items the server reports but
 // that are not listed here are shown in the last group.
@@ -53,6 +56,30 @@ const SMTP_SECURITY = ['starttls', 'tls', 'none'] as const;
 // i18n keys cannot contain the dots of the item names.
 const itemKey = (name: string) => name.replace(/\./g, '_') as ItemKey;
 
+const inputId = (name: string) => `cfg-${itemKey(name)}`;
+
+// A whole number as the server reads it: the digits 0 to 9 only.
+const WHOLE_NUMBER = /^[0-9]+$/;
+
+/** The screen's own problem with the value of a number item (its range is the server's), or null. */
+function intProblem(t: TFunction, item: ConfigItem, value: string): string | null {
+    if (item.kind !== 'int' || item.min === undefined || item.max === undefined) return null;
+    const range = { min: item.min, max: item.max };
+    if (!WHOLE_NUMBER.test(value)) return t('config.intNotWhole', range);
+    const n = Number(value);
+    return n < item.min || n > item.max ? t('config.intOutOfRange', range) : null;
+}
+
+// Parameters in which the configuration messages of the server (config.*) name items.
+const ITEM_PARAMS = ['name', 'field', 'other'] as const;
+
+/** The problems of a save the server refused (400); empty for any other failure. */
+function refusalProblems(err: unknown): ServerProblem[] {
+    if (!(err instanceof ApiError) || err.status !== 400) return [];
+    if (err.problems && err.problems.length > 0) return err.problems;
+    return err.i18n && err.i18n.code !== 'common.problems' ? [err.i18n] : [];
+}
+
 interface Draft {
     values: Record<string, string>;
     resets: Set<string>;
@@ -72,7 +99,15 @@ export function ConfigPage() {
     const { data, error, loading, reload, setData } = useApi(getConfig, []);
     const [draft, setDraft] = useState<Draft | null>(null);
     const [busy, setBusy] = useState(false);
-    const [saveError, setSaveError] = useState<string | null>(null);
+    // What the Save bar says about the last attempt to save: that values the
+    // form does not send are marked (while such a value is left), the
+    // problems the server refused it with, or another failure.
+    const [bar, setBar] = useState<{ kind: 'local' | 'refused' } | { kind: 'failure'; text: string } | null>(null);
+    // The problems of the last refusal with the items they name. A problem is
+    // shown at its items and at the Save bar until one of its items is changed.
+    const [refused, setRefused] = useState<{ text: string; named: string[] }[]>([]);
+    // The item to bring into view (a new object for every attempt).
+    const [scrollTo, setScrollTo] = useState<{ name: string } | null>(null);
     const accounts = useApi(listAccounts, []);
     // Notification recipients changed in the form and not saved yet (account ID to checked).
     const [notify, setNotify] = useState<Record<number, boolean>>({});
@@ -80,6 +115,13 @@ export function ConfigPage() {
     useEffect(() => {
         if (data) setDraft(initialDraft(data));
     }, [data]);
+
+    useEffect(() => {
+        if (!scrollTo) return;
+        const el = document.getElementById(inputId(scrollTo.name));
+        el?.scrollIntoView({ block: 'center' });
+        el?.focus({ preventScroll: true });
+    }, [scrollTo]);
 
     const byName = useMemo(() => new Map((data?.items ?? []).map(i => [i.name, i])), [data]);
     const groups = useMemo(() => {
@@ -114,16 +156,56 @@ export function ConfigPage() {
     const configChanged = Object.keys(changes.set).length + changes.unset.length > 0;
     const notifyChanges = Object.entries(notify).map(([id, on]) => ({ id: Number(id), on }));
     const changed = configChanged || notifyChanges.length > 0;
+    // Items in the order of the screen, for the first one to bring into view.
+    const order = groups.flatMap(g => g.items);
+    const localProblem = (item: ConfigItem) => intProblem(t, item, draft.values[item.name] ?? '');
+    const invalid = order.filter(n => {
+        const item = byName.get(n);
+        return item !== undefined && localProblem(item) !== null;
+    });
+    const barMessages = (() => {
+        switch (bar?.kind) {
+            case 'local':
+                return invalid.length > 0 ? [t('config.invalidValues')] : [];
+            case 'refused':
+                return refused.map(p => p.text);
+            case 'failure':
+                return [bar.text];
+            default:
+                return [];
+        }
+    })();
 
-    const setValue = (name: string, value: string) =>
+    // A change of an item leaves the problems that named it behind.
+    const forgetRefusal = (name: string) =>
+        setRefused(r => (r.some(p => p.named.includes(name)) ? r.filter(p => !p.named.includes(name)) : r));
+
+    const setValue = (name: string, value: string) => {
+        forgetRefusal(name);
         setDraft(d => {
             if (!d) return d;
             const resets = new Set(d.resets);
             resets.delete(name);
             return { ...d, values: { ...d.values, [name]: value }, resets };
         });
+    };
 
-    const toggleReset = (item: ConfigItem) =>
+    /** A problem of the server in the current language, with the items it names given by their labels. */
+    const labelled = (p: ServerProblem, fallback: string) => {
+        const named: string[] = [];
+        const params: Record<string, unknown> = { ...(p.params ?? {}) };
+        for (const k of ITEM_PARAMS) {
+            const v = params[k];
+            if (typeof v === 'string' && byName.has(v)) {
+                named.push(v);
+                params[k] = t('config.itemName', { label: t(`config.items.${itemKey(v)}.label`) });
+            }
+        }
+        return { text: problemText(t, { ...p, params }, fallback), named };
+    };
+
+    const toggleReset = (item: ConfigItem) => {
+        forgetRefusal(item.name);
         setDraft(d => {
             if (!d) return d;
             const resets = new Set(d.resets);
@@ -137,12 +219,20 @@ export function ConfigPage() {
             }
             return { ...d, values, resets };
         });
+    };
 
     async function submit(e: FormEvent) {
         e.preventDefault();
         if (!changed) return;
+        // Values the server would refuse are reported at their fields and not sent.
+        if (invalid.length > 0) {
+            setBar({ kind: 'local' });
+            setScrollTo({ name: invalid[0] });
+            return;
+        }
         setBusy(true);
-        setSaveError(null);
+        setBar(null);
+        setRefused([]);
         try {
             if (configChanged) {
                 const next = await updateConfig(changes);
@@ -162,27 +252,42 @@ export function ConfigPage() {
             const restart = [...Object.keys(changes.set), ...changes.unset].some(n => byName.get(n)?.restart);
             showToast(restart ? t('config.savedRestart') : t('config.saved'));
         } catch (err) {
-            setSaveError(errorMessage(t, err));
+            const problems = refusalProblems(err);
+            if (problems.length === 0) {
+                setBar({ kind: 'failure', text: errorMessage(t, err) });
+                return;
+            }
+            const fallback = err instanceof Error ? err.message : '';
+            const list = problems.map(p => labelled(p, fallback));
+            setBar({ kind: 'refused' });
+            setRefused(list);
+            const first = order.find(n => list.some(p => p.named.includes(n)));
+            if (first) setScrollTo({ name: first });
         } finally {
             setBusy(false);
         }
     }
 
-    function input(item: ConfigItem) {
-        const id = `cfg-${itemKey(item.name)}`;
+    function input(item: ConfigItem, marked: boolean) {
+        const id = inputId(item.name);
         const value = draft!.values[item.name] ?? '';
+        const markClass = marked ? invalidInputClass : '';
         if (item.kind === 'secret') {
             return (
                 <div className='flex flex-col gap-2'>
                     <input
                         id={id}
                         type='password'
-                        className={inputClass}
+                        className={`${inputClass} ${markClass}`}
+                        aria-invalid={marked}
                         value={draft!.password}
                         disabled={draft!.clearPassword}
                         autoComplete='new-password'
                         placeholder={item.is_set ? t('config.secretSet') : t('config.secretNotSet')}
-                        onChange={e => setDraft(d => (d ? { ...d, password: e.target.value } : d))}
+                        onChange={e => {
+                            forgetRefusal(item.name);
+                            setDraft(d => (d ? { ...d, password: e.target.value } : d));
+                        }}
                     />
                     {item.is_set && (
                         <label className='flex items-center gap-2 text-sm text-ink'>
@@ -190,9 +295,10 @@ export function ConfigPage() {
                                 type='checkbox'
                                 className={checkboxClass}
                                 checked={draft!.clearPassword}
-                                onChange={e =>
-                                    setDraft(d => (d ? { ...d, clearPassword: e.target.checked, password: '' } : d))
-                                }
+                                onChange={e => {
+                                    forgetRefusal(item.name);
+                                    setDraft(d => (d ? { ...d, clearPassword: e.target.checked, password: '' } : d));
+                                }}
                             />
                             {t('config.secretClear')}
                         </label>
@@ -207,6 +313,7 @@ export function ConfigPage() {
                         id={id}
                         type='checkbox'
                         className={checkboxClass}
+                        aria-invalid={marked}
                         checked={value === 'true'}
                         onChange={e => setValue(item.name, e.target.checked ? 'true' : 'false')}
                     />
@@ -218,7 +325,8 @@ export function ConfigPage() {
             return (
                 <select
                     id={id}
-                    className={inputClass}
+                    className={`${inputClass} ${markClass}`}
+                    aria-invalid={marked}
                     value={value}
                     onChange={e => setValue(item.name, e.target.value)}
                 >
@@ -230,13 +338,28 @@ export function ConfigPage() {
                 </select>
             );
         }
+        if (item.kind === 'int') {
+            return (
+                <input
+                    id={id}
+                    type='number'
+                    min={item.min}
+                    max={item.max}
+                    step={1}
+                    inputMode='numeric'
+                    className={`${inputClass} sm:max-w-48 ${markClass}`}
+                    aria-invalid={marked}
+                    value={value}
+                    onChange={e => setValue(item.name, e.target.value)}
+                />
+            );
+        }
         return (
             <input
                 id={id}
-                type={item.kind === 'int' ? 'number' : 'text'}
-                min={item.kind === 'int' ? 1 : undefined}
-                inputMode={item.kind === 'int' ? 'numeric' : undefined}
-                className={`${inputClass} ${item.kind === 'int' ? 'sm:max-w-48' : ''}`}
+                type='text'
+                className={`${inputClass} ${markClass}`}
+                aria-invalid={marked}
                 value={value}
                 spellCheck={false}
                 onChange={e => setValue(item.name, e.target.value)}
@@ -247,10 +370,17 @@ export function ConfigPage() {
     function row(item: ConfigItem) {
         const key = itemKey(item.name);
         const reset = draft!.resets.has(item.name);
+        const problems = [
+            localProblem(item),
+            ...refused.filter(p => p.named.includes(item.name)).map(p => p.text),
+        ].filter((p): p is string => !!p);
         const hint = (
             <>
                 {t(`config.items.${key}.hint`)}
                 {item.kind === 'list' && <> {t('config.listHint')}</>}
+                {item.min !== undefined && item.max !== undefined && (
+                    <> {t('config.range', { min: item.min, max: item.max })}</>
+                )}
                 {item.kind !== 'secret' && item.default !== '' && (
                     <> {t('config.defaultValue', { value: item.default })}</>
                 )}
@@ -285,8 +415,21 @@ export function ConfigPage() {
                         </button>
                     )}
                 </div>
-                <Field label={t(`config.items.${key}.label`)} htmlFor={`cfg-${key}`} hint={hint}>
-                    {input(item)}
+                <Field
+                    label={t(`config.items.${key}.label`)}
+                    htmlFor={inputId(item.name)}
+                    hint={hint}
+                    error={
+                        problems.length > 0 && (
+                            <span role='alert' className='flex flex-col'>
+                                {problems.map((p, i) => (
+                                    <span key={i}>{p}</span>
+                                ))}
+                            </span>
+                        )
+                    }
+                >
+                    {input(item, problems.length > 0)}
                 </Field>
             </div>
         );
@@ -303,7 +446,8 @@ export function ConfigPage() {
                     </Button>
                 }
             />
-            <form onSubmit={e => void submit(e)} className='flex max-w-3xl flex-col gap-4'>
+            {/* The form's own texts report the values (noValidate keeps the browser's messages away). */}
+            <form noValidate onSubmit={e => void submit(e)} className='flex max-w-3xl flex-col gap-4'>
                 <ErrorAlert error={error} onRetry={reload} />
                 <Alert tone='info'>{t('config.applyNote')}</Alert>
                 {pending.length > 0 && (
@@ -330,8 +474,22 @@ export function ConfigPage() {
                         </div>
                     </Card>
                 ))}
-                {saveError && <Alert tone='danger'>{saveError}</Alert>}
-                <div className='sticky bottom-0 flex justify-end gap-2 border-t border-line bg-canvas/90 py-3 backdrop-blur'>
+                <div className='sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-canvas/90 py-3 backdrop-blur'>
+                    {barMessages.length > 0 && (
+                        <div
+                            role='alert'
+                            className='mr-auto flex max-h-32 min-w-0 flex-1 basis-64 items-start gap-2 overflow-y-auto text-sm text-danger'
+                        >
+                            <span className='material-icons-outlined text-base' aria-hidden='true'>
+                                error
+                            </span>
+                            <ul className='flex min-w-0 flex-col gap-0.5 break-words'>
+                                {barMessages.map((m, i) => (
+                                    <li key={i}>{m}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                     <Button
                         type='button'
                         icon='undo'
@@ -339,7 +497,8 @@ export function ConfigPage() {
                         onClick={() => {
                             setDraft(initialDraft(data));
                             setNotify({});
-                            setSaveError(null);
+                            setBar(null);
+                            setRefused([]);
                         }}
                     >
                         {t('config.discard')}

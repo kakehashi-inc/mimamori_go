@@ -500,11 +500,15 @@ export interface ConfigItem {
     value: string;
     /** The secret item has a value. */
     is_set: boolean;
+    /** Value when the item is not stored; for smtp.port the port of the stored smtp.security. */
     default: string;
     /** false when the default applies. */
     stored: boolean;
     /** Takes effect when the central restarts. */
     restart: boolean;
+    /** Range of an item of kind int, both ends accepted (the server's validation uses the same). */
+    min?: number;
+    max?: number;
     /** A restart item whose stored value is not in effect yet. */
     pending: boolean;
 }
