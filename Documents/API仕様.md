@@ -688,7 +688,7 @@ interface SyncRequest {
   last_apply: ApplyResult | null;          // 最後の適用の結果
   command_sig: string;                     // 保持しているコマンドセットの定義の署名（無ければ ""）
   running_requests: number[];              // 開始して終わっていない手動の実行の指示の ID（無ければ []。null にはしない）。キーが無いか null なら、セントラルは何も終わらせない
-  free_worker: boolean;                    // いま手動の実行の指示を受け取れるか（実行中のコマンドセットがエージェントのワーカー数より少なく、エージェントの中で待っている手動の指示が無い）。true のときだけ、セントラルは新しい指示を 1 つ渡す
+  free_worker: boolean;                    // いま手動の実行の指示を受け取れるか（エージェントのキューで、いま始めてよい単位をワーカーが取った後にも空いているワーカーがあり、手動の指示の単位が待っていない。システム仕様.md の 4.1）。true のときだけ、セントラルは新しい指示を 1 つ渡す
 }
 interface RuleAssignment { id: number; name: string; version: number; content: RuleContent }   // RuleContent は 6 章
 interface TokenRenewal { token: string; expires_at: number }
