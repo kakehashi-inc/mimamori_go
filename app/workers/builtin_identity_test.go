@@ -61,8 +61,8 @@ func TestBuiltinAgentSendsIdentityAndRunning(t *testing.T) {
 	}
 	tr := &recordingTransport{inner: &inProcessTransport{c: e.c, agentID: b.ID}}
 	rt := modules.NewAgentRuntime(db, tr, log.New(io.Discard, "", 0))
-	rt.Cycle()
-	rt.Cycle()
+	rt.Round()
+	rt.Round()
 	if len(tr.syncs) != 2 || !slices.Equal(tr.syncs[0].RunningRequests, []int64{77}) {
 		t.Fatalf("syncs: %+v", tr.syncs)
 	}

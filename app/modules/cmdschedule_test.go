@@ -97,32 +97,82 @@ func TestScheduleDueTimes(t *testing.T) {
 	}
 }
 
-func TestScheduleDueToRun(t *testing.T) {
+// TestSchedulePlan: the entry of a scheduled set by kind: whether a passed
+// occurrence that was not executed runs at once (once: always; daily: only
+// today's; weekly: the latest within the last 7 days; never for hourly_at
+// and the interval kinds), else the next occurrence; occurrences before the
+// agent first saw the schedule (armed) are not run, except for once.
+func TestSchedulePlan(t *testing.T) {
 	tokyo := mustLoc(t, "Asia/Tokyo")
-	at := func(hh, mm int) time.Time { return time.Date(2026, 11, 12, hh, mm, 0, 0, tokyo) }
+	ny := mustLoc(t, "America/New_York")
+	// 2026-11-12 is a Thursday.
+	at := func(day, hh, mm int) time.Time { return time.Date(2026, 11, day, hh, mm, 0, 0, tokyo) }
+	utc := func(s string) time.Time {
+		v, err := time.Parse("2006-01-02 15:04", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	none := time.Unix(0, 0)
+	once := &CommandSchedule{Kind: ScheduleOnce, At: FormatScheduleAt(at(12, 12, 0))}
+	daily := &CommandSchedule{Kind: ScheduleDaily, Time: "09:00"}
+	weekly := &CommandSchedule{Kind: ScheduleWeekly, Weekdays: []string{"mon", "fri"}, Time: "03:00"}
+	monday := &CommandSchedule{Kind: ScheduleWeekly, Weekdays: []string{"mon"}, Time: "03:00"}
+	hourly := &CommandSchedule{Kind: ScheduleHourlyAt, Minute: intPtr(30)}
 	every15m := &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 15}
-	once := &CommandSchedule{Kind: ScheduleOnce, At: FormatScheduleAt(at(12, 0))}
+	every6h := &CommandSchedule{Kind: ScheduleEveryHours, Every: 6}
 	tests := []struct {
 		name                string
 		s                   *CommandSchedule
-		now, armed, lastRun time.Time
-		want                time.Time // zero: nothing to run
+		loc                 *time.Location
+		now, armed, lastDue time.Time
+		due                 time.Time // zero: no entry
+		atOnce              bool
 	}{
-		{"missed occurrences run once (the latest)", every15m, at(11, 7), at(10, 0), at(10, 15), at(11, 0)},
-		{"already ran", every15m, at(11, 10), at(10, 0), at(11, 0), time.Time{}},
-		{"armed after the latest occurrence", every15m, at(10, 10), at(10, 5), time.Time{}, time.Time{}},
-		{"first occurrence after arming", every15m, at(10, 15), at(10, 5), time.Time{}, at(10, 15)},
-		{"armed exactly at an occurrence", every15m, at(10, 0), at(10, 0), time.Time{}, time.Time{}},
-		{"once due", once, at(12, 30), at(9, 0), time.Time{}, at(12, 0)},
-		{"once not yet due", once, at(11, 59), at(9, 0), time.Time{}, time.Time{}},
-		{"once already run", once, at(13, 0), at(9, 0), at(12, 0), time.Time{}},
-		{"once noticed late", once, at(23, 0), at(9, 0), time.Time{}, at(12, 0)},
+		{"once ahead", once, tokyo, at(12, 11, 59), at(10, 0, 0), none, at(12, 12, 0), false},
+		{"once missed while stopped", once, tokyo, at(12, 23, 0), at(10, 0, 0), none, at(12, 12, 0), true},
+		{"once missed days ago", once, tokyo, at(20, 8, 0), at(10, 0, 0), none, at(12, 12, 0), true},
+		{"once seen after its time", once, tokyo, at(12, 14, 0), at(12, 13, 0), none, at(12, 12, 0), true},
+		{"once executed", once, tokyo, at(12, 13, 0), at(10, 0, 0), at(12, 12, 0), time.Time{}, false},
+		{"daily ahead today", daily, tokyo, at(12, 8, 0), at(1, 0, 0), at(11, 9, 0), at(12, 9, 0), false},
+		{"daily passed today, not executed", daily, tokyo, at(12, 10, 0), at(1, 0, 0), at(11, 9, 0), at(12, 9, 0), true},
+		{"daily passed today, executed", daily, tokyo, at(12, 10, 0), at(1, 0, 0), at(12, 9, 0), at(13, 9, 0), false},
+		{"daily earlier days missed, today passed", daily, tokyo, at(12, 10, 0), at(1, 0, 0), at(9, 9, 0), at(12, 9, 0), true},
+		{"daily earlier days missed, today ahead", daily, tokyo, at(12, 8, 0), at(1, 0, 0), at(9, 9, 0), at(12, 9, 0), false},
+		{"daily today before armed", daily, tokyo, at(12, 10, 0), at(12, 9, 30), none, at(13, 9, 0), false},
+		{"weekly ahead", weekly, tokyo, at(12, 10, 0), at(1, 0, 0), at(9, 3, 0), at(13, 3, 0), false},
+		{"weekly within 7 days, not executed", weekly, tokyo, at(14, 10, 0), at(1, 0, 0), at(9, 3, 0), at(13, 3, 0), true},
+		{"weekly within 7 days, executed", weekly, tokyo, at(14, 10, 0), at(1, 0, 0), at(13, 3, 0), at(16, 3, 0), false},
+		{"weekly latest of several within 7 days", monday, tokyo, at(16, 2, 0), at(1, 0, 0), at(2, 3, 0), at(9, 3, 0), true},
+		{"weekly older than 7 days skipped", monday, tokyo, at(16, 4, 0), at(1, 0, 0), at(2, 3, 0), at(16, 3, 0), true},
+		{"weekly before armed", weekly, tokyo, at(14, 10, 0), at(14, 9, 0), none, at(16, 3, 0), false},
+		{"hourly_at passed not run", hourly, tokyo, at(12, 10, 45), at(1, 0, 0), at(12, 8, 30), at(12, 11, 30), false},
+		{"hourly_at ahead", hourly, tokyo, at(12, 10, 15), at(1, 0, 0), at(12, 9, 30), at(12, 10, 30), false},
+		{"every 15 minutes passed not run", every15m, tokyo, at(12, 10, 44), at(1, 0, 0), at(12, 9, 0), at(12, 10, 45), false},
+		{"every 6 hours passed not run", every6h, tokyo, at(12, 13, 59), at(1, 0, 0), at(11, 18, 0), at(12, 18, 0), false},
+		// New York, 2026-03-08: 02:30 does not exist and is 03:30 EDT
+		// (07:30Z); it has passed at 08:00Z and was not executed.
+		{"daily over the jump", &CommandSchedule{Kind: ScheduleDaily, Time: "02:30"}, ny,
+			utc("2026-03-08 08:00"), utc("2026-03-01 00:00"), utc("2026-03-07 07:30"), utc("2026-03-08 07:30"), true},
+		// 2026-11-01: 01:30 occurs twice (05:30Z and 06:30Z); the first was
+		// executed, the second is not an occurrence.
+		{"daily twice time", &CommandSchedule{Kind: ScheduleDaily, Time: "01:30"}, ny,
+			utc("2026-11-01 06:45"), utc("2026-10-01 00:00"), utc("2026-11-01 05:30"), utc("2026-11-02 06:30"), false},
 	}
 	for _, tc := range tests {
-		got, ok := tc.s.DueToRun(tc.now, tc.armed, tc.lastRun, tokyo)
-		if ok != !tc.want.IsZero() || (ok && !got.Equal(tc.want)) {
-			t.Errorf("%s: %v %v, want %v", tc.name, got, ok, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			due, startAt, ok := tc.s.Plan(tc.now, tc.armed, tc.lastDue, tc.loc)
+			if ok != !tc.due.IsZero() || (ok && !due.Equal(tc.due)) {
+				t.Fatalf("due %v %v, want %v", due, ok, tc.due)
+			}
+			if ok && startAt.IsZero() != tc.atOnce {
+				t.Fatalf("may start at %v, want at once %v", startAt, tc.atOnce)
+			}
+			if ok && !tc.atOnce && !startAt.Equal(due) {
+				t.Fatalf("may start at %v, want at the occurrence %v", startAt, due)
+			}
+		})
 	}
 }
 

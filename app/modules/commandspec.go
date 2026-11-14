@@ -70,6 +70,7 @@ const (
 	ReasonTimeout        = "timeout"         // the time limit passed
 	ReasonSignaled       = "signaled"        // a signal ended the command
 	ReasonInterrupted    = "interrupted"     // the agent was stopped (or found the run unfinished at start)
+	ReasonInternalError  = "internal_error"  // an internal error of the agent (a panic) ended the processing
 )
 
 // CodeSpec selects exit codes: single (A), range (A to B), min (A or more) or

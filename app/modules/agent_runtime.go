@@ -50,11 +50,14 @@ const (
 	stateAuditGlobals = "audit_globals"
 )
 
-// AgentRuntime performs the work of an agent: the monitoring step (syncing,
-// applying rules, reading the audit log, scanning files and reporting) and
-// the runs of command sets, on as many flows as its worker count (with one
-// worker the calling flow only). The scheduler (agent_scheduler.go) decides
-// what runs next; its file comment says who owns which state.
+// AgentRuntime performs the work of an agent. Its workers, as many as its
+// worker count, take the entries of its queue (agent_scheduler.go) one at a
+// time and process each to its end: the monitoring step (applying rules,
+// reading the audit log, scanning files, queuing the periodic report) and
+// the runs of command sets. Its communication flow (agent_comm.go) talks to
+// the central every check interval (sync, then the report of what is
+// queued), whatever the workers do. The file comment of agent_scheduler.go
+// says who owns which state.
 //
 // DB is the handle of the agent's local database. What the runtime reads it
 // reads through DB.Read; every change is a DB.Write, and what decides a
@@ -64,26 +67,30 @@ type AgentRuntime struct {
 	DB     *DB
 	Logger *log.Logger
 
-	// mon is the state of the monitoring step, touched only by the flow that
-	// runs the step.
+	// mon is the state of the monitoring step, touched only by the worker
+	// that processes the step.
 	mon monitorState
-	// sched decides what runs next.
+	// comm is the state of the communication flow.
+	comm commState
+	// link is what the communication flow and the monitoring step hand
+	// each other.
+	link syncLink
+	// sched is the queue of the workers.
 	sched *agentScheduler
 	// out is the outbox, the only owner of the queued reports.
 	out *outbox
 	// leftovers holds the output pipes that processes left behind by
 	// commands still hold open.
 	leftovers leftoverPipes
+	// early asks the communication flow for the next round at once (a
+	// manually requested run ended); it holds at most one request.
+	early chan struct{}
 
-	// Fixed before Run starts a worker, then only read. workers is the number
-	// of units processed at the same time (SetWorkers; 1 unless set); stop is
-	// the channel given to Run, closed when the agent stops.
+	// Fixed before Run starts a flow, then only read. workers is the number
+	// of entries processed at the same time (SetWorkers; 1 unless set);
+	// stop is the channel given to Run, closed when the agent stops.
 	workers int
 	stop    <-chan struct{}
-	// halt is closed by the first flow that panicked (haltNow); Run then
-	// stops the agent as if stop had been closed and returns ErrAgentPanic.
-	halt     chan struct{}
-	haltOnce sync.Once
 	// clock, loc, cmdKillGrace and recordRetry replace the time, the host's
 	// time zone, the grace before SIGKILL and the first wait before a run
 	// record is written again (RunRecordRetryFirst) in tests.
@@ -99,38 +106,118 @@ type AgentRuntime struct {
 
 // monitorState is what only the monitoring step uses.
 type monitorState struct {
-	transport AgentTransport
-	config    *AgentConfig // nil for the built-in agent
-	// onConfigSaved is called with the configuration after a change from the
-	// central (renewed token, name, expiry, CAs) was saved, so that the
-	// transport uses the saved token and CAs from the next request on.
-	onConfigSaved func(cfg *AgentConfig)
-
-	defaultInterval int
-	rule            *RuleAssignment
-	lastApply       *ApplyResult
+	rule      *RuleAssignment
+	lastApply *ApplyResult
 	// failedRule is the rule version whose application failed. It is not
-	// retried every cycle (each attempt replaces the loaded rules); a new
+	// retried every step (each attempt replaces the loaded rules); a new
 	// version or a restart of the agent tries again.
 	failedRule string
 	// lastOK is the result of the last successful application, restored when
 	// the central assigns the running version again after a failed one.
 	lastOK *ApplyResult
+	// started is set by the first step, which applies the stored rule again.
+	started bool
 }
 
-// interval is the check interval: the assigned rule's, else the central's
-// default from the last sync.
-func (m *monitorState) interval() time.Duration {
+// syncLink is what the communication flow and the monitoring step hand each
+// other, under its own mutex: the monitoring step publishes what it applied
+// (sent with every sync, and the check interval); the communication flow
+// puts what the last sync brought (the rule assignment and the central's
+// default check interval), which the next monitoring step applies.
+type syncLink struct {
+	mu sync.Mutex
+	// Published by the monitoring step.
+	ruleID       int64
+	ruleVersion  int
+	ruleInterval int
+	holds        bool
+	failedRule   string
+	lastApply    *ApplyResult
+	// Put by the communication flow. known: a sync brought an assignment;
+	// cas are the CAs the agent trusts.
+	known           bool
+	cas             []string
+	assigned        *RuleAssignment
+	defaultInterval int
+}
+
+// publish takes over what the monitoring step applied.
+func (l *syncLink) publish(m *monitorState) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ruleID, l.ruleVersion, l.ruleInterval = 0, 0, 0
 	if m.rule != nil {
-		return time.Duration(m.rule.Content.CheckInterval()) * time.Second
+		l.ruleID, l.ruleVersion, l.ruleInterval = m.rule.ID, m.rule.Version, m.rule.Content.CheckInterval()
 	}
-	return time.Duration(m.defaultInterval) * time.Second
+	l.holds, l.failedRule = holdsRule(m.rule, m.lastApply), m.failedRule
+	l.lastApply = nil
+	if m.lastApply != nil {
+		a := *m.lastApply
+		l.lastApply = &a
+	}
+}
+
+// applied returns what the monitoring step applied: the rule and its last
+// application result (for the sync).
+func (l *syncLink) applied() (ruleID int64, ruleVersion int, lastApply *ApplyResult) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ruleID, l.ruleVersion, l.lastApply
+}
+
+// interval is the check interval: the applied rule's, else the central's
+// default from the last sync.
+func (l *syncLink) interval() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.ruleInterval > 0 {
+		return time.Duration(l.ruleInterval) * time.Second
+	}
+	return time.Duration(l.defaultInterval) * time.Second
+}
+
+// offer puts what a sync brought and reports whether the assignment differs
+// from what is applied (a version whose application failed does not count:
+// it is not tried again).
+func (l *syncLink) offer(rule *RuleAssignment, defaultInterval int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if defaultInterval > 0 {
+		l.defaultInterval = defaultInterval
+	}
+	l.known, l.assigned = true, rule
+	if rule == nil {
+		return l.holds
+	}
+	return (rule.ID != l.ruleID || rule.Version != l.ruleVersion) && ruleKey(rule) != l.failedRule
+}
+
+// setCAs puts the CAs the agent trusts (the communication flow saved them).
+func (l *syncLink) setCAs(pems []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cas = append([]string(nil), pems...)
+}
+
+// trustedCAs returns the CAs the agent trusts (for the host information).
+func (l *syncLink) trustedCAs() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.cas
+}
+
+// assignment returns the rule assignment of the last sync that brought one
+// (known is false before the first).
+func (l *syncLink) assignment() (rule *RuleAssignment, known bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.assigned, l.known
 }
 
 // NewAgentRuntime loads the stored state. tr is the transport to the central.
 func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
-	rt := &AgentRuntime{DB: db, Logger: logger, workers: 1,
-		mon: monitorState{transport: tr, defaultInterval: DefaultCheckIntervalSec}}
+	rt := &AgentRuntime{DB: db, Logger: logger, workers: 1, comm: commState{transport: tr}, early: make(chan struct{}, 1)}
+	rt.link.defaultInterval = DefaultCheckIntervalSec
 	rt.out = newOutbox(db, rt.logf)
 	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
@@ -145,12 +232,13 @@ func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntim
 			rt.mon.lastApply = &a
 		}
 	}
-	rt.sched = newAgentScheduler(db, rt.now, rt.location, rt.mon.interval())
+	rt.link.publish(&rt.mon)
+	rt.sched = newAgentScheduler(db, rt.now, rt.location)
 	rt.loadCommandDefinitions()
 	return rt
 }
 
-// SetWorkers sets the number of units processed at the same time (1 to
+// SetWorkers sets the number of entries processed at the same time (1 to
 // MaxAgentWorkers, see LoadAgentWorkers). It is called before Run.
 func (rt *AgentRuntime) SetWorkers(n int) {
 	rt.workers = max(1, min(n, MaxAgentWorkers))
@@ -163,8 +251,22 @@ func (rt *AgentRuntime) logf(format string, a ...any) {
 	}
 }
 
-// ReapplyStored re-applies the stored rule at start, because a reboot or an
-// auditd restart reloads the OS defaults.
+// recovered runs fn and recovers a panic of it: the panic is logged with its
+// stack after the prefix what ("worker panic", "communication panic") and
+// recovered reports true. The agent goes on.
+func (rt *AgentRuntime) recovered(what string, fn func()) (panicked bool) {
+	defer func() {
+		if v := recover(); v != nil {
+			panicked = true
+			rt.logf("%s: %v\n%s", what, v, debug.Stack())
+		}
+	}()
+	fn()
+	return false
+}
+
+// ReapplyStored re-applies the stored rule, because a reboot or an auditd
+// restart reloads the OS defaults (the first monitoring step does it).
 func (rt *AgentRuntime) ReapplyStored() {
 	if rt.mon.rule == nil {
 		return
@@ -173,55 +275,27 @@ func (rt *AgentRuntime) ReapplyStored() {
 	rt.applyRule(rt.mon.rule, true)
 }
 
-// Run processes the agent's units until stop is closed (a nil stop never
-// is): the calling flow is the first worker, and workers-1 flows more are
-// started. Each worker asks the scheduler for a unit (the monitoring step
-// when due, else the oldest manual request whose set does not run, else the
-// due scheduled set), runs it and asks again; with nothing to run it waits
-// until the next monitoring step or the next scheduled time. While a command
-// runs, its wait loop runs the monitoring step when it is due and no other
-// worker is idle.
+// Run runs the agent until stop is closed (a nil stop never is). The runs
+// found unfinished are reported first (recoverInterruptedRuns); then the
+// queue gets the monitoring entry and the entries of the scheduled sets, the
+// communication flow starts and so do the workers (the calling flow is the
+// first of them).
 //
-// After the stop no unit starts; a running monitoring step completes (see
-// monitorStep), and a running command is ended (SIGTERM, grace, SIGKILL) and
-// its run still reported. When every worker has returned, one last report
-// says that the agent stops (stopping true) and carries what is queued (one
-// attempt; what fails stays queued for the next start); then Run returns.
-// While it runs, the state key running_workers holds the worker count in
-// use (for agent status and agent set-workers).
+// After the stop no entry starts; a monitoring step in progress completes
+// (see monitorStep), and a running command is ended (SIGTERM to its process
+// group, SIGKILL to what is left after the grace) and its run is recorded.
+// The communication flow does no round after the stop; when every worker has
+// returned it sends one last report that says that the agent stops
+// (stopping true) and carries what is queued (one attempt; what fails stays
+// queued for the next start). Then Run returns. While it runs, the state key
+// running_workers holds the worker count in use (for agent status and agent
+// set-workers).
 //
-// A panic of any of its flows is logged with its stack through the agent's
-// logger and stops the agent the way a stop does; Run then returns
-// ErrAgentPanic.
-func (rt *AgentRuntime) Run(stop <-chan struct{}) (err error) {
-	// A panic of the calling flow outside a unit is logged with its stack
-	// and ends Run like a panic of a worker (after the deferred clearing of
-	// running_workers below).
-	defer func() {
-		if v := recover(); v != nil {
-			rt.logf("panic: %v\n%s", v, debug.Stack())
-			err = ErrAgentPanic
-		}
-	}()
-	// The agent stops when stop is closed or when a flow panicked.
-	rt.halt = make(chan struct{})
-	merged := make(chan struct{})
-	ended := make(chan struct{})
-	defer close(ended)
-	if isClosed(stop) {
-		close(merged)
-	} else {
-		go func() {
-			select {
-			case <-stop:
-			case <-rt.halt:
-			case <-ended:
-			}
-			close(merged)
-		}()
-	}
-	rt.stop = merged
-	rt.sched.stop = merged
+// A panic inside an entry or a round is recovered there (see process and
+// agentComm); the agent goes on and no command is signalled for it.
+func (rt *AgentRuntime) Run(stop <-chan struct{}) {
+	rt.stop = stop
+	rt.sched.stop = stop
 	if err := recordRunningWorkers(rt.DB, rt.workers); err != nil {
 		rt.logf("failed to record the worker count in use: %v", err)
 	}
@@ -230,107 +304,87 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) (err error) {
 			rt.logf("failed to clear the worker count in use: %v", err)
 		}
 	}()
-	if !isClosed(merged) {
-		rt.ReapplyStored()
-	}
-	rt.recoverInterruptedRuns()
+	rt.recovered("panic", rt.recoverInterruptedRuns)
+	rt.sched.start()
+	workersDone := make(chan struct{})
+	commDone := make(chan struct{})
+	go func() {
+		defer close(commDone)
+		rt.communicate(workersDone)
+	}()
 	var wg sync.WaitGroup
 	for i := 1; i < rt.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rt.safeWork()
+			rt.work()
 		}()
 	}
-	rt.safeWork()
+	rt.work()
 	wg.Wait()
 	rt.leftovers.closeAll()
-	// The last report: the central learns at once that the agent stops (it
-	// then gives the run requests the agent had not started back to its
-	// queue) and that the runs the stop cut ended. Every worker has
-	// returned, so this is the only flush.
-	rt.flushStopping()
-	if isClosed(rt.halt) {
-		return ErrAgentPanic
-	}
-	return nil
+	close(workersDone)
+	<-commDone
 }
 
-// ErrAgentPanic is returned by Run when a flow of the agent panicked: the
-// panic was logged with its stack and the agent stopped.
-var ErrAgentPanic = errors.New("the agent stopped because a worker panicked (the panic is in the log)")
-
-// safeWork runs work and recovers a panic of it: the panic is logged with
-// its stack and the agent is stopped (haltNow), so that the other workers
-// end their units the way they do at a stop and Run returns.
-func (rt *AgentRuntime) safeWork() {
-	defer func() {
-		if v := recover(); v != nil {
-			rt.logf("worker panic: %v\n%s", v, debug.Stack())
-			rt.haltNow()
-		}
-	}()
-	rt.work()
-}
-
-// haltNow stops the agent after a panic (see Run).
-func (rt *AgentRuntime) haltNow() {
-	rt.haltOnce.Do(func() { close(rt.halt) })
-}
-
-// work is one worker: it runs the units the scheduler gives it until the
-// stop.
+// work is one worker: it processes the entries the queue gives it until the
+// stop. Before each entry it reads away what processes left behind by
+// earlier commands wrote (leftoverPipes).
 func (rt *AgentRuntime) work() {
 	for {
 		u, acks := rt.sched.next()
-		rt.leftovers.tend()
 		rt.queueAcks(acks)
-		switch {
-		case u == nil && len(acks) == 0:
-			return
-		case u == nil:
-		case u.monitor:
-			rt.runMonitorStep()
+		if u == nil {
+			if len(acks) == 0 {
+				return
+			}
+			continue
+		}
+		rt.leftovers.tend()
+		rt.process(u)
+	}
+}
+
+// process processes one entry. The monitoring step is queued again after it
+// ended (also after a panic, which ends it there). A run of a command set
+// recovers its own panics (runCommandJob); the end of a manually requested
+// run asks for the next round at once, so that its result reaches the
+// central soon.
+func (rt *AgentRuntime) process(u *agentUnit) {
+	if u.monitor {
+		rt.recovered("worker panic", rt.monitorStep)
+		rt.link.publish(&rt.mon)
+		rt.sched.doneMonitor(rt.link.interval())
+		return
+	}
+	started := rt.runCommandJob(u.job)
+	rt.sched.doneRun(u.job)
+	if started && u.job.trigger == TriggerManual {
+		select {
+		case rt.early <- struct{}{}:
 		default:
-			started := rt.runCommandJob(u.job)
-			rt.sched.doneRun(u.job, started)
 		}
 	}
 }
 
-// runMonitorStep runs the monitoring step the scheduler gave to this flow
-// and tells the scheduler that it ended.
-func (rt *AgentRuntime) runMonitorStep() {
-	rt.monitorStep()
-	rt.sched.doneMonitor(rt.mon.interval())
-}
-
-// monitorHere is called from the wait loop of a running command: it runs the
-// monitoring step on this flow when the scheduler gives it to this worker.
-func (rt *AgentRuntime) monitorHere() {
-	if rt.sched.inlineMonitor() {
-		rt.runMonitorStep()
-	}
-}
-
-// Cycle performs one monitoring step.
-func (rt *AgentRuntime) Cycle() {
-	rt.monitorStep()
-}
-
-// monitorStep performs one periodic processing: sync, audit collection, file
-// scans and the report. It is also called from the wait loop of a running
-// command. A stop does not interrupt it: the step completes and saves its
-// state, with these exceptions. A tool the step waits for when the stop
-// comes is ended (RunTool) and its part fails as a failure of that tool
-// does. After the stop the step starts no tool: the audit log is not read
-// (the position stays), a rule application or removal that has not begun is
-// not begun, and the report is queued without host information. An
-// application or removal that has begun runs to its end.
+// monitorStep performs one monitoring step: it applies or removes the audit
+// rules when the assignment the last sync brought differs from what is
+// applied (the first step applies the stored rule again), reads the audit
+// log, scans files, queues one periodic report (detections, host
+// information, application result, dropped count) for the next round and
+// prunes old run records. It does not talk to the central. A stop does not
+// interrupt it: the step completes and saves its state, with these
+// exceptions. A tool the step waits for when the stop comes is ended
+// (RunTool) and its part fails as a failure of that tool does. After the stop
+// the step starts no tool: the audit log is not read (the position stays),
+// a rule application or removal that has not begun is not begun, and the
+// report is queued without host information. An application or removal that
+// has begun runs to its end.
 func (rt *AgentRuntime) monitorStep() {
 	cycleStart := time.Now()
-	rt.sync()
-
+	if !isClosed(rt.stop) {
+		rt.applyAssignment()
+	}
 	var detections []DetectionReport
 	if rt.mon.rule != nil {
 		c := &rt.mon.rule.Content
@@ -346,136 +400,36 @@ func (rt *AgentRuntime) monitorStep() {
 	rt.pruneCommandExecutions()
 }
 
-func (rt *AgentRuntime) sync() {
-	running, err := rt.runningRequests()
-	if err != nil {
-		// Without the list the central could take a running request for
-		// ended; the sync is left out and the step goes on as after a failed
-		// sync.
-		rt.logf("sync: reading the running command set runs failed: %v", err)
-		return
+// applyAssignment applies what the last sync assigned: it removes the audit
+// rules when no rule is assigned, restores the last successful result when
+// the running version is assigned again (after a newer one failed), and
+// applies a new version unless its application failed before. The first
+// step of the agent applies the stored rule again when no sync brought an
+// assignment yet or the assignment is the stored rule.
+func (rt *AgentRuntime) applyAssignment() {
+	assigned, known := rt.link.assignment()
+	if !rt.mon.started {
+		rt.mon.started = true
+		if r := rt.mon.rule; r != nil && (!known || (assigned != nil && assigned.ID == r.ID && assigned.Version == r.Version)) {
+			rt.ReapplyStored()
+			return
+		}
 	}
-	req := &SyncRequest{AgentVersion: AppVersion, LastApply: rt.mon.lastApply, CommandSig: rt.sched.signature(),
-		RunningRequests: running, FreeWorker: rt.sched.freeWorker()}
-	if rt.mon.rule != nil {
-		req.RuleID, req.RuleVersion = rt.mon.rule.ID, rt.mon.rule.Version
-	}
-	if rt.mon.config != nil {
-		req.CAFingerprints = CAFingerprintsOf(rt.mon.config.CAPEMs)
-	}
-	resp, err := rt.mon.transport.Sync(req)
-	if err != nil {
-		rt.logConnectionError("sync", err)
-		return
-	}
-	if resp.DefaultIntervalSec > 0 {
-		rt.mon.defaultInterval = resp.DefaultIntervalSec
-	}
-	if rt.mon.config != nil {
-		rt.saveConfigUpdates(resp)
-	}
-	// Definitions and requests go to the scheduler; a running set keeps the
-	// definition it started with.
-	if resp.CommandSets != nil {
-		rt.storeCommandDefinitions(resp.CommandSets)
-	}
-	rt.queueAcks(rt.sched.receiveRequests(resp.CommandRequests))
-	if isClosed(rt.stop) {
-		// After the stop no rule is applied or removed (both run tools); the
-		// next start syncs again.
+	if !known {
 		return
 	}
 	switch {
-	case resp.Rule == nil:
+	case assigned == nil:
 		rt.removeRule()
-	case rt.mon.rule != nil && resp.Rule.ID == rt.mon.rule.ID && resp.Rule.Version == rt.mon.rule.Version:
+	case rt.mon.rule != nil && assigned.ID == rt.mon.rule.ID && assigned.Version == rt.mon.rule.Version:
 		// The running version is assigned again (for example after a newer
 		// version failed): report its successful result again.
 		rt.mon.failedRule = ""
 		if rt.mon.lastApply != nil && rt.mon.lastApply.Status == "error" && rt.mon.lastOK != nil {
 			rt.setApply(rt.mon.lastOK)
 		}
-	case ruleKey(resp.Rule) != rt.mon.failedRule:
-		resp.Rule.Content.Normalize()
-		rt.applyRule(resp.Rule, false)
-	}
-}
-
-// runningRequests returns the request IDs of the manual runs that were
-// started and are not finished, from the local database (never nil).
-func (rt *AgentRuntime) runningRequests() ([]int64, error) {
-	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
-	if err != nil {
-		return nil, err
-	}
-	ids := []int64{}
-	for _, e := range runs {
-		if e.RequestID > 0 {
-			ids = append(ids, e.RequestID)
-		}
-	}
-	return ids, nil
-}
-
-func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
-	cfg := *rt.mon.config
-	cfg.CAPEMs = append([]string(nil), rt.mon.config.CAPEMs...)
-	changed := false
-	if resp.TokenExpiresAt > 0 && resp.TokenExpiresAt != cfg.TokenExpiresAt {
-		cfg.TokenExpiresAt = resp.TokenExpiresAt
-		changed = true
-	}
-	if resp.AgentName != "" && resp.AgentName != cfg.TokenName {
-		cfg.TokenName = resp.AgentName
-		changed = true
-	}
-	renewed := false
-	if resp.TokenRenewal != nil && resp.TokenRenewal.Token != "" && resp.TokenRenewal.Token != cfg.Token {
-		cfg.Token = resp.TokenRenewal.Token
-		cfg.TokenExpiresAt = resp.TokenRenewal.ExpiresAt
-		changed, renewed = true, true
-	}
-	if cfg.MergeCAs(resp.CAPEMs, time.Now()) {
-		changed = true
-	}
-	if !changed {
-		return
-	}
-	if err := rt.DB.Write(cfg.Save); err != nil {
-		// Keep using the old token; the central hands out the same new value
-		// again on the next connection.
-		rt.logf("failed to save configuration (token renewal or CA update postponed): %v", err)
-		return
-	}
-	*rt.mon.config = cfg
-	if renewed {
-		rt.logf("token renewed; new expiry %s", time.Unix(cfg.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"))
-	}
-	if rt.mon.onConfigSaved != nil {
-		rt.mon.onConfigSaved(rt.mon.config)
-	}
-}
-
-func (rt *AgentRuntime) logConnectionError(op string, err error) {
-	var he *HTTPError
-	switch {
-	case errors.As(err, &he) && he.Status == 401:
-		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another agent instance). Re-initialize the agent with a valid token", op)
-	case IsSilenceCut(err):
-		// The batch of a cut report stays recorded and is sent again at the
-		// next monitoring step.
-		rt.logf("%s: the central sent nothing for %d seconds: %v", op, int(IdleTimeout/time.Second), err)
-	case IsCertificateError(err):
-		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
-	default:
-		rt.logf("%s: cannot reach the central: %v", op, err)
-	}
-	if rt.mon.config != nil && rt.mon.config.TokenExpiresAt > 0 {
-		left := time.Until(time.Unix(rt.mon.config.TokenExpiresAt, 0))
-		if left < time.Duration(DefaultTokenRenewDays)*24*time.Hour {
-			rt.logf("warning: the token expires at %s (in %s) and could not be renewed",
-				time.Unix(rt.mon.config.TokenExpiresAt, 0).Local().Format("2006-01-02 15:04:05 MST"), left.Round(time.Minute))
-		}
+	case ruleKey(assigned) != rt.mon.failedRule:
+		rt.applyRule(assigned, false)
 	}
 }
 
@@ -1147,17 +1101,16 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	return out
 }
 
+// report queues the periodic report of a monitoring step; the next round
+// sends it.
 func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The directory structure is reported only for the scan origin of the
 	// applied rule; there is no default origin.
-	in := HostInfoInput{LastApply: rt.mon.lastApply, Workers: rt.workers}
+	in := HostInfoInput{LastApply: rt.mon.lastApply, Workers: rt.workers, TrustedCAPEMs: rt.link.trustedCAs()}
 	if rt.mon.rule != nil {
 		in.Rule = &RuleRef{ID: rt.mon.rule.ID, Version: rt.mon.rule.Version}
 		in.ScanBase = rt.mon.rule.Content.Writable.Base
 		in.IncompleteScans = rt.incompleteScans()
-	}
-	if rt.mon.config != nil {
-		in.TrustedCAPEMs = rt.mon.config.CAPEMs
 	}
 	in.Stop = rt.stop
 	// After the stop, or when the stop cut its collection, the report goes
@@ -1171,8 +1124,6 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The dropped count is read, reported in the queued report and reset in
 	// the outbox's one transaction, so that a count is neither lost nor
 	// reported twice.
-	// What is queued is sent in the one report request of the step, also
-	// when this report could not be queued.
 	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.mon.lastApply}
 	dropped, err := rt.out.queuePeriodic(req)
 	switch {
@@ -1181,17 +1132,4 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	case dropped > 0:
 		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
 	}
-	rt.flushOutbox()
-}
-
-// flushOutbox sends the queued items in one report request (see
-// outbox.flush); a failure is logged as a failed report.
-func (rt *AgentRuntime) flushOutbox() {
-	rt.out.flush(rt.mon.transport, false, func(err error) { rt.logConnectionError("report", err) })
-}
-
-// flushStopping sends the last report of the agent before it ends: the
-// queued items with stopping true.
-func (rt *AgentRuntime) flushStopping() {
-	rt.out.flush(rt.mon.transport, true, func(err error) { rt.logConnectionError("report", err) })
 }

@@ -73,10 +73,8 @@ func TestDefinitionsLargerThanRequestBody(t *testing.T) {
 		}
 		close(stop)
 	}()
-	if err := rt.Run(stop); err != nil {
-		t.Fatal(err)
-	}
-	rt.Cycle()
+	rt.Run(stop)
+	rt.Round()
 	if stored := models.GetLocalState(db.Read(), modules.StateCommandDefinitions); len(stored) <= modules.MaxRequestBody {
 		t.Fatalf("stored definitions: %d bytes; log: %s", len(stored), logs.String())
 	}

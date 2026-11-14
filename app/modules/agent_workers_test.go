@@ -413,9 +413,10 @@ func TestHostInfoWorkers(t *testing.T) {
 	defer done()
 	fakeAuditctl(t, "1", nil)
 	tr := &fakeTransport{}
-	rt.mon.transport = tr
+	rt.comm.transport = tr
 	rt.SetWorkers(3)
 	rt.report(nil)
+	rt.flushOutbox()
 	if len(tr.reports) != 1 || tr.reports[0].HostInfo == nil || tr.reports[0].HostInfo.Workers != 3 {
 		t.Fatalf("reports: %+v", tr.reports)
 	}
@@ -425,10 +426,8 @@ func TestHostInfoWorkers(t *testing.T) {
 	}
 
 	rwt := &runningWorkersTransport{db: rt.DB, stop: make(chan struct{})}
-	rt.mon.transport = rwt
-	if err := rt.Run(rwt.stop); err != nil {
-		t.Fatal(err)
-	}
+	rt.comm.transport = rwt
+	rt.Run(rwt.stop)
 	if !rwt.found || rwt.value != "3" {
 		t.Fatalf("running_workers while running: %q %v", rwt.value, rwt.found)
 	}

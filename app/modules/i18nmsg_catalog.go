@@ -73,7 +73,6 @@ var msgCatalog = map[string]msgDef{
 	"auth.unauthorized":                             {en: "unauthorized"},
 	"builtin.auditd_unusable":                       {en: "auditd is not usable: {{cause}}"},
 	"builtin.local_db":                              {en: "local database: {{cause}}"},
-	"builtin.stopped":                               {en: "stopped"},
 	"builtin.workers_invalid":                       {en: "The worker count stored for the built-in agent is not a whole number from {{min}} to {{max}}."},
 	"command.import_conflicts":                      {en: "these names are already used in the monitored target or repeated in the import: {{names}}", admin: true},
 	"command.import_item_not_found":                 {en: "command set {{set}} not found in the source", admin: true},

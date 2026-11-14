@@ -147,7 +147,10 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 	db := agentLocalDB(t)
 	// The agent's own count of dropped detections goes into its next
 	// periodic report (the outbox's state key).
-	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, "dropped_pending", "2") }); err != nil {
+	// The report of a monitoring step that carries two dropped detections.
+	if err := db.Write(func(tx models.Writer) error {
+		return models.InsertOutbox(tx, &models.OutboxItem{Payload: `{"created_at":1,"detections":[],"dropped":2}`})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// The answer of every batch that carries something counted is lost the
@@ -178,14 +181,12 @@ func TestAgentReportSentAgainEndToEnd(t *testing.T) {
 			}
 		}
 	}()
-	if err := rt.Run(stop); err != nil {
-		t.Fatal(err)
-	}
+	rt.Run(stop)
 	for range 20 {
 		if items, err := models.ListOutbox(db.Read()); err == nil && len(items) == 0 {
 			break
 		}
-		rt.Cycle()
+		rt.Round()
 	}
 	if items, _ := models.ListOutbox(db.Read()); len(items) != 0 {
 		t.Fatalf("reports left in the outbox: %d", len(items))
@@ -258,16 +259,19 @@ func TestAgentBatchDeleteFailsEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Write(func(tx models.Writer) error { return models.SetLocalState(tx, "dropped_pending", "2") }); err != nil {
+	// The report of a monitoring step that carries two dropped detections.
+	if err := db.Write(func(tx models.Writer) error {
+		return models.InsertOutbox(tx, &models.OutboxItem{Payload: `{"created_at":1,"detections":[],"dropped":2}`})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &handlerTransport{e: e, tok: tok}
 	rt := modules.NewAgentRuntime(db, tr, log.New(io.Discard, "", 0))
 	exec(`CREATE TRIGGER keep_outbox BEFORE DELETE ON outbox BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`)
-	rt.Cycle()
+	rt.Round()
 	exec(`DROP TRIGGER keep_outbox`)
-	rt.Cycle()
-	rt.Cycle()
+	rt.Round()
+	rt.Round()
 	tr.mu.Lock()
 	sent := slices.Clone(tr.reports)
 	tr.mu.Unlock()
@@ -303,9 +307,7 @@ func TestAgentLostRunEndedBySync(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := rt1.Run(stop); err != nil {
-			t.Error(err)
-		}
+		rt1.Run(stop)
 	}()
 	stopped := false
 	stopAgent := func() {
@@ -335,7 +337,7 @@ func TestAgentLostRunEndedBySync(t *testing.T) {
 	tr1.mu.Unlock()
 	tr2 := &handlerTransport{e: e, tok: tok}
 	rt2 := modules.NewAgentRuntime(agentLocalDB(t), tr2, log.New(io.Discard, "", 0))
-	rt2.Cycle()
+	rt2.Round()
 	syncs := tr2.sentSyncs()
 	if len(syncs) == 0 || !strings.Contains(syncs[0], `"running_requests":[]`) {
 		t.Fatalf("sync of the new agent: %v", syncs)

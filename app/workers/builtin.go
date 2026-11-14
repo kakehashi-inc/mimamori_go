@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"time"
 
 	"mimamori/app/models"
@@ -24,7 +23,7 @@ func (t *inProcessTransport) agent() (*models.Agent, error) {
 }
 
 // builtinSyncHook, when not nil, is called at the start of every sync of the
-// built-in agent (tests use it to make a worker panic).
+// built-in agent (tests use it to make a round panic).
 var builtinSyncHook func()
 
 func (t *inProcessTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse, error) {
@@ -85,11 +84,11 @@ func (c *core) clearDisabledBuiltin(agent *models.Agent) {
 }
 
 // startBuiltinAgent checks the prerequisites and, when they hold, starts the
-// built-in agent on its own flows, as many as its own worker count in
-// builtin-agent.db (default 1). It returns a function that waits for them to
-// finish after stop was closed. When the prerequisites fail, only the
-// central functions run and the reason is shown on screen (the caller logs
-// it once).
+// built-in agent on its own flows: its communication flow and as many
+// workers as its own worker count in builtin-agent.db (default 1). It
+// returns a function that waits for them to finish after stop was closed.
+// When the prerequisites fail, only the central functions run and the
+// reason is shown on screen (the caller logs it once).
 func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func() {
 	none := func() {}
 	if !*c.conf().BuiltinAgent {
@@ -131,18 +130,7 @@ func (c *core) startBuiltinAgent(agent *models.Agent, stop <-chan struct{}) func
 	go func() {
 		defer close(done)
 		defer db.Close()
-		// Whatever ends the built-in agent (a stop, a panic of one of its
-		// workers that Run recovered, or a panic of this flow), the central
-		// keeps running and the screen shows that it stopped.
-		defer func() {
-			if v := recover(); v != nil {
-				logger.Printf("panic: %v\n%s", v, debug.Stack())
-			}
-			c.setBuiltinStatus(false, modules.M("builtin.stopped"))
-		}()
-		if err := rt.Run(stop); err != nil {
-			logger.Printf("%v", err)
-		}
+		rt.Run(stop)
 	}()
 	return func() { <-done }
 }

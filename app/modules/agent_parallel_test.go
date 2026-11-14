@@ -141,14 +141,13 @@ func countRuns(db *DB) (all, finished int) {
 	return
 }
 
-// newParallelRuntime is newCommandRuntime with n workers, the first
-// monitoring step due at once and a check interval of one second.
+// newParallelRuntime is newCommandRuntime with n workers and a check
+// interval of one second.
 func newParallelRuntime(t *testing.T, tr *parTransport, n int) *AgentRuntime {
 	t.Helper()
 	rt := newCommandRuntime(t, tr)
 	rt.SetWorkers(n)
-	rt.sched.lastMonitor = time.Time{}
-	rt.mon.defaultInterval = 1
+	rt.link.defaultInterval = 1
 	tr.db = rt.DB
 	tr.resp.DefaultIntervalSec = 1
 	return rt
@@ -178,65 +177,148 @@ func allReports(t *testing.T, rt *AgentRuntime, tr *parTransport) []ReportReques
 	return append(out, queuedReports(t, rt)...)
 }
 
-// TestSchedulerIdleWorkerMonitors: with three workers and one long set, the
-// monitoring steps run at the interval on an idle worker, never inside the
-// wait for the set's command.
-func TestSchedulerIdleWorkerMonitors(t *testing.T) {
+// periodicItems returns the periodic reports among the reports (the
+// monitoring steps that queued them).
+func periodicItems(reports []ReportRequest) []ReportRequest {
+	var out []ReportRequest
+	for _, r := range reports {
+		if len(r.CommandRuns) == 0 && len(r.CommandRequestAcks) == 0 && r.CommandApply == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestRoundsWhileWorkersBusy (C3, TO-3, MON-1, UNITS): with three workers all
+// running long sets, the rounds go on every interval on the communication
+// flow (never inside the wait for a command), one at a time; the monitoring
+// step waits in the queue until a worker is free, so that never more entries
+// are processed than there are workers.
+func TestRoundsWhileWorkersBusy(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 3)
-	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 3.2"))
-	tr.resp.CommandRequests = manualRequests(1, 1)
-	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
-		t.Fatal(err)
+	dir := t.TempDir()
+	var sets []CommandSetDef
+	for id := int64(1); id <= 3; id++ {
+		sets = append(sets, testSet(id, PurposeRunOnly, fmt.Sprintf("touch %s/live.$$; sleep 3.5; rm %s/live.$$", dir, dir)))
 	}
+	tr.resp.CommandSets = defsOf(sets...)
+	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
+	var steps, maxUnits atomic.Int32
+	quit := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		for {
+			select {
+			case <-quit:
+				return
+			case <-time.After(3 * time.Millisecond):
+			}
+			es, _ := os.ReadDir(dir)
+			rt.sched.mu.Lock()
+			units := int32(len(es))
+			if rt.sched.monitoring {
+				units++
+				steps.Add(1)
+			}
+			rt.sched.mu.Unlock()
+			if units > maxUnits.Load() {
+				maxUnits.Store(units)
+			}
+		}
+	}()
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 3))
+	close(quit)
+	<-watched
 	during := 0
 	for i, s := range tr.seen() {
 		if s.inWaitLoop {
-			t.Fatalf("step %d ran inside the command's wait loop although workers were idle", i+1)
+			t.Fatalf("sync %d ran inside the wait for a command", i+1)
+		}
+		if s.running == 3 {
+			during++
+		}
+	}
+	if during < 2 {
+		t.Fatalf("the rounds must go on while every worker runs a set: %d syncs during the runs (%+v)", during, tr.seen())
+	}
+	if m := tr.maxInSync.Load(); m != 1 {
+		t.Fatalf("two rounds at once: %d", m)
+	}
+	if m := maxUnits.Load(); m > 3 {
+		t.Fatalf("%d entries processed at once by 3 workers", m)
+	}
+}
+
+// TestOneWorkerLongCommand (C3, TO-3): with one worker and a long command the
+// monitoring step waits in the queue until the run ended, while the rounds
+// go on; the time limit and the grace of the command are not delayed by
+// anything.
+func TestOneWorkerLongCommand(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	rt.cmdKillGrace = time.Second
+	set := testSet(1, PurposeRunOnly, "trap '' TERM; sleep 30")
+	set.Commands[0].TimeoutSec = 3
+	tr.resp.CommandSets = defsOf(set)
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	// The rounds take long (as a slow central would); the command does not
+	// wait for them.
+	tr.onSync = func(n int) {
+		if n > 1 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	var stepsDuring atomic.Int32
+	quit := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		for {
+			select {
+			case <-quit:
+				return
+			case <-time.After(3 * time.Millisecond):
+			}
+			rt.sched.mu.Lock()
+			if rt.sched.monitoring && len(rt.sched.running) > 0 {
+				stepsDuring.Add(1)
+			}
+			rt.sched.mu.Unlock()
+		}
+	}()
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	close(quit)
+	<-watched
+	if n := stepsDuring.Load(); n != 0 {
+		t.Fatalf("a monitoring step ran while the only worker ran the command (%d samples)", n)
+	}
+	during := 0
+	for _, s := range tr.seen() {
+		if s.inWaitLoop {
+			t.Fatal("a sync ran inside the wait for the command")
 		}
 		if s.running > 0 {
 			during++
 		}
 	}
 	if during < 2 {
-		t.Fatalf("the monitoring must go on while the set runs: %d steps during the run (%+v)", during, tr.seen())
+		t.Fatalf("the rounds must go on while the command runs: %d syncs during the run", during)
 	}
-	if m := tr.maxInSync.Load(); m != 1 {
-		t.Fatalf("two monitoring steps at once: %d", m)
-	}
-}
-
-// TestSchedulerAllBusyMonitors: with three workers all running long sets,
-// the steps go on at the interval inside the commands' wait loops, one at a
-// time.
-func TestSchedulerAllBusyMonitors(t *testing.T) {
-	requireBash(t)
-	tr := &parTransport{}
-	rt := newParallelRuntime(t, tr, 3)
-	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 3.5"), testSet(2, PurposeRunOnly, "sleep 3.5"),
-		testSet(3, PurposeRunOnly, "sleep 3.5"))
-	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
-	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 3)); err != nil {
-		t.Fatal(err)
-	}
-	inside := 0
-	for _, s := range tr.seen() {
-		if s.inWaitLoop {
-			inside++
-		}
-	}
-	if inside < 2 {
-		t.Fatalf("the monitoring must go on while every worker runs a set: %d steps (%+v)", inside, tr.seen())
-	}
-	if m := tr.maxInSync.Load(); m != 1 {
-		t.Fatalf("two monitoring steps at once: %d", m)
+	last, _ := lastRun(t, runReports(allReports(t, rt, tr)))
+	res := last.Results[0]
+	// Time limit 3 s and grace 1 s: ended after 4 s, not later.
+	if res.Reason != ReasonTimeout || res.FinishedAt-res.StartedAt > 5 {
+		t.Fatalf("the time limit and the grace were delayed: %+v", res)
 	}
 }
 
 // TestSchedulerSameSetNotTwice: with four workers, requests for sets 1, 2, 1
-// and a due schedule of set 1 never run set 1 twice at the same time, while
-// set 2 runs next to it.
+// and a scheduled occurrence of set 1 that passed never run set 1 twice at
+// the same time, while set 2 runs next to it.
 func TestSchedulerSameSetNotTwice(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -251,22 +333,16 @@ func TestSchedulerSameSetNotTwice(t *testing.T) {
 	}
 	one := testSet(1, PurposeRunOnly, line(1))
 	one.RunMode = RunModeSchedule
-	one.Schedule = &CommandSchedule{Kind: ScheduleEveryHours, Every: 1}
+	// Today's 00:00 has passed and was not run: at once, and again after a
+	// manual run until it was run.
+	one.Schedule = &CommandSchedule{Kind: ScheduleDaily, Time: "00:00"}
 	two := testSet(2, PurposeRunOnly, line(2))
 	defs := defsOf(one, two)
 	rt.storeCommandDefinitions(defs)
-	// Armed two hours ago: the latest occurrence of set 1 is due.
-	if err := rt.DB.Write(func(tx models.Writer) error {
-		_, err := tx.Exec(`UPDATE command_schedules SET armed_at = armed_at - 7200`)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	execOnDB(t, rt.DB, `UPDATE command_schedules SET armed_at = armed_at - 2*86400`)
 	tr.resp.CommandSets = defs
 	tr.resp.CommandRequests = manualRequests(1, 1, 2, 1)
-	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 4)); err != nil {
-		t.Fatal(err)
-	}
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 4))
 
 	for _, r := range runReports(allReports(t, rt, tr)) {
 		if r.Finished && r.State != ResultSuccess {
@@ -312,7 +388,7 @@ func TestStopWithSeveralSets(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 3)
-	rt.mon.defaultInterval = 60
+	rt.link.defaultInterval = 60
 	tr.resp.DefaultIntervalSec = 60
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 30", "true"), testSet(2, PurposeRunOnly, "sleep 30"),
 		testSet(3, PurposeRunOnly, "sleep 30"))
@@ -332,9 +408,7 @@ func TestStopWithSeveralSets(t *testing.T) {
 		}
 		return running == 3
 	})
-	if err := rt.Run(stop); err != nil {
-		t.Fatal(err)
-	}
+	rt.Run(stop)
 	if d := time.Since(*stopAt); d > 3*time.Second {
 		t.Fatalf("the stop took %s", d)
 	}
@@ -391,9 +465,7 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 	rt2.SetWorkers(3)
 	stop := make(chan struct{})
 	close(stop)
-	if err := rt2.Run(stop); err != nil {
-		t.Fatal(err)
-	}
+	rt2.Run(stop)
 	// The interrupted runs went with the last report of the stop.
 	if len(tr2.batches) != 1 || !tr2.batches[0].Stopping || len(queuedReports(t, rt2)) != 0 {
 		t.Fatalf("reports at the stop: %d batches, %d left queued", len(tr2.batches), len(queuedReports(t, rt2)))
@@ -418,8 +490,9 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 
 // TestOutboxOrderWithWorkers: with four workers running many short sets next
 // to the monitoring steps, the central receives every batch once and one
-// batch per send, every run's reports in the order start, commands, close,
-// and the host information in exactly one report per step.
+// batch per round (and the last one at the stop), every run's reports in the
+// order start, commands, close, and the host information only in the
+// reports of the monitoring steps.
 func TestOutboxOrderWithWorkers(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -436,11 +509,7 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 		_, finished := countRuns(rt.DB)
 		return finished == len(ids) && len(tr.seen()) >= 3
 	})
-	if err := rt.Run(stop); err != nil {
-		t.Fatal(err)
-	}
-	// What the last step did not send yet.
-	rt.flushOutbox()
+	rt.Run(stop)
 	if q := queuedReports(t, rt); len(q) != 0 {
 		t.Fatalf("%d reports left queued", len(q))
 	}
@@ -453,8 +522,8 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 		}
 		seenIDs[b.ReportID] = true
 	}
-	if len(tr.batches) != len(tr.attempts) {
-		t.Fatalf("%d batches for %d report requests", len(tr.batches), len(tr.attempts))
+	if len(tr.batches) != len(tr.attempts) || len(tr.batches) != len(tr.syncs)+1 {
+		t.Fatalf("%d batches for %d report requests and %d rounds and the stop", len(tr.batches), len(tr.attempts), len(tr.syncs))
 	}
 	periodic, hostInfos := 0, 0
 	next := map[string]int{} // run UID: the next result position expected (-1: the start)
@@ -496,10 +565,10 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 	if closedRuns != len(ids) {
 		t.Fatalf("closed runs received: %d of %d", closedRuns, len(ids))
 	}
-	// One report per step, each with host information (the step that the
-	// stop came into may report without it).
-	if periodic != len(tr.syncs) || hostInfos < periodic-1 {
-		t.Fatalf("%d step reports, %d with host information, for %d steps", periodic, hostInfos, len(tr.syncs))
+	// The monitoring steps' reports, each with host information (the step
+	// the stop came into may report without it).
+	if periodic == 0 || hostInfos < periodic-1 {
+		t.Fatalf("%d step reports, %d with host information", periodic, hostInfos)
 	}
 }
 
@@ -574,9 +643,9 @@ func TestOutboxRewriteShrinksOnly(t *testing.T) {
 }
 
 // TestReportOneRequestPerStep: while the central takes no reports, two sets
-// run to their end and many items are queued; every monitoring step, before
-// and after the central takes reports again, makes exactly one report
-// request, the stop one more (the last report, stopping true), and the
+// run to their end and many items are queued; every round, before and after
+// the central takes reports again, makes exactly one sync and one report
+// request, the stop one more report (the last one, stopping true), and the
 // queued items reach the central.
 func TestReportOneRequestPerStep(t *testing.T) {
 	requireBash(t)
@@ -604,8 +673,11 @@ func TestReportOneRequestPerStep(t *testing.T) {
 		}
 	}
 	stop := make(chan struct{})
-	done := make(chan error, 1)
-	go func() { done <- rt.Run(stop) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
 	waitUntil("both runs", func() bool { all, fin := countRuns(rt.DB); return all == 2 && fin == 2 })
 	n := steps()
 	waitUntil("a step after the runs", func() bool { return steps() > n })
@@ -615,13 +687,11 @@ func TestReportOneRequestPerStep(t *testing.T) {
 	tr.mu.Unlock()
 	waitUntil("the queue to empty", func() bool { return models.CountOutbox(rt.DB.Read()) == 0 })
 	close(stop)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	<-done
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	if len(tr.attempts) != len(tr.syncs)+1 {
-		t.Fatalf("%d report requests for %d monitoring steps and the stop, want one each", len(tr.attempts), len(tr.syncs))
+		t.Fatalf("%d report requests for %d rounds and the stop, want one each", len(tr.attempts), len(tr.syncs))
 	}
 	for i, b := range tr.batches {
 		if b.Stopping != (i == len(tr.batches)-1) {

@@ -378,7 +378,7 @@ func insertExecution(t *testing.T, db *DB, uid string, requestID, finishedAt int
 func TestSyncRunningRequests(t *testing.T) {
 	tr := &cmdTransport{}
 	rt := newCommandRuntime(t, tr)
-	rt.Cycle()
+	rt.sync()
 	if got := tr.syncReqs[0].RunningRequests; got == nil || len(got) != 0 {
 		t.Fatalf("nothing runs: %#v", got)
 	}
@@ -390,7 +390,7 @@ func TestSyncRunningRequests(t *testing.T) {
 	insertExecution(t, rt.DB, "finished", 6, time.Now().Unix())
 	insertExecution(t, rt.DB, "scheduled", 0, 0)
 	insertExecution(t, rt.DB, "running2", 9, 0)
-	rt.Cycle()
+	rt.sync()
 	got := slices.Clone(tr.syncReqs[1].RunningRequests)
 	slices.Sort(got)
 	if !slices.Equal(got, []int64{5, 9}) {
@@ -408,12 +408,9 @@ func TestSyncRunningRequestsDuringRun(t *testing.T) {
 	tr.resp.DefaultIntervalSec = 1
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 41, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	rt.mon.defaultInterval = 1
-	rt.sched.lastMonitor = time.Time{}
-	if err := rt.Run(stopWhenRunsFinished(t, rt.DB, 1)); err != nil {
-		t.Fatal(err)
-	}
-	rt.Cycle()
+	rt.link.defaultInterval = 1
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	rt.sync()
 	n := len(tr.syncReqs)
 	if n < 3 {
 		t.Fatalf("syncs: %d", n)

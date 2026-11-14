@@ -1246,9 +1246,7 @@ func runAgent(t *testing.T, rt *modules.AgentRuntime) (stop func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := rt.Run(ch); err != nil {
-			t.Error(err)
-		}
+		rt.Run(ch)
 	}()
 	stopped := false
 	stop = func() {

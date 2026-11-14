@@ -88,17 +88,54 @@ func (s *CommandSchedule) NextDue(t time.Time, loc *time.Location) (time.Time, b
 	return time.Time{}, false
 }
 
-// DueToRun returns the occurrence a schedule should run at now: its latest
-// due time not after now, when that is later than both armedAt (when the
-// agent first saw this schedule definition) and lastRun (the latest
-// occurrence already run). However many occurrences were missed, only the
-// latest one is returned.
-func (s *CommandSchedule) DueToRun(now, armedAt, lastRun time.Time, loc *time.Location) (time.Time, bool) {
-	due, ok := s.LatestDue(now, loc)
-	if !ok || !due.After(armedAt) || !due.After(lastRun) {
-		return time.Time{}, false
+// Plan returns the entry of a scheduled set at now: due is the occurrence it
+// runs and startAt when it may start (the zero time: at once, for an
+// occurrence that passed without a run). ok is false when the set has no
+// entry (a once schedule that ran, or no occurrence). armedAt is when the
+// agent first saw this schedule definition, lastDue the latest occurrence
+// run (the Unix epoch: none); an occurrence up to lastDue counts as
+// executed.
+//
+//   - once: an entry at its time; when the time has passed and it was not
+//     executed, at once, however long ago (armedAt does not matter).
+//   - daily: at once when today's occurrence (the local date of loc) has
+//     passed, was not executed and is after armedAt; else at the next
+//     occurrence. Occurrences of earlier days are not run.
+//   - weekly: at once, for the latest occurrence, when it lies within the
+//     last 7 x 24 hours, was not executed and is after armedAt; else at the
+//     next occurrence.
+//   - hourly_at, every_hours, every_minutes: at the next occurrence after
+//     now; occurrences that passed are not run.
+func (s *CommandSchedule) Plan(now, armedAt, lastDue time.Time, loc *time.Location) (due, startAt time.Time, ok bool) {
+	bound := armedAt
+	if lastDue.After(bound) {
+		bound = lastDue
 	}
-	return due, true
+	switch s.Kind {
+	case ScheduleOnce:
+		at := s.AtTime()
+		if at.IsZero() || !at.After(lastDue) {
+			return time.Time{}, time.Time{}, false
+		}
+		if !at.After(now) {
+			return at, time.Time{}, true
+		}
+		return at, at, true
+	case ScheduleDaily:
+		lt := now.In(loc)
+		if today, ok := s.dayOccurrence(lt.Year(), lt.Month(), lt.Day(), loc); ok && !today.After(now) && today.After(bound) {
+			return today, time.Time{}, true
+		}
+	case ScheduleWeekly:
+		if latest, ok := s.LatestDue(now, loc); ok && latest.After(now.Add(-7*24*time.Hour)) && latest.After(bound) {
+			return latest, time.Time{}, true
+		}
+	}
+	next, ok := s.NextDue(now, loc)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	return next, next, true
 }
 
 // dayOccurrence returns the occurrence of a weekly or daily schedule on the

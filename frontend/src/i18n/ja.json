@@ -520,7 +520,8 @@
         "workdir_failed": "作業ディレクトリに移動できませんでした。",
         "timeout": "制限時間を超えました。",
         "signaled": "シグナルで終了しました。",
-        "interrupted": "実行中にエージェントが停止しました。"
+        "interrupted": "実行中にエージェントが停止しました。",
+        "internal_error": "エージェントの内部のエラーで、実行の処理が終わりました。"
     },
     "commandResults": {
         "title": "コマンドの結果",
@@ -647,7 +648,6 @@
         "builtin": {
             "auditd_unusable": "auditd を使えません: {{cause}}",
             "local_db": "ローカル DB でエラーが発生しました: {{cause}}",
-            "stopped": "停止しました。",
             "workers_invalid": "内蔵エージェントに保存されているワーカー数が {{min}}〜{{max}} の整数ではありません。"
         },
         "command": {

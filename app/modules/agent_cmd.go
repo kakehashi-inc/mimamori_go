@@ -401,20 +401,16 @@ func AgentStart(dataDir string) error {
 	}
 	rt := NewAgentRuntime(db, tr, logger)
 	rt.SetWorkers(workers)
-	rt.mon.config = cfg
 	// The transport uses the token and the CAs the runtime saved last.
-	rt.mon.onConfigSaved = func(c *AgentConfig) {
+	rt.useConfig(cfg, func(c *AgentConfig) {
 		tr.SetToken(c.Token)
 		tr.SetCAs(c.CAPEMs)
-	}
+	})
 	stopCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger.Printf("%s agent %s started (central %s, token %s, agent workers %d)", AppName, AppVersion, cfg.CentralAddress(), cfg.TokenName, workers)
-	err = rt.Run(stopCtx.Done())
+	rt.Run(stopCtx.Done())
 	logger.Printf("agent stopped")
-	if err != nil {
-		return NewExitError(ExitGeneral, err.Error())
-	}
 	return nil
 }
 

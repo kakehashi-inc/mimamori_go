@@ -843,10 +843,8 @@ func TestCommandSetEndToEnd(t *testing.T) {
 			}
 		}
 	}()
-	if err := rt.Run(stop); err != nil {
-		t.Fatal(err)
-	}
-	rt.Cycle() // sends what the run queued
+	rt.Run(stop)
+	rt.Round() // sends what the run queued
 
 	runs := e.admin("GET", base+"/command-sets/"+setID+"/runs", nil)["runs"].([]any)
 	if len(runs) != 1 {

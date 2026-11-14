@@ -233,13 +233,11 @@ func TestAuditErrorsCarryCodes(t *testing.T) {
 // The problems of a command set the agent refuses are reported in English
 // and with their codes in the same order.
 func TestCommandApplyProblemsCarryCodes(t *testing.T) {
-	rt, done := openAgentDB(t)
-	defer done()
 	defs := &CommandDefinitions{Signature: "s"}
 	for i, s := range englishCommandSets() {
 		defs.Sets = append(defs.Sets, CommandSetDef{ID: int64(i + 1), Revision: 1, CommandSetSpec: *s})
 	}
-	problems := rt.acceptCommandDefinitions(defs)
+	problems, _, _ := checkDefinitions(defs)
 	if len(problems) < 3 {
 		t.Fatalf("problems: %+v", problems)
 	}

@@ -31,7 +31,15 @@ export function CommandStateBadge({ state }: { state: CommandRunState | CommandK
     );
 }
 
-const REASONS = ['unexpected_code', 'start_failed', 'workdir_failed', 'timeout', 'signaled', 'interrupted'] as const;
+const REASONS = [
+    'unexpected_code',
+    'start_failed',
+    'workdir_failed',
+    'timeout',
+    'signaled',
+    'interrupted',
+    'internal_error',
+] as const;
 type Reason = (typeof REASONS)[number];
 
 /** Text of an error reason; unknown reasons are shown as they are. */

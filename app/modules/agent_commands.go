@@ -5,19 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"mimamori/app/models"
 )
 
 // Command sets on the agent: storing the delivered definitions, running a set
-// command by command and queueing its results in the outbox. The scheduler
-// (agent_scheduler.go) holds the definitions and the run requests and decides
-// when a set runs; each run belongs to the worker that runs it. While a
-// command runs, its wait loop runs the monitoring step when the scheduler
-// gives it to that worker.
+// command by command and queueing its results in the outbox. The queue
+// (agent_scheduler.go) holds the definitions and the entries and decides
+// when a set runs; each run belongs to the worker that processes it, which
+// does nothing else meanwhile.
 
-// commandJob is a set waiting to run.
+// commandJob is a run of a set to process.
 type commandJob struct {
 	def          *CommandSetDef
 	trigger      string
@@ -46,31 +46,13 @@ func (rt *AgentRuntime) location() *time.Location {
 	return time.Local
 }
 
-// loadCommandDefinitions restores the stored definitions at start.
-func (rt *AgentRuntime) loadCommandDefinitions() {
-	v := models.GetLocalState(rt.DB.Read(), StateCommandDefinitions)
-	if v == "" {
-		return
-	}
-	var defs CommandDefinitions
-	if err := json.Unmarshal([]byte(v), &defs); err != nil {
-		rt.logf("the stored command set definitions cannot be read (they are delivered again): %v", err)
-		return
-	}
-	rt.acceptCommandDefinitions(&defs)
-}
-
-// acceptCommandDefinitions takes definitions into use: the valid sets can run
-// (a set that fails validation on the agent is not run and is reported), and
-// the schedule state of each scheduled set is armed when it is new or
-// changed. The schedule states are armed and the old ones removed in one
-// transaction (arming reads the stored state to decide) before the
-// scheduler gets the definitions.
-func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []CommandApplyProblem {
+// checkDefinitions validates delivered definitions: it returns the sets the
+// agent refuses (they are not run and are reported), the valid sets and the
+// valid scheduled sets.
+func checkDefinitions(defs *CommandDefinitions) ([]CommandApplyProblem, map[int64]*CommandSetDef, []*CommandSetDef) {
 	problems := []CommandApplyProblem{}
 	valid := map[int64]*CommandSetDef{}
 	var scheduled []*CommandSetDef
-	now := rt.now().Unix()
 	for i := range defs.Sets {
 		d := defs.Sets[i]
 		if ps := d.Problems(0); len(ps) > 0 {
@@ -82,64 +64,138 @@ func (rt *AgentRuntime) acceptCommandDefinitions(defs *CommandDefinitions) []Com
 			scheduled = append(scheduled, &d)
 		}
 	}
-	var failedSet *CommandSetDef // the set whose schedule state could not be stored
-	err := rt.DB.Write(func(tx models.Writer) error {
-		ids := make([]int64, 0, len(scheduled))
-		for _, d := range scheduled {
-			ids = append(ids, d.ID)
-			if _, err := models.ArmCommandSchedule(tx, d.ID, ScheduleSignature(d), now); err != nil {
-				failedSet = d
-				return err
-			}
+	return problems, valid, scheduled
+}
+
+// armSchedules stores the schedule state of each scheduled set when it is
+// new or changed and removes the states of the other sets, inside tx.
+func armSchedules(tx models.Writer, scheduled []*CommandSetDef, now int64) error {
+	ids := make([]int64, 0, len(scheduled))
+	for _, d := range scheduled {
+		ids = append(ids, d.ID)
+		if _, err := models.ArmCommandSchedule(tx, d.ID, ScheduleSignature(d), now); err != nil {
+			return fmt.Errorf("command set %q: storing the schedule state failed: %w", d.Name, err)
 		}
-		return models.DeleteCommandSchedulesExcept(tx, ids)
-	})
-	switch {
-	case err != nil && failedSet != nil:
-		rt.logf("command set %q: storing the schedule state failed: %v", failedSet.Name, err)
-	case err != nil:
-		rt.logf("removing old schedule states failed: %v", err)
 	}
-	rt.sched.acceptDefinitions(defs, valid)
-	return problems
+	return models.DeleteCommandSchedulesExcept(tx, ids)
+}
+
+// loadCommandDefinitions restores the stored definitions at start: the
+// schedule states are armed (in one transaction) and the queue gets them.
+func (rt *AgentRuntime) loadCommandDefinitions() {
+	v := models.GetLocalState(rt.DB.Read(), StateCommandDefinitions)
+	if v == "" {
+		return
+	}
+	var defs CommandDefinitions
+	if err := json.Unmarshal([]byte(v), &defs); err != nil {
+		rt.logf("the stored command set definitions cannot be read (they are delivered again): %v", err)
+		return
+	}
+	_, valid, scheduled := checkDefinitions(&defs)
+	if err := rt.DB.Write(func(tx models.Writer) error { return armSchedules(tx, scheduled, rt.now().Unix()) }); err != nil {
+		rt.logf("%v", err)
+	}
+	rt.sched.acceptDefinitions(&defs, valid)
 }
 
 // storeCommandDefinitions stores definitions delivered by the central (also
 // while a set runs; the running set keeps the definition it started with)
-// and queues the outcome for the central.
-func (rt *AgentRuntime) storeCommandDefinitions(defs *CommandDefinitions) {
+// and reports whether they were stored. The definitions, the schedule states
+// of the scheduled sets (armed when new or changed) and the outcome for the
+// central (the sets the agent refuses) are written in one transaction; then
+// the queue takes them into use. When that fails nothing is stored, and the
+// central delivers them again.
+func (rt *AgentRuntime) storeCommandDefinitions(defs *CommandDefinitions) bool {
 	if defs.Sets == nil {
 		defs.Sets = []CommandSetDef{}
 	}
 	b, err := json.Marshal(defs)
 	if err != nil {
 		rt.logf("command set definitions not stored: %v", err)
-		return
+		return false
 	}
-	if err := rt.DB.Write(func(tx models.Writer) error {
-		return models.SetLocalState(tx, StateCommandDefinitions, string(b))
+	problems, valid, scheduled := checkDefinitions(defs)
+	now := rt.now().Unix()
+	outcome := &ReportRequest{CommandApply: &CommandApplyResult{Signature: defs.Signature, At: now, Problems: problems}}
+	if err := rt.out.queueWith(rt.stamped(outcome), func(tx models.Writer) error {
+		if err := models.SetLocalState(tx, StateCommandDefinitions, string(b)); err != nil {
+			return err
+		}
+		return armSchedules(tx, scheduled, now)
 	}); err != nil {
-		// Not taken into use; the central delivers them again.
-		rt.logf("command set definitions not stored: %v", err)
-		return
+		rt.logf("command set definitions not stored (the central delivers them again): %v", err)
+		return false
 	}
-	problems := rt.acceptCommandDefinitions(defs)
 	for _, p := range problems {
 		rt.logf("command set %q is not run: %s", p.SetName, M("common.problems", "problems", firstProblems(p.ProblemsI18n, 5)).Text())
 	}
 	rt.logf("command set definitions received: %d set(s)", len(defs.Sets))
-	rt.queueCommandReport(&ReportRequest{CommandApply: &CommandApplyResult{
-		Signature: defs.Signature, At: rt.now().Unix(), Problems: problems,
-	}})
+	rt.sched.acceptDefinitions(defs, valid)
+	return true
 }
 
-// queueAcks queues answers to manual requests (the scheduler has entered
-// them as answered).
+// queueAcks queues answers to manual requests.
 func (rt *AgentRuntime) queueAcks(acks []CommandRequestAck) {
 	if len(acks) == 0 {
 		return
 	}
 	rt.queueCommandReport(&ReportRequest{CommandRequestAcks: acks})
+}
+
+// commandRun is the state of one run while its worker processes it, kept so
+// that a run can be closed after a panic (closeAfterPanic).
+type commandRun struct {
+	job     *commandJob
+	uid     string
+	base    CommandRunReport
+	collect bool
+	kinds   []string
+	values  []CommandValues
+	// unstored are the results whose report could not be written before the
+	// stop; the report that closes the run carries them.
+	unstored []CommandResultReport
+	// started: the start of the run is stored; closed: the report that
+	// closes it is stored (or the run is left unfinished on purpose).
+	started, closed bool
+	// cur is the command being processed (nil between commands) and res its
+	// result once it is known.
+	cur *commandProcess
+	res *CommandResultReport
+}
+
+// finish sets the closing values of rep: the state from the kinds of the
+// executed commands (error when reason is set), the reason and, for
+// collect_output, the display value.
+func (r *commandRun) finish(rt *AgentRuntime, rep *CommandRunReport, reason string) {
+	rep.Finished = true
+	rep.FinishedAt = rt.now().Unix()
+	rep.State = RunState(r.kinds)
+	rep.Reason = reason
+	if reason != "" {
+		rep.State = WorseResult(rep.State, ResultError)
+	}
+	if r.collect {
+		dv := BuildDisplayValue(r.values, r.job.def.Joiner)
+		rep.Display = &dv
+	}
+}
+
+// storeReport writes rep with the end of the running command and, when rep
+// closes the run, the end of the run, in one transaction (written again until
+// stored, see storeRunRecord).
+func (rt *AgentRuntime) storeRunReport(r *commandRun, what string, rep CommandRunReport) error {
+	return rt.storeRunRecord(what, func() error {
+		return rt.out.queueWith(rt.stamped(&ReportRequest{CommandRuns: []CommandRunReport{rep}}), func(tx models.Writer) error {
+			if err := models.ClearCommandExecutionRunning(tx, r.uid); err != nil {
+				return err
+			}
+			if rep.Finished {
+				return models.FinishCommandExecution(tx, r.uid, rep.FinishedAt)
+			}
+			return nil
+		})
+	})
 }
 
 // runCommandJob runs a set to its end with the definition of the job, on the
@@ -155,7 +211,24 @@ func (rt *AgentRuntime) queueAcks(acks []CommandRequestAck) {
 // the run is not over for its worker until its end is stored. When the stop
 // came first, the execution stays unfinished and the next start reports the
 // run as interrupted.
-func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
+//
+// A panic while the run is processed is logged and the run is closed with
+// what it has (closeAfterPanic); its command is not signalled for it.
+func (rt *AgentRuntime) runCommandJob(job *commandJob) (started bool) {
+	run := &commandRun{job: job, collect: job.def.Purpose == PurposeCollectOutput}
+	defer func() {
+		if v := recover(); v != nil {
+			rt.logf("worker panic: %v\n%s", v, debug.Stack())
+			rt.closeAfterPanic(run)
+			started = run.started
+		}
+	}()
+	return rt.executeRun(run)
+}
+
+// executeRun is runCommandJob without the recovery of a panic.
+func (rt *AgentRuntime) executeRun(run *commandRun) bool {
+	job := run.job
 	def := job.def
 	now := rt.now().Unix()
 	uid, err := RandomHex(16)
@@ -163,9 +236,10 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 		rt.logf("command set %q not run: %v", def.Name, err)
 		return false
 	}
+	run.uid = uid
 	exec := &models.CommandExecution{RunUID: uid, SetID: def.ID, SetRevision: def.Revision, RequestID: job.requestID,
 		Trigger: job.trigger, ScheduledFor: job.scheduledFor, StartedAt: now}
-	base := CommandRunReport{
+	run.base = CommandRunReport{
 		RunUID: uid, SetID: def.ID, SetRevision: def.Revision, SetName: def.Name, Purpose: def.Purpose, Joiner: def.Joiner,
 		OSUser: def.OSUser, WorkDir: def.WorkDir, Trigger: job.trigger, RequestID: job.requestID, ScheduledFor: job.scheduledFor,
 		CommandsTotal: len(def.Commands), StartedAt: now, Results: []CommandResultReport{},
@@ -174,7 +248,7 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 	// never run twice and never lost (a run cut short by a crash is reported
 	// as interrupted).
 	err = rt.storeRunRecord(fmt.Sprintf("command set %q: the start of run %s", def.Name, uid), func() error {
-		start := &ReportRequest{CommandRuns: []CommandRunReport{base}}
+		start := &ReportRequest{CommandRuns: []CommandRunReport{run.base}}
 		if job.requestID > 0 {
 			start.CommandRequestAcks = []CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: uid, At: now}}
 		}
@@ -193,48 +267,14 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), job.requestID); err == nil && e != nil {
 			rt.queueAcks([]CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: e.RunUID, At: now}})
 		}
-		return true
+		return false
 	case err != nil:
 		rt.logf("command set %q not run: recording its start failed: %v", def.Name, err)
 		return false
 	}
+	run.started = true
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
-	collect := def.Purpose == PurposeCollectOutput
-	var kinds []string
-	var values []CommandValues
-	finish := func(rep *CommandRunReport, reason string) {
-		rep.Finished = true
-		rep.FinishedAt = rt.now().Unix()
-		rep.State = RunState(kinds)
-		rep.Reason = reason
-		if reason != "" {
-			rep.State = WorseResult(rep.State, ResultError)
-		}
-		if collect {
-			dv := BuildDisplayValue(values, def.Joiner)
-			rep.Display = &dv
-		}
-	}
-	// storeReport writes rep with the end of the running command and, when
-	// rep closes the run, the end of the run, in one transaction.
-	storeReport := func(what string, rep CommandRunReport) error {
-		return rt.storeRunRecord(what, func() error {
-			return rt.out.queueWith(rt.stamped(&ReportRequest{CommandRuns: []CommandRunReport{rep}}), func(tx models.Writer) error {
-				if err := models.ClearCommandExecutionRunning(tx, uid); err != nil {
-					return err
-				}
-				if rep.Finished {
-					return models.FinishCommandExecution(tx, uid, rep.FinishedAt)
-				}
-				return nil
-			})
-		})
-	}
-	// unstored are the results whose report could not be written before the
-	// stop; the report that closes the run carries them.
-	var unstored []CommandResultReport
-	closed := false
 	for i := range def.Commands {
 		if i > 0 && isClosed(rt.stop) {
 			break
@@ -249,17 +289,19 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			rt.logf("command set %q: recording the start of command %d of run %s failed, it is not run: %v", def.Name, i+1, uid, err)
 			break
 		}
-		res := ExecuteCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
-			CollectOutput: collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add,
-			monitorHere: rt.monitorHere})
-		kinds = append(kinds, res.Kind)
+		run.cur = startCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
+			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add})
+		run.cur.wait()
+		res := run.cur.result(run.collect)
+		run.res = res
+		run.kinds = append(run.kinds, res.Kind)
 		if res.Values != nil {
-			values = append(values, *res.Values)
+			run.values = append(run.values, *res.Values)
 		}
 		interrupted := res.Reason == ReasonInterrupted
 		last := i == len(def.Commands)-1 || !c.ContinuesAfter(res.Kind) || interrupted
-		rep := base
-		rep.Results = append(append([]CommandResultReport{}, unstored...), *res)
+		rep := run.base
+		rep.Results = append(append([]CommandResultReport{}, run.unstored...), *res)
 		if last {
 			// A command the stop ended cut the run: the run's reason is
 			// interrupted too (the time limit and a failed start are
@@ -268,38 +310,85 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) bool {
 			if interrupted {
 				reason = ReasonInterrupted
 			}
-			finish(&rep, reason)
-			closed = true
+			run.finish(rt, &rep, reason)
 		}
-		if err := storeReport(fmt.Sprintf("command set %q: the result of command %d of run %s", def.Name, i+1, uid), rep); err != nil {
+		if err := rt.storeRunReport(run, fmt.Sprintf("command set %q: the result of command %d of run %s", def.Name, i+1, uid), rep); err != nil {
 			if last {
 				rt.logf("command set %q: recording the end of run %s failed (the next start reports it as interrupted): %v", def.Name, uid, err)
 			} else {
 				rt.logf("command set %q: recording the result of command %d of run %s failed: %v", def.Name, i+1, uid, err)
-				unstored = rep.Results
+				run.unstored = rep.Results
 			}
 		} else {
-			unstored = nil
+			run.unstored = nil
 		}
+		run.cur, run.res = nil, nil
 		if last {
+			run.closed = true
 			break
 		}
 	}
-	if !closed {
+	if !run.closed {
 		// The agent stopped between two commands.
-		rep := base
-		rep.Results = append([]CommandResultReport{}, unstored...)
+		rep := run.base
+		rep.Results = append([]CommandResultReport{}, run.unstored...)
 		reason := ""
 		if len(def.Commands) > 0 {
 			reason = ReasonInterrupted
 		}
-		finish(&rep, reason)
-		if err := storeReport(fmt.Sprintf("command set %q: the end of run %s", def.Name, uid), rep); err != nil {
+		run.finish(rt, &rep, reason)
+		if err := rt.storeRunReport(run, fmt.Sprintf("command set %q: the end of run %s", def.Name, uid), rep); err != nil {
 			rt.logf("command set %q: recording the end of run %s failed (the next start reports it as interrupted): %v", def.Name, uid, err)
 		}
+		run.closed = true
 	}
-	rt.logf("command set %q finished: %s", def.Name, RunState(kinds))
+	rt.logf("command set %q finished: %s", def.Name, RunState(run.kinds))
 	return true
+}
+
+// closeAfterPanic closes a run whose processing panicked. The command that
+// was being processed is waited for in the plain way when its main process
+// still runs or its output is still read (the time limit and the stop apply
+// as always; nothing is sent to it for the panic). That command and the run
+// get the state error with the reason internal_error; the run is closed with
+// the results it has. When the run cannot be closed this way (another
+// panic, or its end cannot be stored before the stop), its execution stays
+// unfinished and the next start reports it as interrupted.
+func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
+	if !run.started || run.closed {
+		return
+	}
+	def := run.job.def
+	var hit *CommandResultReport
+	switch {
+	case run.res != nil:
+		r := *run.res
+		hit = &r
+	case run.cur != nil:
+		if rt.recovered("worker panic", run.cur.wait) {
+			rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
+			return
+		}
+		hit = run.cur.result(false)
+	}
+	rep := run.base
+	rep.Results = append([]CommandResultReport{}, run.unstored...)
+	if hit != nil {
+		hit.Kind, hit.Reason = ResultError, ReasonInternalError
+		rep.Results = append(rep.Results, *hit)
+		run.kinds = append(run.kinds, hit.Kind)
+	}
+	if rt.recovered("worker panic", func() {
+		run.finish(rt, &rep, ReasonInternalError)
+		if err := rt.storeRunReport(run, fmt.Sprintf("command set %q: the end of run %s", def.Name, run.uid), rep); err != nil {
+			rt.logf("command set %q: recording the end of run %s failed (the next start reports it as interrupted): %v", def.Name, run.uid, err)
+			return
+		}
+		rt.logf("command set %q ended by an internal error: %s", def.Name, ResultError)
+	}) {
+		rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
+	}
+	run.closed = true
 }
 
 // storeRunRecord writes one record of a run (write is one transaction) and,

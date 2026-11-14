@@ -520,7 +520,8 @@
         "workdir_failed": "The working directory could not be entered.",
         "timeout": "The time limit was exceeded.",
         "signaled": "The command was ended by a signal.",
-        "interrupted": "The agent was stopped during the run."
+        "interrupted": "The agent was stopped during the run.",
+        "internal_error": "An internal error of the agent ended the processing of the run."
     },
     "commandResults": {
         "title": "Command results",
@@ -647,7 +648,6 @@
         "builtin": {
             "auditd_unusable": "auditd is not usable: {{cause}}",
             "local_db": "local database: {{cause}}",
-            "stopped": "stopped",
             "workers_invalid": "The worker count stored for the built-in agent is not a whole number from {{min}} to {{max}}."
         },
         "command": {

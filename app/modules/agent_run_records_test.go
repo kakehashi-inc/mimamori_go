@@ -21,15 +21,16 @@ func execOnDB(t *testing.T, db *DB, stmt string) {
 	}
 }
 
-// dueScheduledJob stores an hourly scheduled set armed two hours ago and
-// returns its due job.
+// dueScheduledJob stores a set scheduled daily at 00:00, armed two days ago
+// (today's occurrence passed and was not run), and returns its job.
 func dueScheduledJob(t *testing.T, rt *AgentRuntime, lines ...string) *commandJob {
 	t.Helper()
 	set := testSet(1, PurposeRunOnly, lines...)
 	set.RunMode = RunModeSchedule
-	set.Schedule = &CommandSchedule{Kind: ScheduleEveryHours, Every: 1}
+	set.Schedule = &CommandSchedule{Kind: ScheduleDaily, Time: "00:00"}
 	rt.storeCommandDefinitions(defsOf(set))
-	execOnDB(t, rt.DB, `UPDATE command_schedules SET armed_at = armed_at - 7200`)
+	execOnDB(t, rt.DB, `UPDATE command_schedules SET armed_at = armed_at - 2*86400`)
+	rt.sched.acceptDefinitions(rt.sched.defs, rt.sched.valid)
 	job := nextCommandJob(rt)
 	if job == nil {
 		t.Fatal("the scheduled set is not due")
@@ -49,8 +50,8 @@ func lastDue(t *testing.T, rt *AgentRuntime) int64 {
 
 // TestScheduleMarkAndRunRecordedTogether (RT-1): when the run of a scheduled
 // occurrence cannot be recorded, its schedule mark is not recorded either,
-// so the occurrence is not lost: it is offered again and runs once the run
-// can be recorded.
+// so the occurrence is not lost: its entry is queued again after the failed
+// run and runs once the run can be recorded.
 func TestScheduleMarkAndRunRecordedTogether(t *testing.T) {
 	requireBash(t)
 	rt := newCommandRuntime(t, &cmdTransport{})
@@ -62,6 +63,7 @@ func TestScheduleMarkAndRunRecordedTogether(t *testing.T) {
 	if rt.runCommandJob(job) {
 		t.Fatal("a run that could not be recorded was started")
 	}
+	rt.sched.doneRun(job)
 	if due := lastDue(t, rt); due != 0 {
 		t.Fatalf("schedule mark %d recorded without the run", due)
 	}

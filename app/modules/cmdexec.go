@@ -81,9 +81,6 @@ type CommandExecInput struct {
 	// may write on; whoever holds the pipe reads and drops it). Otherwise
 	// the pipe is closed.
 	Leftover func(f *os.File)
-	// monitorHere is called on every pass of the wait for the main process
-	// while the agent is not stopping.
-	monitorHere func()
 }
 
 // ExecuteCommand runs one command and returns its result. It never fails:
@@ -312,10 +309,6 @@ func (p *commandProcess) waitMain() {
 		}
 		if p.terminating && !p.killed && now.After(p.killAt) {
 			p.killRest()
-		}
-		if !p.stopping() && p.in.monitorHere != nil {
-			p.in.monitorHere()
-			p.drainPipe()
 		}
 		if p.killed && p.stopping() && p.sig.refused && now.After(p.killAt.Add(p.grace)) {
 			p.sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", p.sig.osUser)

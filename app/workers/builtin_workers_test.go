@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +61,9 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	cfg := *e.c.conf()
 	enabled := true
 	cfg.BuiltinAgent = &enabled
+	// Rounds every second, so that the first monitoring step's report goes
+	// out soon.
+	cfg.DefaultCheckIntervalSec = 1
 	e.c.cfg.Store(&cfg)
 	centralSettings := func() string {
 		rows, err := e.c.db.Read().Query(`SELECT key || '=' || value FROM settings WHERE key LIKE 'config.%' ORDER BY key`)
@@ -125,49 +129,56 @@ func TestBuiltinAgentWorkersIndependent(t *testing.T) {
 	}
 }
 
-// A panic of a worker of the built-in agent is logged with its stack under
-// the built-in agent's prefix and ends the built-in agent: the central keeps
-// running and the screen shows that the built-in agent stopped.
-func TestBuiltinAgentPanicStopsOnlyIt(t *testing.T) {
+// A panic of a round of the built-in agent is logged with its stack under
+// the built-in agent's prefix and ends only that round: the built-in agent
+// keeps running (the screen does not show it stopped), its next round comes
+// at its time, and the central goes on answering.
+func TestBuiltinAgentPanicInRound(t *testing.T) {
 	e := newTestEnv(t)
 	b, _ := models.GetBuiltinAgent(e.c.db.Read())
 	fakeAuditTools(t)
 	var logged lockedLog
 	e.c.logger = log.New(&logged, "", 0)
+	cfg := *e.c.conf()
 	enabled := true
-	e.c.conf().BuiltinAgent = &enabled
-	builtinSyncHook = func() { panic("test panic in a sync") }
+	cfg.BuiltinAgent = &enabled
+	// The agent takes its check interval from the answer of the first sync.
+	cfg.DefaultCheckIntervalSec = 1
+	e.c.cfg.Store(&cfg)
+	var syncs atomic.Int32
+	builtinSyncHook = func() {
+		if syncs.Add(1) == 2 {
+			panic("test panic in a sync")
+		}
+	}
 	t.Cleanup(func() { builtinSyncHook = nil })
 	stop := make(chan struct{})
-	defer close(stop)
 	wait := e.c.startBuiltinAgent(b, stop)
-	ended := make(chan struct{})
-	go func() {
-		wait()
-		close(ended)
-	}()
-	select {
-	case <-ended:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the built-in agent did not end after the panic")
+	deadline := time.Now().Add(30 * time.Second)
+	for syncs.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("no round after the one that panicked")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if running, msg := e.c.builtinStatus(); running || msg.Code != "builtin.stopped" {
-		t.Fatalf("built-in agent status: running %v, %+v", running, msg)
+	if running, msg := e.c.builtinStatus(); !running || msg.Code != "" {
+		t.Fatalf("built-in agent status after the panic: running %v, %+v", running, msg)
 	}
 	out := logged.String()
-	for _, want := range []string{"worker panic: test panic in a sync", "(*AgentRuntime).safeWork", modules.ErrAgentPanic.Error()} {
+	for _, want := range []string{"communication panic: test panic in a sync", "(*AgentRuntime).round"} {
 		i := strings.Index(out, want)
 		if i < 0 {
 			t.Fatalf("log lacks %q:\n%s", want, out)
 		}
-		if line := out[strings.LastIndex(out[:i], "\n")+1:]; !strings.HasPrefix(line, "[builtin-agent] ") && want != "(*AgentRuntime).safeWork" {
+		if line := out[strings.LastIndex(out[:i], "\n")+1:]; !strings.HasPrefix(line, "[builtin-agent] ") && want != "(*AgentRuntime).round" {
 			t.Fatalf("%q is not logged by the built-in agent:\n%s", want, out)
 		}
 	}
-	// The central goes on answering.
 	if code := e.adminStatus("GET", "/agents", nil); code != http.StatusOK {
 		t.Fatalf("GET /agents after the panic: %d", code)
 	}
+	close(stop)
+	wait()
 }
 
 // lockedLog is a buffer that several flows write log lines to.
