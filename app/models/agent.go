@@ -1,6 +1,9 @@
 package models
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 // Agent kinds.
 const (
@@ -109,6 +112,23 @@ func GetBuiltinAgent(db Reader) (*Agent, error) {
 // ListAgents returns all agents, the built-in agent first.
 func ListAgents(db Reader) ([]*Agent, error) {
 	rows, err := db.Query(`SELECT ` + agentCols + ` FROM agents ORDER BY CASE kind WHEN 'builtin' THEN 0 ELSE 1 END, id`)
+	return collect(rows, err, scanAgent)
+}
+
+// ListAgentsWithCommandRequests returns the agents that have a run request
+// in one of states requested before before, by id.
+func ListAgentsWithCommandRequests(db Reader, before int64, states ...string) ([]*Agent, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	args := []any{before}
+	marks := make([]string, len(states))
+	for i, st := range states {
+		marks[i] = "?"
+		args = append(args, st)
+	}
+	rows, err := db.Query(`SELECT `+agentCols+` FROM agents WHERE id IN
+		(SELECT agent_id FROM command_requests WHERE requested_at < ? AND state IN (`+strings.Join(marks, ", ")+`)) ORDER BY id`, args...)
 	return collect(rows, err, scanAgent)
 }
 

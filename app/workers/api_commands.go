@@ -145,9 +145,9 @@ type commandSetListJSON struct {
 	TimeZone      string `json:"time_zone"`
 	UTCOffsetSec  int    `json:"utc_offset_sec"`
 	Delivered     bool   `json:"definitions_delivered"`
-	// AgentResponding is the central's judgement whether the agent syncs
-	// (agentResponding): while false its queued run requests wait for the
-	// agent to connect again.
+	// AgentResponding is the central's judgement whether the agent is
+	// responding (core.responding): while false its queued run requests
+	// wait for the agent to connect again.
 	AgentResponding bool             `json:"agent_responding"`
 	Sets            []commandSetJSON `json:"sets"`
 }
@@ -289,7 +289,7 @@ func (c *core) handleListCommandSets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := commandSetListJSON{AgentID: a.ID, AgentName: c.agentDisplayName(a), DefaultOSUser: a.HostOSUser, TimeZone: a.TimeZone,
 		UTCOffsetSec: a.UTCOffsetSec, Delivered: a.CommandSig == sig, Sets: []commandSetJSON{},
-		AgentResponding: agentResponding(c.db.Read(), a, c.conf().DefaultCheckIntervalSec, time.Now().Unix())}
+		AgentResponding: c.responding(c.db.Read(), a, time.Now().Unix())}
 	problems := agentCommandProblems(a)
 	for _, row := range rows {
 		s, err := c.commandSetOut(r, a, tdb, row, problems, latest, running, requests)

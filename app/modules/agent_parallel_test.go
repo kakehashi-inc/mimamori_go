@@ -386,16 +386,23 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
+	tr2 := &cmdTransport{}
+	rt2 := NewAgentRuntime(rt.DB, tr2, nil)
 	rt2.SetWorkers(3)
 	stop := make(chan struct{})
 	close(stop)
 	if err := rt2.Run(stop); err != nil {
 		t.Fatal(err)
 	}
+	// The interrupted runs went with the last report of the stop.
+	if len(tr2.batches) != 1 || !tr2.batches[0].Stopping || len(queuedReports(t, rt2)) != 0 {
+		t.Fatalf("reports at the stop: %d batches, %d left queued", len(tr2.batches), len(queuedReports(t, rt2)))
+	}
 	got := map[string]CommandRunReport{}
-	for _, r := range runReports(queuedReports(t, rt2)) {
-		got[r.RunUID] = r
+	for _, r := range tr2.reports {
+		for _, run := range r.CommandRuns {
+			got[run.RunUID] = run
+		}
 	}
 	for uid, pos := range map[string]int{"a": 1, "b": 0} {
 		r := got[uid]
@@ -569,7 +576,8 @@ func TestOutboxRewriteShrinksOnly(t *testing.T) {
 // TestReportOneRequestPerStep: while the central takes no reports, two sets
 // run to their end and many items are queued; every monitoring step, before
 // and after the central takes reports again, makes exactly one report
-// request, and the queued items reach the central.
+// request, the stop one more (the last report, stopping true), and the
+// queued items reach the central.
 func TestReportOneRequestPerStep(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -612,8 +620,13 @@ func TestReportOneRequestPerStep(t *testing.T) {
 	}
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	if len(tr.attempts) != len(tr.syncs) {
-		t.Fatalf("%d report requests for %d monitoring steps, want one each", len(tr.attempts), len(tr.syncs))
+	if len(tr.attempts) != len(tr.syncs)+1 {
+		t.Fatalf("%d report requests for %d monitoring steps and the stop, want one each", len(tr.attempts), len(tr.syncs))
+	}
+	for i, b := range tr.batches {
+		if b.Stopping != (i == len(tr.batches)-1) {
+			t.Fatalf("batch %d of %d: stopping %v", i+1, len(tr.batches), b.Stopping)
+		}
 	}
 	runs := 0
 	for _, r := range tr.reports {

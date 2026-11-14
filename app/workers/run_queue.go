@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"math"
 	"time"
 
 	"mimamori/app/models"
@@ -15,18 +16,113 @@ import (
 // agents play no role; nothing counts requests over all agents. Reports then
 // move a request on (running, done, expired).
 
+// An agent that is not responding (it said that it stops, or it has not
+// synced within three of its check intervals and ten minutes, or never)
+// holds no request handed over to it: in the transaction of its stopping
+// report, and in the periodic step for the others, its delivered requests go
+// back to queued. They are handed over again when the agent syncs (the agent
+// answers one it already ran with that run), and can be discarded and
+// expire meanwhile. Its running requests stay running.
+
+// responding reports whether the agent is responding: it did not say that
+// it stops since its last sync, and agentResponding holds. r reads the rule
+// version the agent reports.
+func (c *core) responding(r models.Reader, a *models.Agent, now int64) bool {
+	return !c.isStopping(a.ID) && agentResponding(r, a, c.conf().DefaultCheckIntervalSec, now)
+}
+
 // agentResponding reports whether the agent synced within three of its
 // check intervals and ten minutes (the judgement the central uses for "this
 // agent has not connected for a while"). An agent that never synced is not
 // responding.
 func agentResponding(r models.Reader, a *models.Agent, defaultInterval int, now int64) bool {
-	return syncedWithin(a.LastSyncAt, agentInterval(r, a, defaultInterval), now)
+	return a.LastSyncAt > 0 && now-a.LastSyncAt <= 3*int64(agentInterval(r, a, defaultInterval))+600
 }
 
-// syncedWithin reports whether a sync at lastSync (0: never) lies within
-// three check intervals and ten minutes of now.
-func syncedWithin(lastSync int64, interval int, now int64) bool {
-	return lastSync > 0 && now-lastSync <= 3*int64(interval)+600
+// markStopping remembers that the agent said it stops (a report with
+// stopping true) until its next sync (clearStopping), in memory only: after
+// a restart of the central the time rule judges the agent. It is called
+// inside the write transaction of central.db that stores the report and
+// clearStopping inside that of a sync, so the marks follow the order of
+// those transactions. It returns the mark, for undoStopping.
+func (c *core) markStopping(agentID int64) uint64 {
+	c.stoppingMu.Lock()
+	defer c.stoppingMu.Unlock()
+	if c.stopping == nil {
+		c.stopping = map[int64]uint64{}
+	}
+	c.stoppingSeq++
+	c.stopping[agentID] = c.stoppingSeq
+	return c.stoppingSeq
+}
+
+// undoStopping removes the mark when it is still the one markStopping
+// returned (the report's transaction was not committed).
+func (c *core) undoStopping(agentID int64, mark uint64) {
+	c.stoppingMu.Lock()
+	defer c.stoppingMu.Unlock()
+	if c.stopping[agentID] == mark {
+		delete(c.stopping, agentID)
+	}
+}
+
+// clearStopping forgets that the agent said it stops (it synced).
+func (c *core) clearStopping(agentID int64) {
+	c.stoppingMu.Lock()
+	defer c.stoppingMu.Unlock()
+	delete(c.stopping, agentID)
+}
+
+// isStopping reports whether the agent said it stops and has not synced
+// since.
+func (c *core) isStopping(agentID int64) bool {
+	c.stoppingMu.Lock()
+	defer c.stoppingMu.Unlock()
+	_, ok := c.stopping[agentID]
+	return ok
+}
+
+// requeuedRequest is a delivered request that went back to queued because
+// its agent is not responding (logged after the transaction).
+type requeuedRequest struct {
+	id    int64
+	agent string
+	why   string
+}
+
+// requeueRequests puts the delivered requests of agent back to queued inside
+// the write transaction tx and returns them for the log; why says why the
+// agent is not responding.
+func requeueRequests(tx models.Writer, a *models.Agent, why string) ([]requeuedRequest, error) {
+	ids, err := models.RequeueDeliveredCommandRequests(tx, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	name := agentName(tx, a)
+	out := make([]requeuedRequest, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, requeuedRequest{id: id, agent: name, why: why})
+	}
+	return out, nil
+}
+
+// logRequeued writes the log line of each request that waits again.
+func (c *core) logRequeued(list []requeuedRequest) {
+	for _, r := range list {
+		c.logger.Printf("run request %d of %s waits again: %s", r.id, r.agent, r.why)
+	}
+}
+
+// silentWhy is the reason of the log line for an agent that is not
+// responding by the time rule or because it said it stops.
+func (c *core) silentWhy(a *models.Agent) string {
+	switch {
+	case c.isStopping(a.ID):
+		return "the agent is stopping"
+	case a.LastSyncAt == 0:
+		return "the agent has not synced since it was created"
+	}
+	return "the agent has not synced since " + time.Unix(a.LastSyncAt, 0).UTC().Format(time.RFC3339)
 }
 
 // agentInterval returns the check interval the agent runs with: that of the
@@ -43,13 +139,30 @@ func agentInterval(r models.Reader, a *models.Agent, defaultInterval int) int {
 	return defaultInterval
 }
 
-// runRequestsStep is the periodic step "run requests": the queued requests
-// whose expiry passed end as expired (recorded in the history after the
+// runRequestsStep is the periodic step "run requests", one transaction:
+// the delivered requests of every agent that is not responding go back to
+// queued (logged after the transaction), then the queued requests whose
+// expiry passed end as expired (recorded in the history after the
 // transaction, with the set's name read from the agent's database).
 func (c *core) runRequestsStep(now time.Time) {
 	var list []*models.CommandRequest
+	var requeued []requeuedRequest
 	err := c.db.Write(func(tx models.Writer) error {
-		var err error
+		requeued = nil
+		agents, err := models.ListAgentsWithCommandRequests(tx, math.MaxInt64, models.RequestDelivered)
+		if err != nil {
+			return err
+		}
+		for _, a := range agents {
+			if c.responding(tx, a, now.Unix()) {
+				continue
+			}
+			rs, err := requeueRequests(tx, a, c.silentWhy(a))
+			if err != nil {
+				return err
+			}
+			requeued = append(requeued, rs...)
+		}
 		list, err = models.ExpireCommandRequests(tx, now.Unix())
 		return err
 	})
@@ -57,6 +170,7 @@ func (c *core) runRequestsStep(now time.Time) {
 		c.logger.Printf("run requests: %v", err)
 		return
 	}
+	c.logRequeued(requeued)
 	for _, r := range list {
 		a, err := models.GetAgent(c.db.Read(), r.AgentID)
 		if err != nil {

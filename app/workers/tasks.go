@@ -51,8 +51,9 @@ func (c *core) processTokenExpiry(now time.Time) {
 }
 
 // retention deletes detections, command runs and ended run requests older
-// than the retention period, and command runs beyond each set's keep count
-// (once an hour).
+// than the retention period, the run requests that are not ended of agents
+// that are not responding requested before that period, and command runs
+// beyond each set's keep count (once an hour).
 //
 // Every part that fails is logged with the agent and what failed, and the
 // other parts go on. The mark of the last run is written all the same: it
@@ -113,6 +114,21 @@ func (c *core) retention(now time.Time) {
 		{"ended run requests", func(tx models.Writer) error {
 			_, err := models.DeleteEndedCommandRequestsBefore(tx, cut)
 			return err
+		}},
+		{"run requests of agents that are not responding", func(tx models.Writer) error {
+			agents, err := models.ListAgentsWithCommandRequests(tx, cut, models.RequestQueued, models.RequestDelivered, models.RequestRunning)
+			if err != nil {
+				return err
+			}
+			for _, a := range agents {
+				if c.responding(tx, a, now.Unix()) {
+					continue
+				}
+				if _, err := models.DeleteOpenCommandRequestsBefore(tx, a.ID, cut); err != nil {
+					return err
+				}
+			}
+			return nil
 		}},
 		{"sent notifications", func(tx models.Writer) error {
 			return models.DeleteSentNotificationsBefore(tx, now.Add(-30*24*time.Hour).Unix())

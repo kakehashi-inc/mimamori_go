@@ -143,6 +143,33 @@ func HandOverCommandRequests(db Writer, agentID, upTo, now int64, freeWorker boo
 	return out, nil
 }
 
+// RequeueDeliveredCommandRequests puts the delivered requests of an agent
+// back to queued (the agent does not respond: it said it stops or it has
+// not synced for a while) and returns their ids. They keep their ids and
+// so their place; a later sync of the agent hands them over again.
+func RequeueDeliveredCommandRequests(db Writer, agentID int64) ([]int64, error) {
+	rows, err := db.Query(`SELECT `+commandRequestCols+` FROM command_requests
+		WHERE agent_id = ? AND state IN ('queued', 'delivered') ORDER BY id`, agentID)
+	list, err := collect(rows, err, scanCommandRequest)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for _, r := range list {
+		if r.State != RequestDelivered {
+			continue
+		}
+		ok, err := execChanged(db, `UPDATE command_requests SET state = 'queued' WHERE id = ? AND state = 'delivered'`, r.ID)
+		if err != nil {
+			return ids, err
+		}
+		if ok {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids, nil
+}
+
 // MarkCommandRequestRunning records that the agent started the run of a
 // delivered request (delivered -> running) and when the central learned it.
 func MarkCommandRequestRunning(db Writer, agentID, id int64, runUID string, now int64) (bool, error) {
@@ -247,6 +274,17 @@ func DiscardCommandRequestsOfSet(db Writer, agentID, setID int64, by string, now
 		}
 	}
 	return ids, nil
+}
+
+// DeleteOpenCommandRequestsBefore removes the requests of an agent that
+// are not ended (queued, delivered, running) and were requested before t
+// (retention, for an agent that does not respond).
+func DeleteOpenCommandRequestsBefore(db Writer, agentID, t int64) (int64, error) {
+	res, err := db.Exec(`DELETE FROM command_requests WHERE agent_id = ? AND state IN ('queued', 'delivered', 'running') AND requested_at < ?`, agentID, t)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // DeleteEndedCommandRequestsBefore removes the done, expired and discarded

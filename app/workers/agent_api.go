@@ -97,14 +97,15 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 // assigned rule version, the command set definitions) is read first: when a
 // read fails, the sync is answered with an error and nothing of it was
 // recorded or handed over. Then one transaction of the central database
-// records the sync (so the agent is responding again in it) and the
-// signature of the definitions the agent holds, ends the running requests
-// the agent no longer lists (only when it sent the list), stores a new token
-// renewal value with its history row and, when the sync says free_worker,
-// hands the oldest queued request of this agent over; every delivered
-// request of the agent is sent with the answer (again with every sync until
-// the agent answers it; the agent runs a request at most once and answers it
-// again). Requests of other agents play no role.
+// records the sync (so the agent is responding again in it, also when it
+// had said that it stops) and the signature of the definitions the agent
+// holds, ends the running requests the agent no longer lists (only when it
+// sent the list), stores a new token renewal value with its history row
+// and, when the sync says free_worker, hands the oldest queued request of
+// this agent over; every delivered request of the agent is sent with the
+// answer (again with every sync until the agent answers it; the agent runs a
+// request at most once and answers it again). Requests of other agents play
+// no role.
 //
 // Only a queued request with an id up to the one read before the
 // definitions is handed over. A request is created after its set was read
@@ -163,6 +164,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		if err := models.RecordAgentSync(tx, agent.ID, req.AgentVersion, req.RuleID, req.RuleVersion, string(fps), now); err != nil {
 			return err
 		}
+		c.clearStopping(agent.ID)
 		if req.CommandSig != agent.CommandSig {
 			if err := models.RecordAgentCommandSig(tx, agent.ID, req.CommandSig); err != nil {
 				return err
@@ -355,11 +357,16 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 	// first, every time (each change is conditional on the request's state,
 	// so applying it again changes nothing); a request that ended without a
 	// run is recorded in the history after it, with the set's name read from
-	// the agent's database. Unless the agent's row names this
-	// identity as the last stored one, the items are then applied in order,
-	// each on the row the item before it left (two application results each
-	// get their history row), and the identity is remembered.
+	// the agent's database. When the batch says that the agent stops, the
+	// agent is marked as not responding and its delivered requests go back
+	// to queued (logged after the transaction), also for a batch sent again.
+	// Unless the agent's row names this identity as the last stored one, the
+	// items are then applied in order, each on the row the item before it
+	// left (two application results each get their history row), and the
+	// identity is remembered.
 	var ended []endedRequest
+	var requeued []requeuedRequest
+	var stopMark uint64
 	centralRepeated := false
 	var transitions []reqTransition
 	for i := range batch.Reports {
@@ -373,6 +380,12 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 		cur, err := models.GetAgent(tx, agent.ID)
 		if err != nil {
 			return err
+		}
+		if batch.Stopping {
+			stopMark = c.markStopping(agent.ID)
+			if requeued, err = requeueRequests(tx, cur, "the agent is stopping"); err != nil {
+				return err
+			}
 		}
 		centralRepeated = cur.LastCentralReportID == id
 		if centralRepeated {
@@ -394,8 +407,12 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 		return nil
 	})
 	if err != nil {
+		if stopMark != 0 {
+			c.undoStopping(agent.ID, stopMark)
+		}
 		return err
 	}
+	c.logRequeued(requeued)
 	switch {
 	case repeated && centralRepeated:
 		c.logger.Printf("report %s of %s was already stored; answered without storing it again", id, c.agentDisplayName(agent))

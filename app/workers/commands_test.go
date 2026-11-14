@@ -2,6 +2,7 @@ package workers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -414,9 +415,15 @@ func TestCommandReportIdempotent(t *testing.T) {
 	}
 }
 
+// Retention removes old runs (also the last of a set) and finished runs
+// beyond the keep count, the ended run requests requested before the
+// retention period and, of an agent that is not responding (it has not
+// synced for a while or said it stops), also its requests that did not end;
+// those of a responding agent stay.
 func TestCommandRetention(t *testing.T) {
 	e := newTestEnv(t)
-	_, a, tdb := commandAgent(t, e, "host-k")
+	tok, a, tdb := commandAgent(t, e, "host-k")
+	syncAgent(t, e, tok, "")
 	body := commandSetBody("s", "run_only")
 	body["os_user"], body["keep_runs"] = "svc", 3
 	setID := int64(e.admin("POST", "/agents/"+itoa64(a.ID)+"/command-sets", body)["id"].(float64))
@@ -442,12 +449,25 @@ func TestCommandRetention(t *testing.T) {
 	}
 	add("running", setID, now, 0)
 	add("ancient", oldID, old, old) // the only (last) run of its set
-	for _, st := range []string{"done", "expired", "discarded", "queued"} {
+	_, gone, _ := commandAgent(t, e, "host-gone")
+	stopTok, stopping, _ := commandAgent(t, e, "host-stopping")
+	syncAgent(t, e, stopTok, "")
+	e.c.markStopping(stopping.ID)
+	insert := func(agentID, setID int64, st string, at int64) {
+		t.Helper()
 		if err := e.exec(`INSERT INTO command_requests (agent_id, set_id, state, requested_at, requested_by, expires_at) VALUES (?, ?, ?, ?, 'x', ?)`,
-			a.ID, oldID, st, old, old+86400); err != nil {
+			agentID, setID, st, at, at+86400); err != nil {
 			t.Fatal(err)
 		}
 	}
+	for i, st := range []string{"done", "expired", "discarded", "running"} {
+		insert(a.ID, int64(900+i), st, old)
+	}
+	for i, st := range []string{"queued", "delivered", "running", "done"} {
+		insert(gone.ID, int64(900+i), st, old)
+		insert(stopping.ID, int64(900+i), st, old)
+	}
+	insert(gone.ID, 910, "running", now)
 	e.c.retention(time.Now())
 	var uids []string
 	rows, _ := tdb.Read().Query(`SELECT run_uid FROM command_runs ORDER BY run_uid`)
@@ -460,16 +480,17 @@ func TestCommandRetention(t *testing.T) {
 	if !slices.Equal(uids, []string{"k3", "k4", "k5", "running"}) {
 		t.Fatalf("runs after retention: %v", uids)
 	}
-	var states []string
-	rows, _ = e.c.db.Read().Query(`SELECT state FROM command_requests`)
+	var left []string
+	rows, _ = e.c.db.Read().Query(`SELECT agent_id, set_id, state FROM command_requests ORDER BY id`)
 	for rows.Next() {
-		var s string
-		_ = rows.Scan(&s)
-		states = append(states, s)
+		var agentID, setID int64
+		var st string
+		_ = rows.Scan(&agentID, &setID, &st)
+		left = append(left, fmt.Sprintf("%d/%d/%s", agentID, setID, st))
 	}
 	rows.Close()
-	if !slices.Equal(states, []string{"queued"}) {
-		t.Fatalf("requests after retention: %v", states)
+	if want := []string{fmt.Sprintf("%d/903/running", a.ID), fmt.Sprintf("%d/910/running", gone.ID)}; !slices.Equal(left, want) {
+		t.Fatalf("requests after retention: %v, want %v", left, want)
 	}
 }
 

@@ -181,8 +181,9 @@ func (rt *AgentRuntime) ReapplyStored() {
 //
 // After the stop no unit starts; a running monitoring step completes (see
 // monitorStep), and a running command is ended (SIGTERM, grace, SIGKILL) and
-// its run still reported. Run returns when every worker has returned, after
-// one attempt to send the queued reports when a run ended after the stop.
+// its run still reported. When every worker has returned, one last report
+// says that the agent stops (stopping true) and carries what is queued (one
+// attempt; what fails stays queued for the next start); then Run returns.
 // While it runs, the state key running_workers holds the worker count in
 // use (for agent status and agent set-workers).
 //
@@ -240,13 +241,11 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) (err error) {
 	}
 	rt.safeWork()
 	wg.Wait()
-	if rt.sched.runsStoppedByStop() {
-		// A run was closed because of the stop: one attempt to send its
-		// reports, so that the central does not show it running until the
-		// next start (what fails stays queued). Every worker has returned, so
-		// this is the only flush.
-		rt.flushOutbox()
-	}
+	// The last report: the central learns at once that the agent stops (it
+	// then gives the run requests the agent had not started back to its
+	// queue) and that the runs the stop cut ended. Every worker has
+	// returned, so this is the only flush.
+	rt.flushStopping()
 	if isClosed(rt.halt) {
 		return ErrAgentPanic
 	}
@@ -1183,5 +1182,11 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 // flushOutbox sends the queued items in one report request (see
 // outbox.flush); a failure is logged as a failed report.
 func (rt *AgentRuntime) flushOutbox() {
-	rt.out.flush(rt.mon.transport, func(err error) { rt.logConnectionError("report", err) })
+	rt.out.flush(rt.mon.transport, false, func(err error) { rt.logConnectionError("report", err) })
+}
+
+// flushStopping sends the last report of the agent before it ends: the
+// queued items with stopping true.
+func (rt *AgentRuntime) flushStopping() {
+	rt.out.flush(rt.mon.transport, true, func(err error) { rt.logConnectionError("report", err) })
 }

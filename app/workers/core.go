@@ -76,6 +76,12 @@ type core struct {
 	// (see centralReport); reports of different agents run at once.
 	reportLocks agentLocks
 
+	// stopping holds the agents whose report said that they stop, until
+	// their next sync (see markStopping); guarded by stoppingMu.
+	stoppingMu  sync.Mutex
+	stopping    map[int64]uint64
+	stoppingSeq uint64
+
 	// reportStored, when set (tests only), is called in centralReport after
 	// the part in the agent's database was committed and before the part in
 	// central.db; an error it returns ends the report there.

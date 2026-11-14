@@ -140,7 +140,7 @@ var ConfigFields = []ConfigField{
 		}},
 	cfgIntField("token_valid_days", "Validity of a new or renewed token (days)", func(c *CentralConfig) *int { return &c.TokenValidDays }),
 	cfgIntField("token_renew_before_days", "Renew a token this many days before it expires", func(c *CentralConfig) *int { return &c.TokenRenewBeforeDays }),
-	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of ended run requests (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
+	cfgIntField("retention_days", "Retention of detections, of the history of rejected connections, of command runs and of run requests that ended or whose agent does not respond (days)", func(c *CentralConfig) *int { return &c.RetentionDays }),
 	cfgIntField("default_check_interval_sec", "Default check interval of the agents (seconds)", func(c *CentralConfig) *int { return &c.DefaultCheckIntervalSec }),
 	cfgIntField("session_remember_days", "Lifetime of a kept login (days)", func(c *CentralConfig) *int { return &c.SessionRememberDays }),
 	cfgIntField("two_step_trust_days", "Days a browser marked as trusted at the login code step needs no code", func(c *CentralConfig) *int { return &c.TwoStepTrustDays }),

@@ -307,12 +307,12 @@ interface CommandSetList {
   time_zone: string;                  // ホストのタイムゾーンの略称（"JST" など）。報告が無ければ ""
   utc_offset_sec: number;             // ホストの UTC からのずれ（秒）
   definitions_delivered: boolean;     // エージェントが現在の定義を受け取ったと報告している
-  agent_responding: boolean;          // 確認の間隔の 3 倍と 600 秒以内に同期したか。false の間、この監視対象の queued の指示はエージェントが再び同期するまで待つ
+  agent_responding: boolean;          // 確認の間隔の 3 倍と 600 秒以内に同期し、その後に終了すると報告していないか（[システム仕様.md](システム仕様.md) の 12.5.5）。false の間、この監視対象の queued の指示はエージェントが再び同期するまで待つ
   sets: CommandSet[];                 // 削除されていないセット（名前の順）
 }
 interface CommandRequest {
   id: number; set_id: number;
-  // queued: エージェントの同期を待っている（同期で渡す）。delivered: 同期の応答でエージェントに渡し、応答を待っている。
+  // queued: エージェントの同期を待っている（同期で渡す。応答していないエージェントの delivered の指示もここに戻る）。delivered: 同期の応答でエージェントに渡し、応答を待っている。
   // running: エージェントが実行を始めた。done: 実行が終わった。
   // expired: 24 時間以内に渡せなかった、またはエージェントが実行しなかった。discarded: 渡す前に破棄した
   state: 'queued' | 'delivered' | 'running' | 'done' | 'expired' | 'discarded';
@@ -716,7 +716,7 @@ interface DetectionReport {
 }
 interface ReportBatch {
   report_id: string;                   // 報告の識別子（16 進数の小文字 32 文字）。エージェントが未送信の項目をまとめたときに作り、セントラルが応答するまで送り直しても変わらない。最後に保存した報告と同じなら保存し直さない
-  stopping: boolean;                   // エージェントが終了する前の最後の報告であること（エージェントは false を送り、セントラルは使わない）
+  stopping: boolean;                   // エージェントが終了する前の最後の報告であること（すべてのワーカーが終わった後に送る。[システム仕様.md](システム仕様.md) の 4.1）。true の報告の後、セントラルはエージェントの次の同期まで、エージェントが応答していないものとする
   reports: ReportRequest[];            // 未送信の項目（古い順）。無ければ []（null にはしない）
 }
 interface ReportRequest {              // 報告の項目（識別子は持たない）
@@ -756,6 +756,7 @@ interface CommandRunReport {
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
 - コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。
 - 報告は、項目ごとに順に、まず `command_request_acks` を、次に `command_runs` を指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。
+- `stopping` が true の報告では、指示の状態の変更（上）の後で、同じトランザクションの中で、この監視対象の `delivered` の指示をすべて `queued` に戻し（ログに `run request <ID> of <エージェント> waits again: the agent is stopping`）、エージェントの次の同期まで、エージェントを応答していないものとします（メモリーに覚えるだけで、セントラルを再起動すると忘れます）。同じ `report_id` の報告が再び届いた場合も同じです（戻す指示が無ければ何も変えません）。規則は [システム仕様.md](システム仕様.md) の 12.5.5 です。
 - `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
 - `report_id` が、この監視対象で最後に保存した報告と同じ報告は、保存済みとして扱い、`{}` で応答します。報告は監視対象の DB に書く部分とセントラル管理用 DB に書く部分に分けて保存し、どちらの部分もすべての項目を 1 つのトランザクションで保存します。どちらもすでに保存した部分は保存し直しません（上の指示の状態の変更は毎回行います）。前の送信でセントラル管理用 DB に書く部分を保存できなかった報告は、その部分をこのときに保存します（[システム仕様.md](システム仕様.md) の 12.1）。
 - コマンドセットの結果について、メールで通知することはありません。

@@ -92,8 +92,6 @@ type agentScheduler struct {
 	// monitoring step.
 	running    map[int64]bool
 	notStarted map[int64]bool
-	// stoppedRuns counts the runs that ended after the stop.
-	stoppedRuns int
 }
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location, interval time.Duration) *agentScheduler {
@@ -285,8 +283,6 @@ func (s *agentScheduler) doneRun(job *commandJob, started bool) {
 		s.notStarted[job.def.ID] = true
 	case !started && job.requestID > 0:
 		delete(s.acked, job.requestID)
-	case started && isClosed(s.stop):
-		s.stoppedRuns++
 	}
 	s.changedLocked()
 }
@@ -380,11 +376,4 @@ func (s *agentScheduler) findSet(id int64) *CommandSetDef {
 		}
 	}
 	return nil
-}
-
-// runsStoppedByStop reports whether a run ended after the stop.
-func (s *agentScheduler) runsStoppedByStop() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.stoppedRuns > 0
 }

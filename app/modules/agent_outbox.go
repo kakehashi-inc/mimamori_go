@@ -122,17 +122,19 @@ type outboxBatch struct {
 	Items    []int64 `json:"items"`
 }
 
-// flush sends the batch takeBatch returns in one request. After the central
+// flush sends the batch takeBatch returns in one request, with stopping as
+// given (the last report before the agent ends). After the central
 // answered, the items of the batch are deleted and its record cleared in one
 // Write. A failed request is handed to onError; then, and when that Write
 // fails, the batch stays recorded and is sent again, with the same identity,
 // next time. No request to the central is made inside a Write.
-func (o *outbox) flush(tr AgentTransport, onError func(error)) {
+func (o *outbox) flush(tr AgentTransport, stopping bool, onError func(error)) {
 	batch, items, err := o.takeBatch()
 	if err != nil {
 		o.logf("report: the queued items cannot be read: %v", err)
 		return
 	}
+	batch.Stopping = stopping
 	if err := tr.Report(batch); err != nil {
 		onError(err)
 		return

@@ -24,17 +24,18 @@ import (
 
 // handlerTransport is the transport of a token agent that sends its requests
 // through the central's agent handler. It records what the agent sends; it
-// can lose the answer of a report the central stored (lose) and stand for an
-// agent that is gone (down).
+// can lose the answer of a report the central stored (lose), stand for an
+// agent that is gone (down) and fail every report (reportsDown).
 type handlerTransport struct {
-	e       *testEnv
-	tok     string
-	mu      sync.Mutex
-	down    bool
-	lose    func(batch *modules.ReportBatch) bool
-	lost    map[string]bool
-	reports []string // batch ids in the order sent
-	syncs   []string // the JSON of every sync request
+	e           *testEnv
+	tok         string
+	mu          sync.Mutex
+	down        bool
+	reportsDown bool
+	lose        func(batch *modules.ReportBatch) bool
+	lost        map[string]bool
+	reports     []string // batch ids in the order sent
+	syncs       []string // the JSON of every sync request
 }
 
 var errAnswerLost = errors.New("the answer did not arrive")
@@ -65,7 +66,7 @@ func (h *handlerTransport) Sync(req *modules.SyncRequest) (*modules.SyncResponse
 
 func (h *handlerTransport) Report(batch *modules.ReportBatch) error {
 	h.mu.Lock()
-	down := h.down
+	down := h.down || h.reportsDown
 	h.mu.Unlock()
 	if down {
 		return errAnswerLost
