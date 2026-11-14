@@ -7,12 +7,17 @@ import (
 	"testing"
 
 	"mimamori/app/models"
+	"mimamori/app/modules"
 )
 
 // Creating a suppression marks every matching unacknowledged detection of a
 // target, and deleting it releases every one it suppressed, however many
 // there are: here more than 100000, and one acknowledged and one of another
-// executable that stay as they are.
+// executable that stay as they are. The program marks and releases the
+// detections one statement each, which takes minutes under the race
+// detector; there the test uses a little more than two pages
+// (modules.DetectionPageRows) of detections, which runs the same code, and
+// the run without it proves the 100000.
 func TestSuppressionCoversEveryDetection(t *testing.T) {
 	e := newTestEnv(t)
 	b, _ := models.GetBuiltinAgent(e.c.db.Read())
@@ -20,23 +25,31 @@ func TestSuppressionCoversEveryDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const n = 100037
+	n := 100037
+	if raceEnabled {
+		n = 2*modules.DetectionPageRows + 37
+	}
 	var ackedID, otherID int64
 	if err := tdb.Write(func(tx models.Writer) error {
-		for i := range n + 2 {
-			d := &models.Detection{Fingerprint: fmt.Sprintf("fp-%d", i), Type: "exec", Category: "alert", OSUser: "nginx",
-				Exe: "/usr/bin/zz", Target: fmt.Sprintf("zz %d", i), Count: 1, FirstAt: int64(1000 + i), LastAt: int64(1000 + i),
+		// The n matching detections in one statement; the same columns as
+		// models.InsertDetection writes.
+		if _, err := tx.Exec(`INSERT INTO detections (fingerprint, type, category, os_user, exe, target, count, first_at, last_at,
+			notify_state, created_at)
+			WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM seq WHERE i + 1 < ?)
+			SELECT 'fp-' || i, 'exec', 'alert', 'nginx', '/usr/bin/zz', 'zz ' || i, 1, 1000 + i, 1000 + i, ?, ? FROM seq`,
+			n, models.NotifyPending, models.Now()); err != nil {
+			return err
+		}
+		for i, exe := range []string{"/usr/bin/zz", "/usr/bin/other"} {
+			d := &models.Detection{Fingerprint: fmt.Sprintf("fp-%d", n+i), Type: "exec", Category: "alert", OSUser: "nginx",
+				Exe: exe, Target: fmt.Sprintf("zz %d", n+i), Count: 1, FirstAt: int64(1000 + n + i), LastAt: int64(1000 + n + i),
 				NotifyState: models.NotifyPending}
-			if i == n+1 {
-				d.Exe = "/usr/bin/other"
-			}
 			if err := models.InsertDetection(tx, d); err != nil {
 				return err
 			}
-			switch i {
-			case n:
+			if i == 0 {
 				ackedID = d.ID
-			case n + 1:
+			} else {
 				otherID = d.ID
 			}
 		}
