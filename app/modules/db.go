@@ -116,23 +116,6 @@ func CheckSQLiteBuild(path, schema string) error {
 	return nil
 }
 
-// CheckSQLite opens the database at path the way OpenSQLite does (a
-// database of another build is refused with the same error) and closes it
-// again. Unlike OpenSQLite it does not refuse a path whose handle this
-// process has open, since it keeps no handle: a command uses it to check a
-// database it does not otherwise use.
-func CheckSQLite(path, schema string) error {
-	sub, err := schemaMigrations(schema)
-	if err != nil {
-		return err
-	}
-	db, err := openDB(path, sub, defaultOpenOptions(), false)
-	if err != nil {
-		return err
-	}
-	return db.Close()
-}
-
 // openSQLite opens the database at dbPath with the migrations in fsys. It
 // does not refuse a path that already has a handle: tests open one file
 // from several flows with it, the way several processes would.
