@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -63,6 +64,40 @@ func TestGateBodyRules(t *testing.T) {
 		a = roundTrip(t, dial(), "OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n")
 		if a.status != http.StatusBadRequest || a.header.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("OPTIONS *: %d %v", a.status, a.header)
+		}
+	})
+}
+
+// A request whose protocol major version is not 1 reaches the gate only as
+// the HTTP/2 connection preface ("PRI * HTTP/2.0"; net/http answers every
+// other such request line itself). It gets the answer net/http gives to an
+// HTTP/2.0 request line: 505 with the same text, and the connection is
+// closed. Also without the rest of the preface, and with a header.
+func TestGateHTTP2Preface(t *testing.T) {
+	s := startServe(t, serveOpts{})
+	s.both(t, func(t *testing.T, dial func() net.Conn) {
+		lib := roundTrip(t, dial(), "GET /test/slow HTTP/2.0\r\nHost: x\r\n\r\n")
+		if lib.status != http.StatusHTTPVersionNotSupported || lib.body == "" {
+			t.Fatalf("the library's answer to an HTTP/2.0 request line: %d %q %v", lib.status, lib.body, lib.err)
+		}
+		for _, send := range []string{
+			"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n",
+			"PRI * HTTP/2.0\r\n\r\n",
+			"PRI * HTTP/2.0\r\nHost: x\r\n\r\n",
+		} {
+			c := dial()
+			a := roundTrip(t, c, send)
+			if a.status != http.StatusHTTPVersionNotSupported || a.body != lib.body || a.header.Get("Content-Type") != lib.header.Get("Content-Type") ||
+				!a.close || a.header.Get("X-Content-Type-Options") != "nosniff" || a.header.Get("Content-Length") != strconv.Itoa(len(lib.body)) {
+				t.Errorf("%q: %d %q %v %v, want 505 %q like the library", send, a.status, a.body, a.header, a.err, lib.body)
+			}
+			if _, closed := untilClosed(c, 10*time.Second); !closed {
+				t.Errorf("%q: the connection stays open after the answer", send)
+			}
+		}
+		// HTTP/1.0 is version 1 and goes on to the handler.
+		if a := roundTrip(t, dial(), "GET /test/slow HTTP/1.0\r\n\r\n"); a.status != http.StatusOK {
+			t.Errorf("HTTP/1.0: %d %q %v", a.status, a.body, a.err)
 		}
 	})
 }

@@ -41,7 +41,8 @@
     | `Host` の無い HTTP/1.1 の要求 | `400 Bad Request: missing required Host header` | ライブラリー |
     | 知らない `Expect` の値 | `417 Expectation Failed`（本文なし） | ライブラリー |
     | `chunked` 以外の転送コーディング | `501 Not Implemented`（本文 `Unsupported transfer encoding`） | ライブラリー |
-    | 要求行が `HTTP/2.0` | `505 HTTP Version Not Supported: unsupported protocol version` | ライブラリー |
+    | 要求行が `HTTP/2.0` など、プロトコルのメジャーバージョンが 1 でない要求（下の `PRI * HTTP/2.0` を除く） | `505 HTTP Version Not Supported: unsupported protocol version` | ライブラリー |
+    | HTTP/2 の接続の開始（要求行 `PRI * HTTP/2.0`） | 505（ライブラリーの上の答えと同じ `text/plain; charset=utf-8` の本文 `505 HTTP Version Not Supported: unsupported protocol version`）と `Connection: close` | セントラル |
     | HTTPS の待ち受けに送った平文の HTTP | `400 Bad Request`（本文 `Client sent an HTTP request to an HTTPS server.`） | ライブラリー |
     | `Transfer-Encoding: chunked` の本文 | 411（`{"error":"length required","error_i18n":{"code":"common.length_required"}}`。本文は `Content-Length` で送ります）と `Connection: close` | セントラル |
     | 本文の途中で送信を終えた要求 | 400（本文なし）と `Connection: close` | セントラル |

@@ -26,6 +26,11 @@ var internalErrorBody = errorBodyBytes(modules.M("common.internal_error"))
 // no Content-Length (Transfer-Encoding).
 var lengthRequiredBody = errorBodyBytes(modules.M("common.length_required"))
 
+// versionNotSupportedBody is the body of the answer to a request of another
+// protocol major version: the text net/http writes itself for such a
+// request line (RFC 9110 15.6.6).
+const versionNotSupportedBody = "505 HTTP Version Not Supported: unsupported protocol version"
+
 // errorBodyBytes returns the JSON body of an error answer (see errorBody).
 func errorBodyBytes(m modules.Msg) []byte {
 	b, err := json.Marshal(errorBody(m))
@@ -145,6 +150,18 @@ func (g *requestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	req := r.WithContext(context.WithoutCancel(r.Context()))
 	unread := false
 	switch {
+	case r.ProtoMajor != 1:
+		// net/http answers a request line of another major version itself,
+		// except the HTTP/2 connection preface ("PRI * HTTP/2.0"), which it
+		// hands over for an upgrade this server does not offer. It gets the
+		// library's answer to the others, and the connection is closed (the
+		// peer goes on in HTTP/2).
+		rec := newResponseRecorder()
+		rec.header.Set("Content-Type", "text/plain; charset=utf-8")
+		rec.status = http.StatusHTTPVersionNotSupported
+		rec.body.WriteString(versionNotSupportedBody)
+		g.respond(w, rec, true)
+		return
 	case r.ContentLength < 0:
 		rec := newResponseRecorder()
 		rec.header.Set("Content-Type", "application/json")
