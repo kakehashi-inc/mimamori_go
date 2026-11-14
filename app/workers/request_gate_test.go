@@ -295,11 +295,18 @@ func TestGateBodyMemory(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	// A body's part of the budget is given back after its answer is
+	// written; the client can have read the answer before.
+	waitFor(t, "the whole budget free again", func() bool {
+		s.budget.mu.Lock()
+		defer s.budget.mu.Unlock()
+		return s.budget.free == size
+	})
 	s.budget.mu.Lock()
-	peak, free := s.budget.peak, s.budget.free
+	peak := s.budget.peak
 	s.budget.mu.Unlock()
-	if peak > size || peak < 2<<20 || free != size {
-		t.Fatalf("budget %d: peak %d, free at the end %d", size, peak, free)
+	if peak > size || peak < 2<<20 {
+		t.Fatalf("budget %d: peak %d", size, peak)
 	}
 	// Two at a time, 300 ms each: four rounds at least.
 	if d := time.Since(start); d < 1100*time.Millisecond {
