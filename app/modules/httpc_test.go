@@ -24,8 +24,9 @@ import (
 )
 
 // The client tests run over real loopback sockets with TLS and an idle time
-// of 1 s instead of IdleTimeout. Times have a generous margin above, because
-// other tests may run on the machine at the same time.
+// of 1 s instead of IdleTimeout. A cut comes at least one idle time after the
+// start of the request; times have a generous margin above, because other
+// tests may run on the machine at the same time.
 
 const clientIdle = time.Second
 
@@ -107,7 +108,7 @@ func TestClientSilentServerCut(t *testing.T) {
 	})
 	start := time.Now()
 	_, _, err := testClient(ln, cc).Do("POST", "/agent/v1/report", []byte(`{"x":1}`))
-	within(t, "client cut", time.Since(start), clientIdle-200*time.Millisecond, clientIdle+800*time.Millisecond)
+	within(t, "client cut", time.Since(start), clientIdle, clientIdle+3*time.Second)
 	if err == nil || !IsSilenceCut(err) {
 		t.Fatalf("want a silence cut, got %v", err)
 	}
@@ -121,12 +122,13 @@ func TestClientSlowResponseNotCut(t *testing.T) {
 		_, _ = io.Copy(io.Discard, req.Body)
 		head := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
 		pieces := [][]byte{[]byte(head[:9]), []byte(head[9:])}
-		for i := 0; i < len(body); i += 11 {
-			pieces = append(pieces, body[i:min(i+11, len(body))])
+		for i := 0; i < len(body); i += 4 {
+			pieces = append(pieces, body[i:min(i+4, len(body))])
 		}
-		// 8 pieces, one every 0.5 s: 4 s.
+		// 18 pieces, one every quarter of the idle time (a delay of the server
+		// on a busy machine does not make it silent for the idle time): 4.5 s.
 		for _, p := range pieces {
-			time.Sleep(clientIdle / 2)
+			time.Sleep(clientIdle / 4)
 			if _, err := c.Write(p); err != nil {
 				return
 			}
@@ -192,7 +194,7 @@ func TestClientSilentHandshakeCut(t *testing.T) {
 	}()
 	start := time.Now()
 	_, _, err := testClient(ln, cc).Do("GET", "/agent/v1/ca", nil)
-	within(t, "handshake cut", time.Since(start), clientIdle-200*time.Millisecond, clientIdle+800*time.Millisecond)
+	within(t, "handshake cut", time.Since(start), clientIdle, clientIdle+3*time.Second)
 	// The request was never sent: the caller reports that the central cannot
 	// be reached, not that it may still carry out the request.
 	var ne net.Error

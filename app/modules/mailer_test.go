@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,8 +19,11 @@ import (
 // SendMailTo step by step; each answer can be delayed, one step can be left
 // unanswered (the server stays silent until the client closes), and the
 // message can be taken slowly or not at all. The limit of these tests is
-// smtp.timeout_sec = 1 s; times have a generous margin above, because other
-// tests may run on the machine at the same time.
+// smtp.timeout_sec = 2 s: the server answers the steps before the silent one
+// at once, and a delay of the test's flows on a busy machine must not make
+// it silent for the limit. A cut is checked against the moment the product
+// counts from (never earlier than one limit after it), with a generous
+// margin above.
 
 // The steps of the dialogue, in the order the client meets them.
 const (
@@ -37,39 +42,46 @@ type testMailServer struct {
 	addr     *net.TCPAddr
 	security string
 	cert     *tls.Certificate
+	limit    int           // smtp.timeout_sec of the client (0: 2)
 	delay    time.Duration // before every answer
 	silentAt string        // the step that is never answered
-	slowTake bool          // take the message at about 12 MiB per second
+	slowTake bool          // take the message at about 6 MB per second
 	done     chan struct{} // closed when the test ends
 
 	mu       sync.Mutex
-	lastSent time.Time // when the server last sent a byte
-	lastRead time.Time // when a read of the connection last returned data
+	lastSent time.Time // when the server began to send its last answer
 	received int       // bytes of the message taken
 	got      bool      // the whole message arrived
+}
+
+// mailConns holds the connection SendMailTo made to each mail server of the
+// tests, by the server's address (each server takes one connection).
+var mailConns sync.Map
+
+func init() {
+	mailDial = func(addr string, idle time.Duration) (*IdleConn, error) {
+		c, err := DialIdle(addr, idle)
+		if err == nil {
+			mailConns.Store(addr, c)
+		}
+		return c, err
+	}
+}
+
+// conn returns the client's connection to s, nil before SendMailTo made it.
+func (s *testMailServer) conn() *IdleConn {
+	c, _ := mailConns.Load(s.addr.String())
+	ic, _ := c.(*IdleConn)
+	return ic
 }
 
 // messageTakeFor is how long a server silent at stepMessage takes the
 // message before it stops reading: longer than the limit, so that a cut by
 // the total time of the write would come while the message is still taken.
-const messageTakeFor = 1500 * time.Millisecond
-
-// recordingConn records when a read of the connection returned data (below
-// TLS, so every read of the socket counts).
-type recordingConn struct {
-	net.Conn
-	s *testMailServer
-}
-
-func (r recordingConn) Read(p []byte) (int, error) {
-	n, err := r.Conn.Read(p)
-	if n > 0 {
-		r.s.mu.Lock()
-		r.s.lastRead = time.Now()
-		r.s.mu.Unlock()
-	}
-	return n, err
-}
+// At about 1.6 MB per second the server takes less than a quarter of a
+// message of 16 MiB (22 MB in base64) in that time; with what the kernels of
+// both sides hold (some MB) the client is still writing when it stops.
+const messageTakeFor = 3 * time.Second
 
 // startMailServer listens on loopback. The receive buffer of accepted
 // connections is small, so that a server that does not read stops the
@@ -93,14 +105,25 @@ func startMailServer(t *testing.T, s *testMailServer) *testMailServer {
 			return
 		}
 		defer c.Close()
-		s.serve(recordingConn{c, s})
+		s.serve(c)
 	}()
 	return s
 }
 
 func (s *testMailServer) cfg() SMTPConfig {
-	return SMTPConfig{Host: "127.0.0.1", Port: s.addr.Port, Security: s.security, From: "central@example.com", TimeoutSec: 1}
+	return SMTPConfig{Host: "127.0.0.1", Port: s.addr.Port, Security: s.security, From: "central@example.com", TimeoutSec: s.limitSec()}
 }
+
+// limitSec is the client's smtp.timeout_sec.
+func (s *testMailServer) limitSec() int {
+	if s.limit > 0 {
+		return s.limit
+	}
+	return 2
+}
+
+// limitTime is the client's smtp.timeout_sec as a duration.
+func (s *testMailServer) limitTime() time.Duration { return time.Duration(s.limitSec()) * time.Second }
 
 func (s *testMailServer) sent() time.Time {
 	s.mu.Lock()
@@ -112,23 +135,27 @@ func (s *testMailServer) sent() time.Time {
 // takes nothing more.
 func (s *testMailServer) silent(net.Conn) { <-s.done }
 
-// answer sends one line after the delay, unless step is the silent one.
+// answer sends one line after the delay, unless step is the silent one. The
+// time it records is taken before the write: no byte of the answer reaches
+// the client before it.
 func (s *testMailServer) answer(c net.Conn, step, line string) bool {
 	if step == s.silentAt {
 		s.silent(c)
 		return false
 	}
 	time.Sleep(s.delay)
+	before := time.Now()
 	if _, err := io.WriteString(c, line+"\r\n"); err != nil {
 		return false
 	}
 	s.mu.Lock()
-	s.lastSent = time.Now()
+	s.lastSent = before
 	s.mu.Unlock()
 	return true
 }
 
-// throttled takes at most 128 KiB per read and then pauses 10 ms.
+// throttled takes at most 128 KiB per read and then pauses 10 ms (the
+// server reads 64 KiB at a time: about 6 MB per second).
 type throttled struct{ c net.Conn }
 
 func (r throttled) Read(p []byte) (int, error) {
@@ -234,7 +261,7 @@ func (s *testMailServer) serve(c net.Conn) {
 	}
 }
 
-// takeThenStop takes the message for messageTakeFor, about 6 MiB per second
+// takeThenStop takes the message for messageTakeFor, about 1.6 MB per second
 // in bursts of 64 KiB (each burst frees enough of the receive buffer for the
 // client's kernel to take more at once), and then reads nothing more until
 // the test ends. The client sends the message only after the 354, so
@@ -253,7 +280,7 @@ func (s *testMailServer) takeThenStop(c net.Conn) {
 		}
 		if burst += n; burst >= len(buf) {
 			burst = 0
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(40 * time.Millisecond)
 		}
 	}
 	<-s.done
@@ -280,32 +307,41 @@ func testMailCert(t *testing.T) *tls.Certificate {
 	return cert
 }
 
-// sendSlowAnswers: every answer comes after 0.7 of the limit, the whole mail
-// takes several limits, and it is sent.
+// sendSlowAnswers: every answer comes after half the limit, so that a delay
+// of the server on a busy machine does not make it silent for the limit;
+// the whole mail takes several limits, and it is sent.
 func sendSlowAnswers(t *testing.T, security string, cert *tls.Certificate) {
-	s := startMailServer(t, &testMailServer{security: security, cert: cert, delay: 700 * time.Millisecond})
+	s := startMailServer(t, &testMailServer{security: security, cert: cert, delay: time.Second})
 	start := time.Now()
 	if err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", "body"); err != nil {
 		t.Fatalf("%s: slow answers: %v after %v", security, err, time.Since(start))
 	}
-	if d := time.Since(start); d < 3*time.Second {
+	if d := time.Since(start); d < 3*s.limitTime() {
 		t.Fatalf("%s: the mail took only %v, the test proves nothing", security, d)
 	}
 }
 
 // sendSilentAt: the server stays silent at step; the error comes one limit
-// after the server's last byte (or after connecting, when the server sent
-// none) or, when the message is not taken, after the last read of the
-// server: its reads let the client's kernel take more of the message, so
-// the client's last progress is not before the last read, and it follows
-// that read at once. The lower bound proves that the cut is counted from the
-// last progress and not earlier; the upper bound has a generous margin for
-// a loaded machine.
+// after the client's last progress, never earlier. When the server answers
+// the step before, that progress is the arrival of that answer, and the
+// server records the moment before it wrote it (the start of the mail when
+// the server sent nothing). When the server does not take the message, it
+// is the moment the client's kernel took the last byte of it, which comes in
+// bursts as the server reads; the test reads it from the client's socket.
+// The upper bound has a generous margin for a loaded machine.
 func sendSilentAt(t *testing.T, security string, cert *tls.Certificate, step string, body string) {
 	s := startMailServer(t, &testMailServer{security: security, cert: cert, silentAt: step})
+	conn := func() *IdleConn { return nil }
+	if step == stepMessage {
+		conn = s.conn
+	}
+	stopWatch := make(chan struct{})
+	watched := watchTaken(conn, stopWatch)
 	start := time.Now()
 	err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", body)
 	end := time.Now()
+	close(stopWatch)
+	samples := <-watched
 	if err == nil {
 		t.Fatalf("%s: silent at %s: sent", security, step)
 	}
@@ -313,20 +349,31 @@ func sendSilentAt(t *testing.T, security string, cert *tls.Certificate, step str
 	if from.IsZero() {
 		from = start
 	}
-	upper := 2500 * time.Millisecond
+	latest := from // the latest moment the last progress may have been
 	if step == stepMessage {
-		s.mu.Lock()
-		lastRead, received := s.lastRead, s.received
-		s.mu.Unlock()
-		// The server took the message for longer than the limit.
-		if received == 0 || lastRead.Sub(from) < messageTakeFor-100*time.Millisecond {
-			t.Fatalf("%s: silent at %s: the server took %d bytes until %v after the 354, the test proves nothing",
-				security, step, received, lastRead.Sub(from))
+		final := uint64(0)
+		for _, smp := range samples {
+			final = max(final, smp.taken)
 		}
-		from, upper = lastRead, 5*time.Second
+		notYet, taken, ok := lastTaken(samples, final)
+		if !ok {
+			t.Fatalf("%s: silent at %s: the %d readings of the client's socket do not show when it took its last byte", security, step, len(samples))
+		}
+		t.Logf("%s: %d bytes; last byte taken between %v and %v after the 354; error after %v", security, final, notYet.Sub(from), taken.Sub(from), end.Sub(from))
+		// The client's kernel took bytes of the message for longer than the
+		// limit after the 354: a cut by the total time of the write would
+		// have come while it did.
+		if notYet.Sub(from) < s.limitTime() {
+			t.Fatalf("%s: silent at %s: the client's kernel took the last byte %v after the 354, the test proves nothing",
+				security, step, notYet.Sub(from))
+		}
+		from, latest = notYet, taken
 	}
-	if d := end.Sub(from); d < 900*time.Millisecond || d > upper {
-		t.Fatalf("%s: silent at %s: error %v after the last progress: %v", security, step, d, err)
+	if d := end.Sub(from); d < s.limitTime() {
+		t.Fatalf("%s: silent at %s: error %v after a moment before the last progress, want at least %v: %v", security, step, d, s.limitTime(), err)
+	}
+	if d := end.Sub(latest); d > s.limitTime()+3*time.Second {
+		t.Fatalf("%s: silent at %s: error %v after the last progress, want about %v: %v", security, step, d, s.limitTime(), err)
 	}
 }
 
@@ -343,7 +390,7 @@ func TestSendMailSilence(t *testing.T) {
 		if err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", body); err != nil {
 			t.Fatalf("large message: %v after %v", err, time.Since(start))
 		}
-		if d := time.Since(start); d < 2*time.Second {
+		if d := time.Since(start); d < 2*s.limitTime() {
 			t.Fatalf("the message was taken in %v, the test proves nothing", d)
 		}
 		s.mu.Lock()
@@ -368,6 +415,7 @@ func TestSendMailSTARTTLSAndTLS(t *testing.T) {
 	cert := testMailCert(t)
 	for _, security := range []string{"starttls", "tls"} {
 		t.Run(security, func(t *testing.T) {
+			t.Parallel()
 			t.Run("slow answers", func(t *testing.T) {
 				t.Parallel()
 				sendSlowAnswers(t, security, cert)
@@ -390,19 +438,20 @@ func TestSendMailSTARTTLSAndTLS(t *testing.T) {
 // When the mail server is silent for smtp.timeout_sec and the connection is
 // cut, the error says so and gives the error of the read or write that was
 // cut, at every step: also at EHLO, where net/smtp tries HELO on the closed
-// connection and its own error would hide the cut.
+// connection and its own error would hide the cut. The wording of one
+// second is checked on its own (TestMailSilenceErrorWording).
 func TestSendMailSilenceErrorText(t *testing.T) {
 	cert := testMailCert(t)
 	for _, tc := range []struct{ security, step, want string }{
-		{"none", stepGreeting, "the mail server sent nothing for 1 second: "},
-		{"none", stepEHLO, "the mail server sent nothing for 1 second: "},
-		{"starttls", stepEHLO, "the mail server sent nothing for 1 second: "},
-		{"starttls", stepSTARTTLS, "the mail server sent nothing for 1 second: "},
-		{"tls", stepHandshake, "the mail server sent nothing for 1 second: "},
-		{"none", stepMail, "the mail server sent nothing for 1 second: "},
-		{"none", stepRcpt, "the mail server sent nothing for 1 second: "},
-		{"none", stepData, "the mail server sent nothing for 1 second: "},
-		{"none", stepMessage, "the mail server took nothing for 1 second: "},
+		{"none", stepGreeting, "the mail server sent nothing for 2 seconds: "},
+		{"none", stepEHLO, "the mail server sent nothing for 2 seconds: "},
+		{"starttls", stepEHLO, "the mail server sent nothing for 2 seconds: "},
+		{"starttls", stepSTARTTLS, "the mail server sent nothing for 2 seconds: "},
+		{"tls", stepHandshake, "the mail server sent nothing for 2 seconds: "},
+		{"none", stepMail, "the mail server sent nothing for 2 seconds: "},
+		{"none", stepRcpt, "the mail server sent nothing for 2 seconds: "},
+		{"none", stepData, "the mail server sent nothing for 2 seconds: "},
+		{"none", stepMessage, "the mail server took nothing for 2 seconds: "},
 	} {
 		t.Run(tc.security+" "+tc.step, func(t *testing.T) {
 			t.Parallel()
@@ -423,5 +472,26 @@ func TestSendMailSilenceErrorText(t *testing.T) {
 	cfg.From = "bad\r\nfrom@example.com"
 	if err := SendMailTo(cfg, []string{"a@example.com"}, "subject", "body"); err == nil || strings.Contains(err.Error(), "the mail server") {
 		t.Fatalf("a refused sender: %v", err)
+	}
+}
+
+// The silence error names what the server did not do and the limit, in the
+// singular for one second.
+func TestMailSilenceErrorWording(t *testing.T) {
+	cut := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	for _, tc := range []struct {
+		sec  int
+		read bool
+		want string
+	}{
+		{1, true, "the mail server sent nothing for 1 second: read tcp: i/o timeout"},
+		{1, false, "the mail server took nothing for 1 second: read tcp: i/o timeout"},
+		{30, true, "the mail server sent nothing for 30 seconds: read tcp: i/o timeout"},
+		{2, false, "the mail server took nothing for 2 seconds: read tcp: i/o timeout"},
+	} {
+		err := mailSilenceError(tc.sec, tc.read, cut)
+		if err.Error() != tc.want || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("%d s, read %v: %q, want %q wrapping the cut", tc.sec, tc.read, err, tc.want)
+		}
 	}
 }

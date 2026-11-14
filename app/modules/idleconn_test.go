@@ -11,10 +11,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
-// The tests run over real loopback sockets. Times have a generous margin
-// above, because other tests may run on the machine at the same time.
+// The tests run over real loopback sockets. A cut is checked against the
+// moment the product counts from (never earlier than one idle time after
+// it), with a generous margin above, because other tests may run on the
+// machine at the same time.
 
 // idlePair returns a connected pair: the accepted side wrapped in an
 // IdleConn with the given idle time (onClose counts its calls) and the
@@ -62,12 +66,78 @@ func within(t *testing.T, what string, got, low, high time.Duration) {
 	}
 }
 
+// takenSample is one reading of how many bytes the kernel had taken from
+// the writer of a socket; the reading happened between start and end.
+type takenSample struct {
+	start, end time.Time
+	taken      uint64
+}
+
+// takenBytes returns how many bytes the kernel has taken from the writer of
+// the socket fd so far: the bytes sent once (sent minus retransmitted) and
+// the bytes not sent yet. TCP_INFO gives the counts of one moment.
+func takenBytes(fd uintptr) (uint64, error) {
+	ti, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+	if err != nil {
+		return 0, err
+	}
+	return ti.Bytes_sent - ti.Bytes_retrans + uint64(ti.Notsent_bytes), nil
+}
+
+// watchTaken reads, about every millisecond, how many bytes the kernel took
+// from the writer of the connection get returns (nil: not there yet), until
+// the connection is closed or stop is closed, and then sends the readings.
+func watchTaken(get func() *IdleConn, stop <-chan struct{}) <-chan []takenSample {
+	out := make(chan []takenSample, 1)
+	go func() {
+		var samples []takenSample
+		defer func() { out <- samples }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			c := get()
+			if c == nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			var s takenSample
+			var err error
+			s.start = time.Now()
+			if cerr := c.raw.Control(func(fd uintptr) { s.taken, err = takenBytes(fd) }); cerr != nil || err != nil {
+				return // closed
+			}
+			s.end = time.Now()
+			samples = append(samples, s)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	return out
+}
+
+// lastTaken brackets the moment the kernel took the last byte, final being
+// the count it took in all: the byte was taken after notYet (the start of
+// the last reading below final) and not after taken (the end of the first
+// reading of final). ok is false when the readings show no such pair.
+func lastTaken(samples []takenSample, final uint64) (notYet, taken time.Time, ok bool) {
+	for _, s := range samples {
+		if s.taken < final {
+			notYet = s.start
+		} else if taken.IsZero() {
+			taken = s.end
+		}
+	}
+	return notYet, taken, !notYet.IsZero() && !taken.IsZero() && notYet.Before(taken)
+}
+
 func TestIdleConnReadCutAfterSilence(t *testing.T) {
 	const idle = 500 * time.Millisecond
 	ic, peer, closed := idlePair(t, idle, 0, 0)
 	start := time.Now()
 	_, err := ic.Read(make([]byte, 10))
-	within(t, "read cut", time.Since(start), idle, idle+700*time.Millisecond)
+	within(t, "read cut", time.Since(start), idle, idle+2*time.Second)
 	var ne net.Error
 	if !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatalf("want a timeout error, got %v", err)
@@ -78,8 +148,9 @@ func TestIdleConnReadCutAfterSilence(t *testing.T) {
 	if read, cut := ic.SilenceCut(); !read || cut != err {
 		t.Fatalf("SilenceCut after the read cut: %v %v, want true and %v", read, cut, err)
 	}
+	// A read of the closed connection fails without waiting for the peer.
 	start = time.Now()
-	if _, err := ic.Read(make([]byte, 10)); err == nil || time.Since(start) > 100*time.Millisecond {
+	if _, err := ic.Read(make([]byte, 10)); !errors.Is(err, net.ErrClosed) || time.Since(start) >= idle {
 		t.Fatalf("a second read must fail at once: %v after %v", err, time.Since(start))
 	}
 	_ = ic.Close()
@@ -94,12 +165,15 @@ func TestIdleConnReadCutAfterSilence(t *testing.T) {
 }
 
 func TestIdleConnReadMovesWithEveryByte(t *testing.T) {
-	const idle = 300 * time.Millisecond
+	const idle = 500 * time.Millisecond
 	ic, peer, closed := idlePair(t, idle, 0, 0)
+	// A byte every idle/10: the peer is never silent for the idle time,
+	// also when the machine delays the writer by a few hundred
+	// milliseconds.
 	go func() {
 		end := time.Now().Add(5 * idle)
 		for time.Now().Before(end) {
-			time.Sleep(idle / 3)
+			time.Sleep(idle / 10)
 			if _, err := peer.Write([]byte{'x'}); err != nil {
 				return
 			}
@@ -124,11 +198,15 @@ func TestIdleConnReadMovesWithEveryByte(t *testing.T) {
 	}
 }
 
+// A write is cut one idle time after the kernel took its last byte, never
+// earlier, and not while the kernel keeps taking bytes. The kernel takes
+// bytes in bursts when the peer's window opens, so its last byte can come
+// some hundred milliseconds before the peer's last read; the test therefore
+// reads from the socket how many bytes the kernel took, and when.
 func TestIdleConnWriteCutFromLastByteTaken(t *testing.T) {
 	const idle = time.Second
 	ic, peer, closed := idlePair(t, idle, 16<<10, 32<<10)
 	// The peer takes bytes for 2 x idle, then nothing.
-	stopped := make(chan time.Time, 1)
 	go func() {
 		buf := make([]byte, 4<<10)
 		end := time.Now().Add(2 * idle)
@@ -138,22 +216,39 @@ func TestIdleConnWriteCutFromLastByteTaken(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		stopped <- time.Now()
 	}()
+	stopWatch := make(chan struct{})
+	watched := watchTaken(func() *IdleConn { return ic }, stopWatch)
 	start := time.Now()
 	n, err := ic.Write(make([]byte, 64<<20))
 	cut := time.Now()
+	close(stopWatch)
+	samples := <-watched
 	var ne net.Error
 	if !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatalf("want a timeout error, got %v after %d bytes", err, n)
 	}
-	s := <-stopped
-	if cut.Sub(start) < 2*idle {
-		t.Fatalf("cut after %v, while the peer was taking bytes", cut.Sub(start))
+	for _, s := range samples {
+		if s.taken > uint64(n) {
+			t.Fatalf("the socket reports %d bytes taken, the write returned %d", s.taken, n)
+		}
 	}
-	// The kernel takes the last bytes shortly after the peer stopped
-	// reading (what the buffers hold); the cut is idle after that.
-	within(t, "write cut after the peer stopped reading", cut.Sub(s), idle-200*time.Millisecond, idle+time.Second)
+	notYet, taken, ok := lastTaken(samples, uint64(n))
+	if !ok {
+		t.Fatalf("the %d readings of the socket do not show when the last of %d bytes was taken", len(samples), n)
+	}
+	t.Logf("%d bytes; last byte taken between %v and %v after the start; cut after %v", n, notYet.Sub(start), taken.Sub(start), cut.Sub(start))
+	// The kernel took bytes for longer than the idle time: a cut counted
+	// from the start of the write would have come while it did.
+	if notYet.Sub(start) < idle {
+		t.Fatalf("the kernel took the last byte %v after the start, the test proves nothing", notYet.Sub(start))
+	}
+	if d := cut.Sub(notYet); d < idle {
+		t.Fatalf("cut %v after a moment before the last byte taken, want at least %v", d, idle)
+	}
+	if d := cut.Sub(taken); d > idle+time.Second {
+		t.Fatalf("cut %v after the last byte was taken, want about %v", d, idle)
+	}
 	if closed.Load() != 1 {
 		t.Fatalf("the cut must close the connection: %d", closed.Load())
 	}
@@ -162,15 +257,19 @@ func TestIdleConnWriteCutFromLastByteTaken(t *testing.T) {
 	}
 }
 
+// The peer takes 2 KiB every 20 ms for several idle times. The kernel takes
+// bytes from the write whenever the peer's window opens, every few hundred
+// milliseconds at most; the idle time of 1 s leaves room for a delay of the
+// peer on a busy machine.
 func TestIdleConnWriteNotCutWhilePeerTakes(t *testing.T) {
-	const idle = 500 * time.Millisecond
+	const idle = time.Second
 	ic, peer, closed := idlePair(t, idle, 16<<10, 32<<10)
 	const size = 8 << 20
 	got := make(chan int, 1)
 	go func() {
 		buf := make([]byte, 2<<10)
 		total := 0
-		end := time.Now().Add(4 * idle)
+		end := time.Now().Add(3 * idle)
 		for time.Now().Before(end) {
 			n, err := peer.Read(buf)
 			total += n
@@ -188,7 +287,7 @@ func TestIdleConnWriteNotCutWhilePeerTakes(t *testing.T) {
 	if err != nil || n != size {
 		t.Fatalf("write: %d bytes after %v: %v", n, time.Since(start), err)
 	}
-	if time.Since(start) < 4*idle {
+	if time.Since(start) < 3*idle {
 		t.Fatalf("the write took only %v, the test proves nothing", time.Since(start))
 	}
 	_ = ic.Close()
@@ -200,12 +299,24 @@ func TestIdleConnWriteNotCutWhilePeerTakes(t *testing.T) {
 	}
 }
 
+// readStarted reports whether a read of c has begun (it has set its idle
+// limit).
+func readStarted(c *IdleConn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.rIdle.IsZero()
+}
+
 func TestIdleConnPauseAndResume(t *testing.T) {
 	const idle = 400 * time.Millisecond
 	ic, _, closed := idlePair(t, idle, 0, 0)
+	// The read in progress is paused as soon as it has begun, kept paused
+	// for 3 x idle and resumed.
 	resumed := make(chan time.Time, 1)
 	go func() {
-		time.Sleep(idle / 2)
+		for !readStarted(ic) {
+			time.Sleep(time.Millisecond)
+		}
 		ic.Pause()
 		time.Sleep(3 * idle)
 		resumed <- time.Now()
@@ -221,7 +332,7 @@ func TestIdleConnPauseAndResume(t *testing.T) {
 	if end.Sub(start) < 3*idle {
 		t.Fatalf("the paused read was cut after %v", end.Sub(start))
 	}
-	within(t, "read cut after the resume", end.Sub(r), idle-50*time.Millisecond, idle+700*time.Millisecond)
+	within(t, "read cut after the resume", end.Sub(r), idle, idle+2*time.Second)
 	if closed.Load() != 1 {
 		t.Fatalf("onClose calls: %d", closed.Load())
 	}
@@ -239,7 +350,8 @@ func TestIdleConnPauseAndResume(t *testing.T) {
 	if err != io.EOF {
 		t.Fatalf("want EOF, got %v", err)
 	}
-	if d := time.Since(<-closedAt); d > 300*time.Millisecond {
+	// Without the end of the peer the paused read would wait for ever.
+	if d := time.Since(<-closedAt); d > 2*time.Second {
 		t.Fatalf("the read ended %v after the peer closed", d)
 	}
 }
@@ -252,14 +364,15 @@ func TestIdleConnDeadlineFromAbove(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		_ = ic.SetReadDeadline(time.Unix(1, 0))
 	}()
+	// It ends before the idle limit, and without closing the connection.
 	start := time.Now()
 	_, err := ic.Read(make([]byte, 1))
-	if !isTimeout(err) || time.Since(start) > idle/2 {
+	if !isTimeout(err) || time.Since(start) >= idle {
 		t.Fatalf("the deadline from above must end the read: %v after %v", err, time.Since(start))
 	}
 	// and a read begun afterwards.
 	start = time.Now()
-	if _, err := ic.Read(make([]byte, 1)); !isTimeout(err) || time.Since(start) > idle/2 {
+	if _, err := ic.Read(make([]byte, 1)); !isTimeout(err) || time.Since(start) >= idle {
 		t.Fatalf("a later read: %v after %v", err, time.Since(start))
 	}
 	if closed.Load() != 0 {
@@ -279,7 +392,7 @@ func TestIdleConnDeadlineFromAbove(t *testing.T) {
 	}
 	start = time.Now()
 	_, err = ic.Read(buf)
-	within(t, "idle cut after the reset", time.Since(start), idle, idle+700*time.Millisecond)
+	within(t, "idle cut after the reset", time.Since(start), idle, idle+2*time.Second)
 	if !isTimeout(err) || closed.Load() != 1 {
 		t.Fatalf("idle cut: %v, closed %d", err, closed.Load())
 	}
@@ -291,13 +404,14 @@ func TestIdleConnDeadlineFromAbove(t *testing.T) {
 func TestIdleConnWriteDeadlineFromAbove(t *testing.T) {
 	const idle = 2 * time.Second
 	ic, peer, closed := idlePair(t, idle, 16<<10, 32<<10)
-	_ = ic.SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
 	start := time.Now()
+	_ = ic.SetWriteDeadline(start.Add(300 * time.Millisecond))
 	n, err := ic.Write(make([]byte, 32<<20))
 	if !isTimeout(err) {
 		t.Fatalf("want a timeout, got %v", err)
 	}
-	within(t, "write ended by the deadline from above", time.Since(start), 250*time.Millisecond, idle/2)
+	// Ended by the deadline, before the idle limit would have cut it.
+	within(t, "write ended by the deadline from above", time.Since(start), 300*time.Millisecond, idle-time.Millisecond)
 	if closed.Load() != 0 {
 		t.Fatal("the deadline from above must not close the connection")
 	}

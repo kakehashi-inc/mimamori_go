@@ -17,6 +17,10 @@ import (
 // system's roots. Only tests set it.
 var mailRootCAs *x509.CertPool
 
+// mailDial connects to the mail server. It is DialIdle; only tests set it,
+// to watch the connection a mail uses.
+var mailDial = DialIdle
+
 // SendMailTo delivers one plain-text message to the given recipients
 // synchronously in the calling flow. cfg.TimeoutSec is the longest silence
 // of the mail server that is waited for: the name resolution (in all), the
@@ -34,7 +38,7 @@ func SendMailTo(cfg SMTPConfig, to []string, subject, body string) (err error) {
 	}
 	silence := time.Duration(cfg.TimeoutSec) * time.Second
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	raw, err := DialIdle(addr, silence)
+	raw, err := mailDial(addr, silence)
 	if err != nil {
 		return err
 	}
