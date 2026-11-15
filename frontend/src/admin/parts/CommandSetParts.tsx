@@ -28,9 +28,10 @@ import { hostZoneText, scheduleSummary } from '../components/commandSetDraft';
 import { StepUpCancelled, useStepUp } from '../components/StepUp';
 
 // Parts of the command set definitions: the section on the agent page
-// (slot agentDetail.sections), how a run was started in the run history
-// (slots commandRuns.headMiddle and commandRuns.rowMiddle) and in the run
-// detail (slot commandRun.summaryMiddle), the number of commands run (slot
+// (slot agentDetail.sections), how a run was started, with the occurrences
+// of the schedule skipped before a scheduled run, in the run history (slots
+// commandRuns.headMiddle and commandRuns.rowMiddle) and in the run detail
+// (slot commandRun.summaryMiddle), the number of commands run (slot
 // commandRun.summaryEnd) and the command line and note of each command in the
 // run detail (slot commandRun.itemStart).
 
@@ -446,7 +447,10 @@ function ImportDialog({
     );
 }
 
-/** Manual or schedule, with the scheduled time of a scheduled run. */
+/**
+ * Manual or schedule, with the scheduled time of a scheduled run and the
+ * occurrences of its schedule that were skipped before it.
+ */
 function RunTrigger({ run }: { run: CommandRun }) {
     const { t } = useTranslation();
     if (!run.trigger) return <span className='text-muted'>-</span>;
@@ -458,6 +462,27 @@ function RunTrigger({ run }: { run: CommandRun }) {
                     {t('commandSets.run.scheduledFor', { at: formatDateTime(run.scheduled_for) })}
                 </span>
             )}
+            <SkippedOccurrences run={run} />
+        </span>
+    );
+}
+
+/** How many occurrences of the schedule were skipped before a scheduled run, and when; nothing when none was. */
+function SkippedOccurrences({ run }: { run: CommandRun }) {
+    const { t } = useTranslation();
+    const count = run.skipped_count ?? 0;
+    if (count <= 0) return null;
+    const from = formatDateTime(run.skipped_from);
+    return (
+        <span className='flex max-w-80 min-w-56 items-start gap-1 text-xs text-warning'>
+            <span className='material-icons-outlined text-sm leading-4' aria-hidden='true'>
+                event_busy
+            </span>
+            <span>
+                {count === 1
+                    ? t('commandSets.run.skippedOne', { at: from })
+                    : t('commandSets.run.skipped', { count, from, to: formatDateTime(run.skipped_to) })}
+            </span>
         </span>
     );
 }

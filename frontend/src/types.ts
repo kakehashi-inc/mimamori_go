@@ -548,6 +548,10 @@ export interface CommandRun {
     // Present for administrators only.
     trigger?: 'manual' | 'schedule';
     scheduled_for?: string | null;
+    /** Occurrences of the schedule skipped before this scheduled run (0 when none), the first and the last of them. */
+    skipped_count?: number;
+    skipped_from?: string | null;
+    skipped_to?: string | null;
     request_id?: number;
     commands_total?: number;
     set_revision?: number;
