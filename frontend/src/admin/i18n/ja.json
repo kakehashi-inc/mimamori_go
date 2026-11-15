@@ -500,7 +500,7 @@
             "listSeparator": "、"
         },
         "local": {
-            "wholeNumber": "{{field}}: 整数を入力してください。",
+            "wholeNumberRange": "{{field}}: {{min}}〜{{max}} の整数を、数字 0〜9 で入力してください。",
             "onceAt": "{{field}}: 日時を入力してください。",
             "inCommand": "コマンド {{n}}: {{problem}}"
         },

@@ -125,7 +125,9 @@ function EditForm({ list, setId, back }: { list: CommandSetList; setId?: number;
 
     return (
         <>
+            {/* The form's own texts report the values (noValidate keeps the browser's messages away). */}
             <form
+                noValidate
                 className='flex max-w-5xl flex-col gap-4'
                 onSubmit={e => {
                     e.preventDefault();

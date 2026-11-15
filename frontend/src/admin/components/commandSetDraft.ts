@@ -1,7 +1,7 @@
 // Form state of the command set editor and its conversion from and to the
 // definition the API takes, the schedule summary and the code spec helpers.
 import type { TFunction } from 'i18next';
-import { wholeNumber } from '../../utils/wholeNumber';
+import { wholeNumber, wholeNumberIn } from '../../utils/wholeNumber';
 import type {
     CodeSpec,
     CodeSpecKind,
@@ -22,9 +22,13 @@ export const EVERY_MINUTES = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30];
 export const CODE_KINDS: CodeSpecKind[] = ['single', 'range', 'min', 'max'];
 export const ON_PROBLEMS: OnProblems[] = ['stop', 'continue_on_failure', 'continue_always'];
 
-// Defaults of the server (app/modules/commandspec.go).
+// Defaults and limits of the server (app/modules/constants.go).
 export const DEFAULT_KEEP_RUNS = 100;
 export const DEFAULT_LINE_LIMIT = 20;
+const MAX_KEEP_RUNS = 10000;
+const MAX_LINE_LIMIT = 10000;
+const MAX_TIMEOUT_SEC = 86400;
+const MAX_EXIT_CODE = 255;
 // Time limit (seconds) the field of a newly added command shows. The server
 // fills in no time limit: an empty field is sent as 0, which is no limit.
 export const INITIAL_TIMEOUT_SEC = 300;
@@ -271,33 +275,35 @@ export function draftToSpec(d: SetDraft): CommandSetSpec {
 
 /**
  * Problems the form finds before the server is asked: number fields that are
- * empty or not whole numbers (JSON would send them as null, which the server
- * takes as "use the default"; an empty time limit is 0, no limit) and a
- * missing once time. Ranges and everything else are checked by the server.
+ * not whole numbers in their range by the number rule (an empty time limit
+ * is 0, no limit; other empty fields are no number) and a missing once time.
+ * They are reported with the screen's own texts and nothing is saved; the
+ * form leaves the browser's own validation out (noValidate). Everything else
+ * is checked by the server.
  */
 export function draftProblems(t: TFunction, d: SetDraft): string[] {
     const out: string[] = [];
-    const whole = (value: string, field: string) => {
-        if (!isWhole(value)) out.push(t('commandSets.local.wholeNumber', { field }));
+    const inRange = (value: string, field: string, min: number, max: number) => {
+        if (!wholeNumberIn(value, min, max)) out.push(t('commandSets.local.wholeNumberRange', { field, min, max }));
     };
-    whole(d.keepRuns, t('commandSets.fields.keepRuns'));
+    inRange(d.keepRuns, t('commandSets.fields.keepRuns'), 1, MAX_KEEP_RUNS);
     if (d.runMode === 'schedule') {
         if (d.kind === 'once' && localInputToOffsetTime(d.onceAt) === '')
             out.push(t('commandSets.local.onceAt', { field: t('commandSets.editor.onceAt') }));
-        if (d.kind === 'hourly_at') whole(d.minute, t('commandSets.editor.minuteOfHour'));
+        if (d.kind === 'hourly_at') inRange(d.minute, t('commandSets.editor.minuteOfHour'), 0, 59);
     }
     d.commands.forEach((c, i) => {
         const prefix = (p: string) => t('commandSets.local.inCommand', { n: i + 1, problem: p });
         const before = out.length;
         // An empty time limit is 0 (no limit).
-        if (c.timeoutSec !== '') whole(c.timeoutSec, t('commandSets.fields.timeoutSec'));
-        if (d.purpose === 'collect_output') whole(c.lineLimit, t('commandSets.fields.lineLimit'));
+        if (c.timeoutSec !== '') inRange(c.timeoutSec, t('commandSets.fields.timeoutSec'), 0, MAX_TIMEOUT_SEC);
+        if (d.purpose === 'collect_output') inRange(c.lineLimit, t('commandSets.fields.lineLimit'), 1, MAX_LINE_LIMIT);
         for (const [spec, label] of [
             [c.success, t('commandSets.fields.success')],
             [c.failure, t('commandSets.fields.failure')],
         ] as const) {
-            whole(spec.a, label);
-            if (spec.kind === 'range') whole(spec.b, label);
+            inRange(spec.a, label, 0, MAX_EXIT_CODE);
+            if (spec.kind === 'range') inRange(spec.b, label, 0, MAX_EXIT_CODE);
         }
         for (let k = before; k < out.length; k++) out[k] = prefix(out[k]);
     });
@@ -338,7 +344,7 @@ function codeRanges(pick: (code: number) => boolean): string {
 
 /** Whether a code spec is complete and accepted by the server (whole numbers 0 to 255, a range from low to high). */
 export function codeDraftValid(c: CodeDraft): boolean {
-    const inRange = (s: string) => isWhole(s) && num(s) <= 255;
+    const inRange = (s: string) => wholeNumberIn(s, 0, MAX_EXIT_CODE);
     if (!inRange(c.a)) return false;
     return c.kind !== 'range' || (inRange(c.b) && num(c.b) > num(c.a));
 }

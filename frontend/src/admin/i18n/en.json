@@ -500,7 +500,7 @@
             "listSeparator": ", "
         },
         "local": {
-            "wholeNumber": "{{field}}: enter a whole number.",
+            "wholeNumberRange": "{{field}}: enter a whole number from {{min}} to {{max}}, written with the digits 0 to 9.",
             "onceAt": "{{field}}: enter a date and time.",
             "inCommand": "Command {{n}}: {{problem}}"
         },
