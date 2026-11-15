@@ -103,7 +103,7 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 | `ctl rules history ID` | List the versions of a rule |
 | `ctl rules diff ID FROM TO` | Show the difference between two versions |
 | `ctl rules apply ID --agent ID... [--version V]` | Apply a version (default: latest) to agents (an agent given more than once counts once; an agent that does not exist is an argument error) |
-| `ctl rules unassign --agent ID...` | Take the rule away from agents: at its next sync each agent removes the audit rules it loaded and its rules file, and reports that nothing is applied (an agent without a rule is left as it is and not counted; an agent given more than once counts once; an agent that does not exist is an argument error) |
+| `ctl rules unassign --agent ID...` | Take the rule away from agents: after its next sync each agent removes the audit rules it loaded and its rules file in its next monitoring step, and reports that nothing is applied (an agent without a rule is left as it is and not counted; an agent given more than once counts once; an agent that does not exist is an argument error) |
 | `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version (default: latest) |
 | `ctl rules delete ID` | Delete a rule (not possible while applied) |
 
