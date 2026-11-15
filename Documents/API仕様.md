@@ -282,7 +282,7 @@ interface CommandSpec {
   patterns: string[];                 // 正規表現（名前付きグループが必須）。出力収集だけ（実行のみで指定すると 400）
 }
 interface CommandSetSpec {
-  name: string;                       // 1〜100 文字、制御文字なし。監視対象の中で一意
+  name: string;                       // 前後の空白を除いて 1〜100 文字、制御文字なし（前後も含む）。監視対象の中で一意
   description: string;                // 1000 文字まで
   purpose: 'collect_output' | 'run_only';
   os_user: string;                    // 1〜256 文字、空白と制御文字なし、先頭が '-' でない
@@ -406,7 +406,7 @@ interface Token {
 ```
 
 - 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザの管理者には略した形だけを返し、閲覧者にはトークンの値を返しません（一覧と詳細の `value` を省く。エージェントの一覧と詳細が含むトークンの参照にも値はありません）。
-- `valid_days` を省略または 0 にすると設定の既定値を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は `[A-Za-z0-9._-]{1,64}` で一意です。
+- `valid_days` を省略または 0 にすると設定の既定値を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は前後の空白を除いて `[A-Za-z0-9._-]{1,64}` で一意です（前後にタブや改行などの制御文字がある名前は 400）。
 
 ## 6. 監視ルール
 
@@ -475,7 +475,7 @@ interface RuleCreate {
   - 書き込み可能な状態: `writable.base` と `writable.category`
   - 実行されるファイル: `writable.base` と `writable.allowed_paths` と `exec_files.extensions` と `exec_files.other_category`
 - 入力の検証（違反は 400）:
-  - 監視ルール名は、前後の空白を除いて 1〜100 文字です（範囲の外は `rule name must be 1-100 characters`）。制御文字（Unicode の制御文字。タブ、改行、NUL、DEL、C1 制御文字を含む。表示名と同じ）を含む名前は `the rule name must not contain control characters`（コード `rule.name_control`）です。
+  - 監視ルール名は、前後の空白を除いて 1〜100 文字です（範囲の外は `rule name must be 1-100 characters`）。制御文字（Unicode の制御文字。タブ、改行、NUL、DEL、C1 制御文字を含む。表示名と同じ）を含む名前は、前後にあるものも含めて `the rule name must not contain control characters`（コード `rule.name_control`）です（前後の空白を除くのは、制御文字の無い名前だけです）。
   - `check_interval_sec` は 0 または 10〜3600、`scan_interval_sec` は 0 または 60〜604800 です。
   - `users`、`read.dirs`、`network.executables`、`writable.allowed_paths`、`exec_files.legit` は各 200 件まで、`exec_files.extensions` は 50 件までです。
   - `writable.base` は絶対パスで、`/` は使えません。`read.dirs` と `network.executables` も絶対パスです。
@@ -489,7 +489,7 @@ interface RuleCreate {
 | --- | --- | --- | --- | --- |
 | GET | `/templates` | V | - | `TemplateSummary[]` |
 | GET | `/templates/{name}` | V | - | `TemplateDetail` |
-| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版。名前は `[A-Za-z0-9._-]{1,64}`、組み込みと同名または既存と重複は 409） |
+| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版。名前は前後の空白を除いて `[A-Za-z0-9._-]{1,64}`（前後にタブや改行などの制御文字がある名前は 400）、組み込みと同名または既存と重複は 409） |
 | PUT | `/templates/{name}` | A | `{"description"?,"content"}` | `TemplateDetail`（`description` を省略すると現在の説明を保つ。組み込みは 403） |
 | DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403） |
 
@@ -612,7 +612,7 @@ interface Account {
 
 - 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です（確認と変更は 1 つの書き込みのトランザクションで行うため、同時の要求でも有効な管理者が 0 人になることはありません）。
 - メールアドレス（ログイン ID）は前後の空白を除いて 254 バイト以下（UTF-8 のバイト数。超えると `the e-mail address must be at most 254 bytes`）の、表示名や引用符の無い 1 つのアドレスです（空白、制御文字、`"` `<` `>` `,` は不可。ドメインのドットは不要で `user@localhost` も可）。大文字と小文字を区別せずに一意です。
-- 表示名は前後の空白を除いて 1〜64 文字で、制御文字は使えません。重複してもかまいません。
+- 表示名は前後の空白を除いて 1〜64 文字で、制御文字は前後も含めて使えません（前後の空白を除くのは、制御文字の無い名前だけです）。重複してもかまいません。
 - パスワードは 10 文字以上、256 バイトまでです。
 - 通知メール（検知の通知）の宛先は、`notify` が `true` で無効化されていないアカウントのアドレスだけです（詳細は [システム仕様.md](システム仕様.md) の 12.2）。`notify` の変更は履歴（`account`、操作 `notify_changed`、詳細 `notification mails on` / `notification mails off`）に残します。値が変わらない要求は何も記録せずに `Account` を返します。
 

@@ -610,7 +610,7 @@ func (c *core) handleImportCommandSets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		spec := def.CommandSetSpec
-		if name := strings.TrimSpace(it.Name); name != "" {
+		if name := modules.TrimName(it.Name); name != "" {
 			spec.Name = name
 		}
 		// The definition was valid at the source; the check covers the

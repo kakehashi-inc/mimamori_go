@@ -485,7 +485,7 @@ func ParseCommandSetSpec(data []byte) (*CommandSetSpec, error) {
 // problems", line limit) and makes the form stable. The time limit is never
 // filled in: an omitted one is 0, no limit. Command lines are never changed.
 func (s *CommandSetSpec) Normalize() {
-	s.Name = strings.TrimSpace(s.Name)
+	s.Name = TrimName(s.Name)
 	s.OSUser = strings.TrimSpace(s.OSUser)
 	s.Purpose = strings.TrimSpace(s.Purpose)
 	if s.KeepRuns == 0 {

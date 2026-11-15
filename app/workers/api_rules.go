@@ -18,9 +18,9 @@ import (
 
 var tokenNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
-// ruleNameProblem returns the refusal of a rule name (without surrounding
-// white space): it is 1 to modules.MaxRuleNameLength characters and has no
-// control character (unicode.IsControl, as display names).
+// ruleNameProblem returns the refusal of a rule name (modules.TrimName): it
+// is 1 to modules.MaxRuleNameLength characters and has no control character
+// (unicode.IsControl, as display names).
 func ruleNameProblem(name string) error {
 	if name == "" || utf8.RuneCountInString(name) > modules.MaxRuleNameLength {
 		return modules.M("rule.name_invalid")
@@ -308,7 +308,7 @@ func (c *core) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
+	in.Name = modules.TrimName(in.Name)
 	if err := ruleNameProblem(in.Name); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -667,7 +667,7 @@ func (c *core) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *core) createTemplate(w http.ResponseWriter, r *http.Request, name, desc string, content *modules.RuleContent, origin modules.Msg) {
-	name = strings.TrimSpace(name)
+	name = modules.TrimName(name)
 	if !tokenNameRe.MatchString(name) {
 		writeError(w, http.StatusBadRequest, modules.M("template.name_invalid"))
 		return

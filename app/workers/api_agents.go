@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"mimamori/app/models"
@@ -452,7 +451,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
+	in.Name = modules.TrimName(in.Name)
 	if !tokenNameRe.MatchString(in.Name) {
 		writeError(w, http.StatusBadRequest, modules.M("token.name_invalid"))
 		return

@@ -40,9 +40,10 @@ func ValidateEmail(s string) (string, error) {
 
 // ValidateDisplayName checks the display name of an account and returns it
 // without surrounding white space: 1 to 64 characters, no control
-// characters. Display names need not be unique.
+// characters (also none around it, TrimName). Display names need not be
+// unique.
 func ValidateDisplayName(s string) (string, error) {
-	s = strings.TrimSpace(s)
+	s = TrimName(s)
 	if s == "" {
 		return "", M("account.display_name_required")
 	}
