@@ -96,6 +96,10 @@ func (rt *AgentRuntime) communicateOnce(next *time.Time, lastEnd *time.Time) boo
 	start := time.Now()
 	rt.recovered("communication panic", rt.round)
 	*lastEnd = time.Now()
+	if rt.roundPace != nil {
+		*next = lastEnd.Add(rt.roundPace())
+		return true
+	}
 	*next = start.Add(rt.link.interval())
 	if gap := lastEnd.Add(roundGap); gap.After(*next) {
 		*next = gap
@@ -120,7 +124,11 @@ func (rt *AgentRuntime) waitRound(next *time.Time, lastEnd time.Time) bool {
 			t.Stop()
 			return false
 		case <-rt.early:
-			*next = lastEnd.Add(roundGap)
+			gap := roundGap
+			if rt.roundPace != nil {
+				gap = rt.roundPace()
+			}
+			*next = lastEnd.Add(gap)
 		case <-t.C:
 		}
 		t.Stop()

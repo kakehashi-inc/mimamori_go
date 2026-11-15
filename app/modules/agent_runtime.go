@@ -106,9 +106,12 @@ type AgentRuntime struct {
 	cmdKillGrace time.Duration
 	recordRetry  time.Duration
 	// scanLimit replaces MaxScanEntries and removeAudit replaces
-	// RemoveAuditRules in tests.
+	// RemoveAuditRules in tests; roundPace, when set, gives the time from
+	// the end of a round to the next one instead of the check interval (the
+	// stress test of the agent has rounds every few milliseconds).
 	scanLimit   int
 	removeAudit func(restore *AuditGlobals) error
+	roundPace   func() time.Duration
 }
 
 // monitorState is what only the monitoring step uses.
