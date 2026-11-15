@@ -157,38 +157,110 @@ func TestQueueMonitoringEntry(t *testing.T) {
 	}
 }
 
-// TestSyncSaysFreeWorker: the sync says free_worker when a worker is idle once
-// the entries that may start now are taken and no manual entry waits; not
-// while the only worker processes an entry.
+// TestSyncSaysFreeWorker: the sync says free_worker when the agent has more
+// workers than command set runs in progress plus command set entries that
+// may start now and wait for a worker. The monitoring entry does not count
+// (queued, due or being processed), nor does a manual entry that waits
+// because its own set runs or is held by a surviving process group.
 func TestSyncSaysFreeWorker(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	rt, s := newTestQueue(t, &now)
-	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true"), testSet(2, PurposeRunOnly, "true")))
+	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true"), testSet(2, PurposeRunOnly, "true"),
+		testSet(3, PurposeRunOnly, "true")))
+	exp := now.Unix() + 3600
+	request := func(id, set int64) {
+		receiveRequests(rt, []CommandRunRequest{{ID: id, SetID: set, RequestedAt: now.Unix(), ExpiresAt: exp}})
+	}
+	setRunning := func(set int64, on bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if on {
+			s.running[set] = true
+		} else {
+			delete(s.running, set)
+		}
+	}
+
+	// One worker: the monitoring step is due (the start) or being processed,
+	// and no run is in progress: free. A request handed over then runs when
+	// the step ended, before the monitoring entry queued after it.
 	s.start()
-	if s.freeWorker() {
-		t.Fatal("one worker, the monitoring step may start: free")
-	}
-	pick(s)
-	if s.freeWorker() {
-		t.Fatal("one worker, it processes the monitoring step: free")
-	}
-	s.doneMonitor(time.Minute)
 	if !s.freeWorker() {
-		t.Fatal("one worker, nothing to do: not free")
+		t.Fatal("one worker, the monitoring step due, no run: not free")
 	}
-	s.mu.Lock()
-	s.running[1] = true
-	s.mu.Unlock()
+	if u := pick(s); u == nil || !u.monitor {
+		t.Fatalf("the monitoring step: %+v", u)
+	}
+	if !s.freeWorker() {
+		t.Fatal("one worker, the monitoring step being processed, no run: not free")
+	}
+	request(1, 1)
+	now = now.Add(2 * time.Second)
+	s.doneMonitor(0)
+	if u := pick(s); u == nil || u.job == nil || u.job.requestID != 1 {
+		t.Fatalf("after the step: %+v, want the request handed over during it", u)
+	}
+	// The monitoring entry queued after the step (due at once) comes next;
+	// its next one is an hour away.
+	if u := pick(s); u == nil || !u.monitor {
+		t.Fatalf("the monitoring step after the run: %+v", u)
+	}
+	s.doneMonitor(time.Hour)
+	// One worker, a command runs: not free.
 	if s.freeWorker() {
-		t.Fatal("one worker, one set runs: free")
+		t.Fatal("one worker, a run in progress: free")
 	}
+	s.doneRun(&commandJob{def: s.valid[1], requestID: 1})
+
+	// One worker, a run startable now and waiting for the worker: not free.
+	request(2, 2)
+	if s.freeWorker() {
+		t.Fatal("one worker, a run waits for it: free")
+	}
+	if u := pick(s); u == nil || u.job == nil || u.job.requestID != 2 {
+		t.Fatalf("the waiting run: %+v", u)
+	}
+	s.doneRun(&commandJob{def: s.valid[2], requestID: 2})
+
+	// Four workers: set 1 runs and a second request of set 1 waits for that
+	// run: free, and a request of set 2 is taken and runs.
+	s.setWorkers(4)
+	setRunning(1, true)
+	request(3, 1)
+	if !s.freeWorker() {
+		t.Fatal("four workers, one run, a request waiting for its own set: not free")
+	}
+	request(4, 2)
+	if u := pick(s); u == nil || u.job == nil || u.job.requestID != 4 {
+		t.Fatalf("the request of set 2: %+v", u)
+	}
+	// A request of a set held by a surviving group does not count either.
+	survivor := startSurvivor(t)
+	s.hold(3, survivor.Pid)
+	request(5, 3)
+	s.setWorkers(3)
+	if !s.freeWorker() {
+		t.Fatal("three workers, two runs, the requests of a running and of a held set waiting: not free")
+	}
+
+	// Two workers, two runs: not free.
 	s.setWorkers(2)
-	if !s.freeWorker() {
-		t.Fatal("two workers, one set runs: not free")
-	}
-	receiveRequests(rt, []CommandRunRequest{{ID: 5, SetID: 1, RequestedAt: now.Unix(), ExpiresAt: now.Unix() + 60}})
 	if s.freeWorker() {
-		t.Fatal("a manual entry waits: free")
+		t.Fatal("two workers, two runs: free")
+	}
+	setRunning(1, false)
+}
+
+// TestFirstSyncSaysFreeWorker: with one worker, the first sync after the
+// start (the monitoring step is due or being processed then) says
+// free_worker, so the central hands a request over at once.
+func TestFirstSyncSaysFreeWorker(t *testing.T) {
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	stop, _ := stopWhen(t, func() bool { return len(tr.seen()) >= 2 })
+	rt.Run(stop)
+	if seen := tr.seen(); !seen[0].freeWorker || !seen[1].freeWorker {
+		t.Fatalf("free_worker of the first syncs: %+v", seen)
 	}
 }
 

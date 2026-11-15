@@ -55,10 +55,6 @@ func TestDefinitionsLargerThanRequestBody(t *testing.T) {
 	db := agentLocalDB(t)
 	var logs lockedBuffer
 	rt := modules.NewAgentRuntime(db, tr, log.New(&logs, "", 0))
-	// Two workers: one is free while the other processes the first
-	// monitoring step, so the first sync says free_worker and the central
-	// hands the request over in it.
-	rt.SetWorkers(2)
 	stop, quit := make(chan struct{}), make(chan struct{})
 	defer close(quit)
 	go func() {

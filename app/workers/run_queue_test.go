@@ -1273,7 +1273,8 @@ func executionsOf(t *testing.T, db *modules.DB, requestID int64) int {
 
 // A real agent with two workers runs a request of a set; a second request of
 // the same set is handed to it (a worker is free) and waits in the agent
-// while the set runs, so its syncs then say free_worker false. The agent is
+// while the set runs; it does not count as work for a worker, so the syncs
+// still say free_worker true (the other worker is idle). The agent is
 // stopped: its last report says stopping and closes the interrupted run, and
 // the request that waited goes back to queued at once. Started again, the
 // agent is handed that request at its first sync and runs it once.
@@ -1299,8 +1300,8 @@ func TestAgentStopGivesWaitingRequestBack(t *testing.T) {
 	waitFor(t, "the second request to be handed over", func() bool { return reqState(t, e, a.ID, second) == models.RequestDelivered })
 	n := len(tr1.sentSyncs())
 	waitFor(t, "a sync while the second request waits", func() bool { return len(tr1.sentSyncs()) > n+1 })
-	if last := tr1.sentSyncs()[len(tr1.sentSyncs())-1]; !strings.Contains(last, `"free_worker":false`) {
-		t.Fatalf("sync while a manual request waits in the agent: %s", last)
+	if last := tr1.sentSyncs()[len(tr1.sentSyncs())-1]; !strings.Contains(last, `"free_worker":true`) {
+		t.Fatalf("sync while a manual request waits for its own set in the agent: %s", last)
 	}
 	stop()
 	wantStates(t, e, "after the stop", a.ID, first, models.RequestDone, a.ID, second, models.RequestQueued)

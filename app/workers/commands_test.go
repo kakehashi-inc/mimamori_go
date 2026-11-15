@@ -833,10 +833,6 @@ func TestCommandSetEndToEnd(t *testing.T) {
 	}
 	defer db.Close()
 	rt := modules.NewAgentRuntime(db, &inProcessTransport{c: e.c, agentID: b.ID}, log.New(io.Discard, "", 0))
-	// Two workers: one is free while the other processes the first
-	// monitoring step, so the first sync says free_worker and the central
-	// hands the request over in it.
-	rt.SetWorkers(2)
 	// Stop the agent once the run is recorded finished.
 	stop, quit := make(chan struct{}), make(chan struct{})
 	defer close(quit)

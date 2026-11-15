@@ -554,21 +554,20 @@ func (s *agentScheduler) setWorkers(n int) {
 }
 
 // freeWorker reports whether the agent can take a manual run request now
-// (free_worker of the sync): a worker is idle once the entries that may
-// start now are taken, and no manual entry waits in the queue.
+// (free_worker of the sync): it has more workers than command set runs in
+// progress plus command set entries that may start now and wait for a
+// worker. The monitoring entry does not count (queued, due or being
+// processed: a request taken meanwhile runs when the step ended, before a
+// monitoring entry that became startable later), nor does an entry that
+// waits because its own set runs, is held by a surviving process group or
+// waits for the record of its interrupted run.
 func (s *agentScheduler) freeWorker() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	busy := len(s.running)
-	if s.monitoring {
-		busy++
-	}
 	for _, e := range s.entries {
-		if e.request != nil {
-			return false
-		}
-		if !e.startAt.After(now) && !s.blockedLocked(e) {
+		if !e.monitor && !e.startAt.After(now) && !s.blockedLocked(e) {
 			busy++
 		}
 	}
