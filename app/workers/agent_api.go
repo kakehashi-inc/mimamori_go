@@ -99,14 +99,14 @@ func (c *core) agentAuthFailed(w http.ResponseWriter, r *http.Request, err error
 // recorded or handed over. Then one transaction of the central database
 // records the sync (so the agent is responding again in it, also when it
 // had said that it stops) with the check interval the answer gives the
-// agent (see answeredInterval), the signature of the definitions the agent
-// holds, ends the running requests the agent no longer lists (only when it
-// sent the list), stores a new token renewal value with its history row
-// and, when the sync says free_worker, hands the oldest queued request of
-// this agent over; every delivered request of the agent is sent with the
-// answer (again with every sync until the agent answers it; the agent runs a
-// request at most once and answers it again). Requests of other agents play
-// no role.
+// agent (SyncResponse.CheckInterval, which the agent uses as well), the
+// signature of the definitions the agent holds, ends the running requests
+// the agent no longer lists (only when it sent the list), stores a new token
+// renewal value with its history row and, when the sync says free_worker,
+// hands the oldest queued request of this agent over; every delivered
+// request of the agent is sent with the answer (again with every sync until
+// the agent answers it; the agent runs a request at most once and answers it
+// again). Requests of other agents play no role.
 //
 // Only a queued request with an id up to the one read before the
 // definitions is handed over. A request is created after its set was read
@@ -138,7 +138,7 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 	if err := c.commandSync(agent, req, resp); err != nil {
 		return nil, err
 	}
-	interval := answeredInterval(resp)
+	interval := resp.CheckInterval()
 	cas := c.trustedCAs()
 	// A token close to its expiry is offered a renewal value; a new one is
 	// made when none was handed out or the one handed out expired, and
@@ -226,18 +226,6 @@ func (c *core) centralSync(agent *models.Agent, tok *models.Token, req *modules.
 		}
 	}
 	return resp, nil
-}
-
-// answeredInterval returns the check interval a sync answer gives the agent
-// for its next rounds: that of the assigned rule version it carries
-// (RuleContent.CheckInterval, the agent's own reading of it), else the
-// central's default it carries. The central judges whether the agent is
-// responding by this interval until the agent syncs again.
-func answeredInterval(resp *modules.SyncResponse) int {
-	if resp.Rule != nil {
-		return resp.Rule.Content.CheckInterval()
-	}
-	return resp.DefaultIntervalSec
 }
 
 func (c *core) ruleAssignment(ruleID int64, version int) (*modules.RuleAssignment, error) {

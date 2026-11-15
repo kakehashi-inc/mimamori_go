@@ -147,7 +147,7 @@ func newParallelRuntime(t *testing.T, tr *parTransport, n int) *AgentRuntime {
 	t.Helper()
 	rt := newCommandRuntime(t, tr)
 	rt.SetWorkers(n)
-	rt.link.defaultInterval = 1
+	rt.link.syncInterval = 1
 	tr.db = rt.DB
 	tr.resp.DefaultIntervalSec = 1
 	return rt
@@ -376,7 +376,7 @@ func TestStopWithSeveralSets(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 3)
-	rt.link.defaultInterval = 60
+	rt.link.syncInterval = 60
 	tr.resp.DefaultIntervalSec = 60
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 30", "true"), testSet(2, PurposeRunOnly, "sleep 30"),
 		testSet(3, PurposeRunOnly, "sleep 30"))

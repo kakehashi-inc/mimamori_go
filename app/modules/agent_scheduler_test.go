@@ -343,7 +343,7 @@ func TestEarlyRoundAfterManualRun(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 1)
-	rt.link.defaultInterval = 60
+	rt.link.syncInterval = 60
 	tr.resp.DefaultIntervalSec = 60
 	sched := testSet(2, PurposeRunOnly, "sleep 1.5")
 	sched.RunMode = RunModeSchedule

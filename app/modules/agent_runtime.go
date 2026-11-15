@@ -30,6 +30,9 @@ const (
 	stateScanPrevRoots  = "scan_prev_roots"
 	stateDroppedPending = "dropped_pending"
 	stateLastAuditEvent = "last_audit_event"
+	// The check interval the last sync answer gave the agent, in seconds
+	// (SyncResponse.CheckInterval), used until the first sync after a start.
+	stateCheckInterval = "check_interval"
 	// The batch of queued items being sent: its identity and the ids of its
 	// items (outboxBatch as JSON), until the central answered it.
 	stateOutboxBatch = "outbox_batch"
@@ -121,12 +124,13 @@ type monitorState struct {
 
 // syncLink is what the communication flow and the monitoring step hand each
 // other, under its own mutex: the monitoring step publishes what it applied
-// (sent with every sync, and the check interval); the communication flow
-// puts what the last sync brought (the rule assignment and the central's
-// default check interval), which the next monitoring step applies.
+// (sent with every sync); the communication flow puts what the last sync
+// brought (the rule assignment, which the next monitoring step applies, and
+// the check interval of the rounds and the monitoring entry).
 type syncLink struct {
 	mu sync.Mutex
-	// Published by the monitoring step.
+	// Published by the monitoring step. ruleInterval is the applied rule's
+	// check interval, used only while no sync gave one (syncInterval 0).
 	ruleID       int64
 	ruleVersion  int
 	ruleInterval int
@@ -134,11 +138,13 @@ type syncLink struct {
 	failedRule   string
 	lastApply    *ApplyResult
 	// Put by the communication flow. known: a sync brought an assignment;
-	// cas are the CAs the agent trusts.
-	known           bool
-	cas             []string
-	assigned        *RuleAssignment
-	defaultInterval int
+	// cas are the CAs the agent trusts; syncInterval is the check interval
+	// the last sync answer gave (SyncResponse.CheckInterval; at the start
+	// the one stored from the last sync, 0 when none is stored).
+	known        bool
+	cas          []string
+	assigned     *RuleAssignment
+	syncInterval int
 }
 
 // publish takes over what the monitoring step applied.
@@ -165,31 +171,39 @@ func (l *syncLink) applied() (ruleID int64, ruleVersion int, lastApply *ApplyRes
 	return l.ruleID, l.ruleVersion, l.lastApply
 }
 
-// interval is the check interval: the applied rule's, else the central's
-// default from the last sync.
+// interval is the check interval of the rounds and of the monitoring entry:
+// the one the last sync answer gave (that of the assigned rule version, else
+// the central's default of that answer), whatever the application of the
+// assignment gave, so that the agent uses the interval by which the central
+// judges it. Before the first sync after a start without a stored one: the
+// applied rule's, else DefaultCheckIntervalSec.
 func (l *syncLink) interval() time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.ruleInterval > 0 {
+	switch {
+	case l.syncInterval > 0:
+		return time.Duration(l.syncInterval) * time.Second
+	case l.ruleInterval > 0:
 		return time.Duration(l.ruleInterval) * time.Second
 	}
-	return time.Duration(l.defaultInterval) * time.Second
+	return DefaultCheckIntervalSec * time.Second
 }
 
-// offer puts what a sync brought and reports whether the assignment differs
-// from what is applied (a version whose application failed does not count:
-// it is not tried again).
-func (l *syncLink) offer(rule *RuleAssignment, defaultInterval int) bool {
+// offer puts what a sync brought: the rule assignment and the check interval
+// the answer gives (0 keeps the interval). It reports whether the assignment
+// differs from what is applied (a version whose application failed does not
+// count: it is not tried again) and whether the interval changed.
+func (l *syncLink) offer(rule *RuleAssignment, interval int) (differs, intervalChanged bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if defaultInterval > 0 {
-		l.defaultInterval = defaultInterval
+	if interval > 0 && interval != l.syncInterval {
+		l.syncInterval, intervalChanged = interval, true
 	}
 	l.known, l.assigned = true, rule
 	if rule == nil {
-		return l.holds
+		return l.holds, intervalChanged
 	}
-	return (rule.ID != l.ruleID || rule.Version != l.ruleVersion) && ruleKey(rule) != l.failedRule
+	return (rule.ID != l.ruleID || rule.Version != l.ruleVersion) && ruleKey(rule) != l.failedRule, intervalChanged
 }
 
 // setCAs puts the CAs the agent trusts (the communication flow saved them).
@@ -217,7 +231,10 @@ func (l *syncLink) assignment() (rule *RuleAssignment, known bool) {
 // NewAgentRuntime loads the stored state. tr is the transport to the central.
 func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntime {
 	rt := &AgentRuntime{DB: db, Logger: logger, workers: 1, comm: commState{transport: tr}, early: make(chan struct{}, 1)}
-	rt.link.defaultInterval = DefaultCheckIntervalSec
+	// The program wrote the stored interval itself (a positive number).
+	if n, err := strconv.Atoi(models.GetLocalState(db.Read(), stateCheckInterval)); err == nil && n > 0 {
+		rt.link.syncInterval = n
+	}
 	rt.out = newOutbox(db, rt.logf)
 	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
@@ -607,12 +624,16 @@ func ClearStoredRule(db *DB) (bool, error) {
 	})
 }
 
-// resetStoredRule is used by "agent init --overwrite": the stored rule is
-// cleared, and when audit rules may be loaded the application result is
-// replaced by a pending one, so that the next sync decides (it applies the
-// assigned rule, or removes the audit rules when none is assigned). It runs
-// inside the write transaction tx, which reads what it decides on.
+// resetStoredRule is used by "agent init --overwrite": the stored rule and
+// the check interval stored from the last sync are cleared, and when audit
+// rules may be loaded the application result is replaced by a pending one,
+// so that the next sync decides (it applies the assigned rule, or removes
+// the audit rules when none is assigned). It runs inside the write
+// transaction tx, which reads what it decides on.
 func resetStoredRule(tx models.Writer) error {
+	if err := models.DeleteLocalState(tx, stateCheckInterval); err != nil {
+		return err
+	}
 	var apply *ApplyResult
 	if v := models.GetLocalState(tx, stateApply); v != "" {
 		apply = &ApplyResult{}

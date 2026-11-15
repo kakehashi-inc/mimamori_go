@@ -57,7 +57,7 @@ func TestPanicInMonitoringStep(t *testing.T) {
 	rt = NewAgentRuntime(rt.DB, tr, logged.logger())
 	rt.SetWorkers(2)
 	rt.cmdKillGrace = 300 * time.Millisecond
-	rt.link.defaultInterval = 1
+	rt.link.syncInterval = 1
 	rt.mon.started = true
 	var removals atomic.Int32
 	rt.removeAudit = func(*AuditGlobals) error {

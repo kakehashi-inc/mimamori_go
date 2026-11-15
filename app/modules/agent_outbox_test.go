@@ -408,7 +408,7 @@ func TestSyncRunningRequestsDuringRun(t *testing.T) {
 	tr.resp.DefaultIntervalSec = 1
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 41, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	rt.link.defaultInterval = 1
+	rt.link.syncInterval = 1
 	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
 	rt.sync()
 	n := len(tr.syncReqs)

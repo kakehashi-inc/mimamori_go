@@ -2,6 +2,7 @@ package modules
 
 import (
 	"errors"
+	"strconv"
 	"time"
 
 	"mimamori/app/models"
@@ -11,9 +12,11 @@ import (
 // sync (POST /agent/v1/sync) followed by one report (POST /agent/v1/report)
 // that carries everything the outbox holds. It is not an entry of the queue
 // and no worker count limits it: it goes on while every worker waits for a
-// command. What a sync brings is handed on: the rule assignment and the
-// default check interval to the monitoring step (syncLink), the command set
-// definitions to the queue (stored first), the run requests to the queue.
+// command. What a sync brings is handed on: the rule assignment to the
+// monitoring step and the check interval the answer gives to the rounds and
+// the monitoring entry (syncLink; the interval is stored too), the command
+// set definitions to the queue (stored first), the run requests to the
+// queue.
 
 // roundGap is the least time between the end of a round and the start of
 // the next one.
@@ -136,8 +139,23 @@ func (rt *AgentRuntime) sync() {
 	if resp.Rule != nil {
 		resp.Rule.Content.Normalize()
 	}
-	if rt.link.offer(resp.Rule, resp.DefaultIntervalSec) {
+	differs, intervalChanged := rt.link.offer(resp.Rule, resp.CheckInterval())
+	if intervalChanged {
+		rt.storeCheckInterval(resp.CheckInterval())
+	}
+	if differs {
 		rt.sched.monitorNow()
+	}
+}
+
+// storeCheckInterval stores the check interval a sync answer gave, for the
+// time before the first sync after the next start. A failure is logged; the
+// interval is in use all the same.
+func (rt *AgentRuntime) storeCheckInterval(sec int) {
+	if err := rt.DB.Write(func(tx models.Writer) error {
+		return models.SetLocalState(tx, stateCheckInterval, strconv.Itoa(sec))
+	}); err != nil {
+		rt.logf("failed to store the check interval: %v", err)
 	}
 }
 

@@ -98,6 +98,18 @@ type SyncResponse struct {
 	CommandRequests []CommandRunRequest `json:"command_requests,omitempty"`
 }
 
+// CheckInterval returns the check interval, in seconds, that the answer
+// gives the agent until its next sync: that of the assigned rule version
+// (RuleContent.CheckInterval), else the central's default it carries. The
+// agent uses it for its rounds and its monitoring step, and the central
+// judges by it whether the agent is responding.
+func (r *SyncResponse) CheckInterval() int {
+	if r.Rule != nil {
+		return r.Rule.Content.CheckInterval()
+	}
+	return r.DefaultIntervalSec
+}
+
 // DetectionReport is one aggregated detection sent by an agent.
 type DetectionReport struct {
 	Type      string `json:"type"`

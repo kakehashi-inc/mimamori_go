@@ -36,8 +36,9 @@ import (
 //     the logger, the worker count, the clock, the time zone, the kill grace,
 //     the retry wait of run records, the scan limit, the rule removal of tests
 //     and the stop channel.
-//   - The communication flow (AgentRuntime.comm): the transport and the
-//     agent's configuration (token, name, CAs).
+//   - The communication flow (AgentRuntime.comm): the transport, the
+//     agent's configuration (token, name, CAs) and the state key
+//     check_interval.
 //   - The monitoring step (AgentRuntime.mon): the applied rule and the
 //     application results, the state keys of the rule, the audit log and the
 //     file scans, the tables findings and scan_roots, the kernel's audit rules
@@ -45,8 +46,8 @@ import (
 //     touches them; the queue has one such entry.
 //   - The hand-over between the two (AgentRuntime.link, its own mutex): what
 //     the monitoring step applied (for the sync) and what the last sync
-//     brought (the rule assignment and the default check interval, for the
-//     next monitoring step).
+//     brought (the rule assignment, for the next monitoring step, and the
+//     check interval of the rounds and the monitoring entry).
 //   - The queue (this file, its one mutex): the entries, the sets that run,
 //     the requests taken by a worker, the sets kept by a surviving process
 //     group, the command set definitions and the valid sets, the worker

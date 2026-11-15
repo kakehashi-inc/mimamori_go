@@ -694,7 +694,7 @@ func TestCommandRunKeepsMonitoring(t *testing.T) {
 	tr.resp.DefaultIntervalSec = 1
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 2.5; echo done", "echo second"))
 	tr.resp.CommandRequests = []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now, ExpiresAt: now + 3600}}
-	rt.link.defaultInterval = 1
+	rt.link.syncInterval = 1
 	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
 	if tr.syncs < 3 {
 		t.Fatalf("the monitoring must go on while the command runs: %d syncs", tr.syncs)
@@ -1111,7 +1111,7 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	t.Cleanup(func() { killProcessGroup = syscall.Kill })
 	rt = NewAgentRuntime(rt.DB, tr, nil)
 	rt.SetWorkers(2)
-	rt.link.defaultInterval = 1
+	rt.link.syncInterval = 1
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
 		testSet(3, PurposeRunOnly, "echo third"))
 	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
