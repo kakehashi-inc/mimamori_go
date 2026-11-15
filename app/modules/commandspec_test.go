@@ -238,6 +238,44 @@ func TestScheduleTimeOfDayDigits(t *testing.T) {
 	}
 }
 
+// A schedule time read from a definition is judged as written: white space
+// around the time of day or the once time is not taken away, so such a
+// time is refused (the number rule).
+func TestScheduleTimeAsWritten(t *testing.T) {
+	for _, tod := range []string{" 01:30", "01:30 ", "\t01:30", "01:30\n"} {
+		for _, kind := range []string{ScheduleDaily, ScheduleWeekly} {
+			sched := map[string]any{"kind": kind, "time": tod, "weekdays": []string{"mon"}}
+			b, _ := json.Marshal(map[string]any{"name": "x", "purpose": "run_only", "os_user": "a", "run_mode": "schedule",
+				"commands": []any{map[string]any{"command_line": "true"}}, "schedule": sched})
+			s, err := ParseCommandSetSpec(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if errs := s.Validate(0); len(errs) != 1 || !strings.Contains(errs[0], "schedule.time") {
+				t.Errorf("%s %q: %v, want the time of day refused", kind, tod, errs)
+			}
+		}
+	}
+	for _, at := range []string{" 2030-12-01T03:00:00Z", "2030-12-01T03:00:00Z ", "\n2030-12-01T03:00:00+09:00"} {
+		b, _ := json.Marshal(map[string]any{"name": "x", "purpose": "run_only", "os_user": "a", "run_mode": "schedule",
+			"commands": []any{map[string]any{"command_line": "true"}}, "schedule": map[string]any{"kind": "once", "at": at}})
+		s, err := ParseCommandSetSpec(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if errs := s.Validate(0); len(errs) != 1 || !strings.Contains(errs[0], "schedule.at") {
+			t.Errorf("once %q: %v, want the time refused", at, errs)
+		}
+	}
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	if _, err := ParseScheduleAt(" 2026-12-01 03:00", tokyo); err == nil {
+		t.Error("a local once time with a space before it was accepted")
+	}
+	if _, err := localizeScheduleAt(json.RawMessage(`{"schedule":{"kind":"once","at":"2026-12-01 03:00 "}}`), tokyo); err == nil {
+		t.Error("ctl took a local once time with a space after it")
+	}
+}
+
 func TestScheduleNormalize(t *testing.T) {
 	s, err := ParseCommandSetSpec([]byte(`{"name":"x","purpose":"run_only","os_user":"a","commands":[{"command_line":"true"}],
 		"schedule":{"kind":"weekly","weekdays":["FRI","mon","fri"],"time":"03:00","every":5,"at":"x"}}`))

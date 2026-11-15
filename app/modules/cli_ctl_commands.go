@@ -206,7 +206,7 @@ func localizeScheduleAt(raw json.RawMessage, loc *time.Location) (json.RawMessag
 	if a, ok := sched["at"]; !ok || json.Unmarshal(a, &at) != nil || at == "" {
 		return raw, nil
 	}
-	if _, err := time.Parse(time.RFC3339, strings.TrimSpace(at)); err == nil {
+	if _, err := time.Parse(time.RFC3339, at); err == nil {
 		return raw, nil
 	}
 	t, err := ParseScheduleAt(at, loc)

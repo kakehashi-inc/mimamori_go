@@ -220,12 +220,12 @@ var WeekdayNames = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
 // scheduleAtLayout is the canonical form of a once time (UTC).
 const scheduleAtLayout = "2006-01-02T15:04:05Z"
 
-// ParseScheduleAt parses the time of a once schedule. RFC 3339 with an
-// offset is always accepted. When loc is not nil, a local form without an
-// offset ("2006-01-02 15:04", "2006-01-02T15:04", optionally with seconds)
-// is also accepted and interpreted in loc (the CLI passes its local time).
+// ParseScheduleAt parses the time of a once schedule as written (nothing
+// around it is taken away). RFC 3339 with an offset is always accepted.
+// When loc is not nil, a local form without an offset ("2006-01-02 15:04",
+// "2006-01-02T15:04", optionally with seconds) is also accepted and
+// interpreted in loc (the CLI passes its local time).
 func ParseScheduleAt(s string, loc *time.Location) (time.Time, error) {
-	s = strings.TrimSpace(s)
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
@@ -315,10 +315,9 @@ func (s *CommandSchedule) MinuteValue() int {
 }
 
 // normalize clears the fields the kind does not use and puts weekdays in
-// canonical order.
+// canonical order. The times are kept as written: the check judges them.
 func (s *CommandSchedule) normalize() {
 	s.Kind = strings.TrimSpace(s.Kind)
-	s.Time = strings.TrimSpace(s.Time)
 	if s.Kind == ScheduleOnce {
 		if t, err := ParseScheduleAt(s.At, nil); err == nil {
 			s.At = FormatScheduleAt(t)

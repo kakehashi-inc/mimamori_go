@@ -270,7 +270,7 @@ type CommandSchedule =
   | { kind: 'every_hours'; every: 1 | 2 | 3 | 4 | 6 | 8 | 12 }
   | { kind: 'every_minutes'; every: 1 | 2 | 3 | 4 | 5 | 6 | 10 | 12 | 15 | 20 | 30 }
   | { kind: 'hourly_at'; minute: number };               // 0〜59
-// once 以外は監視対象のホストのローカル時刻で解釈する
+// once 以外は監視対象のホストのローカル時刻で解釈する。at と time は書いたとおりに読む（前後に空白などがある値は時刻ではなく 400）
 interface CommandSpec {
   command_line: string;               // bash -c にそのまま渡す。空、NUL を含む、102400 バイト超は 400
   note: string;                       // 1000 文字まで
