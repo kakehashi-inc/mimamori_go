@@ -644,3 +644,63 @@ func TestStopWhileMonitoringToolRuns(t *testing.T) {
 		t.Errorf("the last report must say that the agent stops (reports %d)", len(tr.batches))
 	}
 }
+
+// TestStopEndsTheMonitoringStepsToolLikeACommand: the stop comes while the
+// monitoring step waits for an audit tool that ignores SIGTERM. The tool
+// gets SIGTERM and, after the grace, SIGKILL, so the stop takes the grace;
+// no tool starts after the stop, and the step's report goes in the last
+// report without host information. This is what the command references say
+// of the monitoring step at agent stop.
+func TestStopEndsTheMonitoringStepsToolLikeACommand(t *testing.T) {
+	requireBash(t)
+	prev := toolKillGrace
+	toolKillGrace = time.Second
+	t.Cleanup(func() { toolKillGrace = prev })
+	dir := t.TempDir()
+	calls, ready, pidFile := filepath.Join(dir, "calls"), filepath.Join(dir, "ready"), filepath.Join(dir, "pid")
+	script := fmt.Sprintf("echo \"$(date +%%s.%%N) $0\" >> %s\ntrap '' TERM\necho $$ > %s\n: > %s\nsleep 30\n", calls, pidFile, ready)
+	for _, name := range []string{"auditctl", "ausearch"} {
+		fakeTool(t, name, script)
+	}
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	stop := make(chan struct{})
+	wait := runInFlow(t, rt, stop)
+	waitFor(t, "the monitoring step's tool to ignore SIGTERM", func() bool { _, err := os.Stat(ready); return err == nil })
+	pid, err := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopAt := time.Now()
+	close(stop)
+	took := wait(30 * time.Second)
+	if took < toolKillGrace || took > toolKillGrace+5*time.Second {
+		t.Errorf("Run returned %s after the stop; the tool's SIGKILL comes %s after its SIGTERM", took, toolKillGrace)
+	}
+	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+		t.Errorf("the tool (pid %d) is still there after Run returned: %v", pid, err)
+	}
+	b, _ := os.ReadFile(calls)
+	if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) != 1 {
+		t.Errorf("tools started: %q, want only the one the stop ended", lines)
+	}
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		ts, err := strconv.ParseFloat(strings.Fields(l)[0], 64)
+		if err != nil || ts > float64(stopAt.UnixNano())/1e9 {
+			t.Errorf("a tool was started after the stop: %q", l)
+		}
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.batches) == 0 || !tr.batches[len(tr.batches)-1].Stopping {
+		t.Fatalf("the last report must say that the agent stops (reports %d)", len(tr.batches))
+	}
+	if len(tr.reports) == 0 {
+		t.Fatalf("the report of the monitoring step is missing")
+	}
+	for i, r := range tr.reports {
+		if r.HostInfo != nil {
+			t.Errorf("report %d carries host information: %+v", i, r.HostInfo)
+		}
+	}
+}
