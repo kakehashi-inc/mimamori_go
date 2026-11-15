@@ -520,7 +520,11 @@
         "workdir_failed": "The working directory could not be entered.",
         "timeout": "The time limit was exceeded.",
         "signaled": "The command was ended by a signal.",
-        "interrupted": "The agent was stopped during the run.",
+        "interrupted": "The agent stopped while this command was running.",
+        "internal_error": "An internal error of the agent occurred while it handled this command. The exit code and the output are the command's own."
+    },
+    "runReason": {
+        "interrupted": "The agent stopped during the run.",
         "internal_error": "An internal error of the agent ended the processing of the run."
     },
     "commandResults": {

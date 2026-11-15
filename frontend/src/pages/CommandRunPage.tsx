@@ -57,11 +57,12 @@ export function CommandRunPage() {
 
 function RunBody({ run }: { run: CommandRunDetail }) {
     const { t } = useTranslation();
-    const reasonText = useReasonText();
+    const reasonText = useReasonText('run');
     const commands = run.commands ?? [];
     const finished = run.state !== 'running';
-    // A run cut by the agent's stop or end has the reason interrupted: the set itself did not stop.
-    const interrupted = run.reason === 'interrupted';
+    // A run cut by the agent's stop or end (interrupted) or by an internal
+    // error of the agent has a reason of its own: the set itself did not stop.
+    const cut = run.reason !== '';
 
     return (
         <div className='flex flex-col gap-4'>
@@ -91,7 +92,7 @@ function RunBody({ run }: { run: CommandRunDetail }) {
             {!finished && <Alert tone='info'>{t('commandRun.stillRunning')}</Alert>}
             {finished && run.not_executed > 0 && (
                 <Alert tone='warning'>
-                    {t(interrupted ? 'commandRun.notExecutedCount' : 'commandRun.notExecuted', {
+                    {t(cut ? 'commandRun.notExecutedCount' : 'commandRun.notExecuted', {
                         count: run.not_executed,
                     })}
                 </Alert>
@@ -111,7 +112,7 @@ function RunBody({ run }: { run: CommandRunDetail }) {
 
 function CommandResultCard({ item }: { item: CommandRunItem }) {
     const { t } = useTranslation();
-    const reasonText = useReasonText();
+    const reasonText = useReasonText('command');
     return (
         <Card
             title={

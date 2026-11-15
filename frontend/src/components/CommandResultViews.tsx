@@ -31,7 +31,8 @@ export function CommandStateBadge({ state }: { state: CommandRunState | CommandK
     );
 }
 
-const REASONS = [
+// Reasons of the error of one command (CommandRunItem.reason).
+const COMMAND_REASONS = [
     'unexpected_code',
     'start_failed',
     'workdir_failed',
@@ -40,13 +41,27 @@ const REASONS = [
     'interrupted',
     'internal_error',
 ] as const;
-type Reason = (typeof REASONS)[number];
+type CommandReason = (typeof COMMAND_REASONS)[number];
 
-/** Text of an error reason; unknown reasons are shown as they are. */
-export function useReasonText(): (reason: string) => string {
+// Reasons of a whole run (CommandRun.reason): the run was cut by the stop or
+// the end of the agent, or by an internal error of the agent.
+const RUN_REASONS = ['interrupted', 'internal_error'] as const;
+type RunReason = (typeof RUN_REASONS)[number];
+
+/**
+ * Text of the reason of a run ('run') or of one command ('command'); the two
+ * have their own texts. Unknown reasons are shown as they are.
+ */
+export function useReasonText(of: 'run' | 'command'): (reason: string) => string {
     const { t } = useTranslation();
+    if (of === 'run') {
+        return reason =>
+            (RUN_REASONS as readonly string[]).includes(reason) ? t(`runReason.${reason as RunReason}`) : reason;
+    }
     return reason =>
-        (REASONS as readonly string[]).includes(reason) ? t(`commandReason.${reason as Reason}`) : reason;
+        (COMMAND_REASONS as readonly string[]).includes(reason)
+            ? t(`commandReason.${reason as CommandReason}`)
+            : reason;
 }
 
 /** Link path of the run history of a set. */

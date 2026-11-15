@@ -27,7 +27,7 @@ export function CommandRunsPage() {
 
 function CommandRuns({ id, set }: { id: string; set: string }) {
     const { t } = useTranslation();
-    const reasonText = useReasonText();
+    const reasonText = useReasonText('run');
     // The "before" values of the pages shown so far; the last one is the current page.
     const [pages, setPages] = useState<(number | undefined)[]>([undefined]);
     const before = pages[pages.length - 1];
