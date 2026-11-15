@@ -905,7 +905,16 @@ func TestServeStop(t *testing.T) {
 			}
 		}()
 	}
-	time.Sleep(500 * time.Millisecond)
+	// The rest of the body comes when the stop has closed the listener, while
+	// the requests in work still run.
+	waitFor(t, "the stop to close the listener", func() bool {
+		c, err := net.DialTimeout("tcp", s.webAddr, time.Second)
+		if err != nil {
+			return true
+		}
+		_ = c.Close()
+		return false
+	})
 	_, _ = io.WriteString(arriving, "56789")
 	if a := readAnswer(arriving, bufio.NewReader(arriving), "POST", 10*time.Second); a.status != http.StatusOK || a.body != "10 525" {
 		t.Errorf("request whose body arrived during the stop: %d %q %v", a.status, a.body, a.err)
