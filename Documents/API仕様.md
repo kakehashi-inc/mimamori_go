@@ -9,15 +9,15 @@
 | 待ち受け | 通信 | パス | 利用者 | 認証 |
 | --- | --- | --- | --- | --- |
 | ブラウザ用（既定 `0.0.0.0:9080`） | HTTP | `/api/v1/*` | ブラウザ画面 | ログインセッション（Cookie `mimamori_session`） |
-| ブラウザ用 | HTTP | `/*` | ブラウザ | なし（埋め込み SPA） |
-| エージェントおよび管理用（既定 `0.0.0.0:9081`） | HTTPS（独自CA） | `/agent/v1/*` | エージェント | トークン（`Authorization: Bearer mmr_...`）とインスタンスID |
+| ブラウザ用 | HTTP | `/*` | ブラウザ | なし（埋め込み SPA）。管理者の画面だけが読み込むファイル（2 章の `/ui/modules` が返すもの）は、管理者のログインセッションがある要求にだけ返し（`Cache-Control: private, no-store`）、それ以外の要求には知らないパスと同じ `index.html` を返す |
+| エージェントおよび管理用（既定 `0.0.0.0:9081`） | HTTPS（独自CA） | `/agent/v1/*` | エージェント | トークン（`Authorization: Bearer mmr_...`）とインスタンスID（`GET /agent/v1/ca` だけは認証なし） |
 | エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がこのホスト（ループバックのアドレス、または接続を受け付けた自分側の IP アドレスと同じアドレス）で、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
 - `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
 - 例外として、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify`、`/auth/step-up`、`/auth/step-up/verify`、`/ui/modules` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
 - ブラウザ用で認証の要らない（公開の）パスは `GET /health`、`POST /auth/login`、`POST /auth/login/verify` だけです。
 - 接続元がこのホストでない `/admin/v1/*` は 404 を返します。このホストとは、接続元のアドレスがループバックのアドレスであるか、接続元の IP アドレスがその接続を受け付けた自分側の IP アドレスと同じ場合です（`agent_listen` が特定の IP アドレスのとき、`ctl` はそのアドレスに接続します）。判定には TCP の接続の両端のアドレスだけを使い、ヘッダーは使いません。
-- HTTP/1.1 だけを使います（HTTP/2 は提供しません）。持続的な接続（keep-alive）を使え、1 つの接続で続けて複数の要求を送れます。クライアントは `Connection: close` で 1 回ごとに閉じても構いません。セントラルは、60 秒何も通信の無い接続を閉じます。
+- 両方の待ち受けは HTTP/1.1 で答えます（HTTP/2 の接続の開始には 505。1.2 の表）。持続的な接続（keep-alive）を使え、1 つの接続で続けて複数の要求を送れます。クライアントは `Connection: close` で 1 回ごとに閉じても構いません。セントラルは、60 秒何も通信の無い接続を閉じます。
 
 ### 1.2 形式
 
@@ -27,7 +27,7 @@
 - ブラウザ用と管理用の API は、要求の JSON の値の型が違う（文字列の項目に数、整数の項目に文字列や小数、一覧の項目にオブジェクトなど）と 400 を返し、`error` は `invalid request body: <フィールド> must be <値の種類>` です（コード `common.invalid_body_type`）。`params` の `field` は本文の中の位置を `.` でつないだ値（`valid_days`、`set.retention_days`、一覧の要素は番号で `agent_ids.1`）で、本文の全体の型が違うときはメッセージ `json.kind.the_body`（`the body`）です。`expected` は値の種類のメッセージ（`json.kind.string` `a string`、`json.kind.integer` `an integer`、`json.kind.number` `a number`、`json.kind.bool` `true or false`、`json.kind.array` `an array`、`json.kind.object` `an object`）です。そのほかの読み取りの誤り（JSON として正しくない、未知のフィールドなど）は `invalid request body: <文>`（コード `common.invalid_body`）です。監視ルールの `content` とコマンドセットの定義の中は、それぞれの検証の問題として答えます（6 章、4.1）。
 - パスの ID（`{id}`、`{set}`、`{run}`、`{req}`、監視ルールの版 `{version}` など）とクエリーの整数（`limit`、`offset`、`before`、`agent_id`、`set_id`、差分の `from` と `to`）は、数字 0〜9 だけで書いた 10 進数の整数として読みます。負の数は先頭に `-` を 1 つ付け、先頭の 0 は 10 進数のまま読みます（`007` は 7）。`+`、空白、小数点、指数、`0x` などの接頭辞、`_`、そのほかの文字（全角の数字を含む）を含む値は数ではなく、パスの ID では見つからない ID と同じ 404、クエリーではその項目の 400 です（[システム仕様.md](システム仕様.md) の 5 章の数の書き方）。
 - エラー時は 4xx/5xx と `{"error": "<message>", "error_i18n": {"code": "<コード>", "params": {...}}}` を返します。`error` は英語の文（CLI が表示する文）、`error_i18n` は同じ内容をコードとパラメーターで表したもの（以下、この形を型 `Msg` と呼びます。英文の隣に置く `<フィールド>_i18n` はすべてこの形か、下の `Problem`）です。ブラウザはコードで表示の言語の文にし、知らないコードでは `error` を表示します。コードを持たない文（ほかのプログラムやライブラリの文）は `{"code": "", "params": {"text": "<文>"}}` で、そのまま表示します。以下では `error_i18n` を省略して `error` だけを示します。
-  - 検証の問題の一覧を返す応答（`POST /rules/validate`、コマンドセットの検証・作成・変更・インポート、システム設定の変更）は、英語の文の一覧 `errors` の隣に、同じ順で問題をコードで表した `errors_i18n` を返します。1 件の問題（型 `Problem`）は `{"where": [<位置>, ...], "code": "<コード>", "params": {...}}` で、位置（`loc.command` のコマンドの番号、`loc.pattern` の正規表現の番号、`loc.item` のインポートの項目の番号、`loc.field` の項目名など）と本文を順に `: ` でつなぐと `errors` の文になります（例 `command 2: timeout_sec: must be between 0 and 86400`）。項目名（`timeout_sec`、`read.dirs` など）は値で、翻訳しません。問題の一覧を持つエラーの `error_i18n` は、`params` にこの問題の一覧を持ちます。監視ルールとテンプレートの内容の誤り（作成と変更の 400）は `errors` を持たず、`error_i18n`（コード `common.problems`）の `params.problems` に問題の一覧を持ちます。
+  - 検証の問題の一覧を返す応答（`POST /rules/validate`、コマンドセットの検証、定義の値の問題で拒否したコマンドセットの作成・変更・インポート（4.1）、設定全体の検証で拒否したシステム設定の変更（12.1））は、英語の文の一覧 `errors` の隣に、同じ順で問題をコードで表した `errors_i18n` を返します。1 件の問題（型 `Problem`）は `{"where": [<位置>, ...], "code": "<コード>", "params": {...}}` で、位置（`loc.command` のコマンドの番号、`loc.pattern` の正規表現の番号、`loc.item` のインポートの項目の番号、`loc.field` の項目名など）と本文を順に `: ` でつなぐと `errors` の文になります（例 `command 2: timeout_sec: must be between 0 and 86400`）。項目名（`timeout_sec`、`read.dirs` など）は値で、翻訳しません。問題の一覧を持つエラーの `error_i18n` は、`params` にこの問題の一覧を持ちます。監視ルールとテンプレートの内容の誤り（作成と変更の 400）は `errors` を持たず、`error_i18n`（コード `common.problems`）の `params.problems` に問題の一覧を持ちます。
   - `Msg` の `params` の値は、文字列、数値、真偽値、入れ子の `Msg`（原因の `cause`、型の名前の `expected` など）、`Problem`、またはこれらの一覧です。値（パス、名前、アドレス、コマンドライン、項目名）とほかのプログラムの文はそのまま入り、翻訳しません。英文で引用符付きの値は、引用符を付けた文字列として入ります。一覧は、パラメーター名が `lines` なら改行で、項目がメッセージなら `; `（日本語では `／`）で、それ以外は `, `（日本語では `、`）でつなぎます。パラメーターの無いメッセージは `params` を省略します。
   - コードと英語の文の対応はプログラムの中の一覧で定め、ブラウザの英語の文言（`srv.<コード>`）と同じ英文になることをテストで確かめています。英文がホストのコマンドラインのツールを名指しするコード（`auditd.status_failed`、`auditd.list_failed`、`auditd.disabled`、`auditd.command_failed`、`apply.failed_partly_restored`）は、同じ置き換えの名前でツールを名指ししない画面の英文を別に持ち、ブラウザの英語の文言はその文です。英語の文（`error`、`errors`、`message` など）は、コードを英語にした文（CLI とログの文）と同じです。管理者だけが受け取るコードの文言は管理者の画面だけが読み込みます。
   - `*_i18n` のフィールドは画面のためのもので、CLI（`ctl`）の人向けの表示には出しません。`--json` では受け取った応答をそのまま表示するので、`*_i18n` も表示します。CLI はエラーの答えのうち `error` だけを表示します。
@@ -52,8 +52,8 @@
   - 本文が 32 MiB を超える要求は、本文を読まずに各 API に渡し、本文の読み取りの誤りとして扱います（JSON の本文を読む API では 400。認証の前に答える API ではその答えです）。答えはすぐ返し、`Connection: close` を付けます。
   - 64 KiB を超える本文は、その API に対して認証された要求（エージェント用はトークン、管理用は CLI の資格情報、ブラウザ用はログインセッションと CSRF のヘッダー）からだけ読みます。認証されていない要求には、本文を読まずにその API の通常の答え（401 など。ログインなど本文で認証する API では本文の読み取りの誤り）をすぐ返します。
   - 要求を最後まで読まずに答えた場合（32 MiB を超える本文と、認証されていない大きな本文）も、クライアントが本文を送り終えてから答えを読めるように、セントラルは答えの後に届くその要求の残りを最大 64 MiB まで読み捨ててから接続を閉じます。読み捨ては、相手が 60 秒何も送らないときだけ打ち切ります。`Expect: 100-continue` を付けた要求には `100 Continue` を返さずに最終の答えを返し、読み捨てはしません。
-  - ハンドラーが返す応答には、すべて `Content-Length` と `X-Content-Type-Options: nosniff` が付きます（チャンクでは送りません）。
-- 存在しないパスと、そのパスで対応していないメソッドへの要求は、`{"error": ...}` ではなく `text/plain` の `404 page not found` と `405 Method Not Allowed` を返します（ブラウザ用はログイン済みの場合）。
+  - ハンドラーが返す応答には、すべて `Content-Length` と `X-Content-Type-Options: nosniff` が付きます（チャンクでは送りません）。ブラウザ用の待ち受けの応答には、さらに `X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'` が付きます。JSON の応答には `Cache-Control: no-store` が、SPA の `index.html` には `Cache-Control: no-cache` が付きます。
+- 存在しないパスと、そのパスで対応していないメソッドへの要求には、`text/plain` の `404 page not found` と、使えるメソッドを示す `Allow` ヘッダー付きの `405 Method Not Allowed` を返します（ブラウザ用の `/api/v1/*` では、ログインしていない要求は 1.3 のとおり 401）。
 - ブラウザ用の待ち受けで GET 以外を送る場合は、CSRF 対策としてヘッダー `X-Mimamori-Request: 1` を必須とします（無い場合は 403）。
 - ブラウザ画面が利用者の操作によらずに送る要求（開いている画面の定期的な更新）には、ヘッダー `X-Mimamori-Background: 1` を付けます。この要求も認証しますが、ログインセッションの期限を延ばしません（[システム仕様.md](システム仕様.md) のログインセッション）。
 
@@ -75,14 +75,14 @@
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
-| GET | `/health` | なし | - | `{"status":"ok","version":"0.1.0","remember_days":30,"trust_days":30}`（`remember_days` は `session_remember_days`、`trust_days` は `two_step_trust_days` の値） |
+| GET | `/health` | なし | - | `{"status":"ok","version":"<プログラムのバージョン>","remember_days":30,"trust_days":30}`（`remember_days` は `session_remember_days`、`trust_days` は `two_step_trust_days` の値） |
 | POST | `/auth/login` | なし | `{"email","password","remember"?}` | 下の「ログイン」。`email` はメールアドレス（大文字と小文字を区別しない）。`remember` が true なら有効期限付きの Cookie（ログインを保持） |
 | POST | `/auth/login/verify` | なし | `{"challenge","code","trust"?}` | 下の「ログイン」。`trust` は「N 日間このブラウザを信頼する」（N は `trust_days`） |
 | POST | `/auth/logout` | V | - | `{}` |
 | GET | `/auth/me` | V | - | `Me`。`/admin/v1` では `{"id":0,"email":"","display_name":"cli","role":"admin","language":""}` |
-| POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる） |
-| PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更） |
-| PUT | `/auth/display-name` | V | `{"display_name"}` | `Me`（自分の表示名の変更。何も無効にならない） |
+| POST | `/auth/password` | V | `{"current_password","new_password"}` | `{}`（自分のパスワードの変更。他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になり、このセッションの再認証も取り消す。現在のパスワードの誤りは 400（`the current password is wrong`、コード `account.current_password_wrong`）、新しいパスワードが 12 章の条件に合わなければ 400。履歴 `password_changed`） |
+| PUT | `/auth/language` | V | `{"language":"auto"\|"en"\|"ja"}` | `Me`（自分の表示言語の設定の変更。ほかの値は 400） |
+| PUT | `/auth/display-name` | V | `{"display_name"}` | `Me`（自分の表示名の変更。セッションはそのまま。名前の条件は 12 章。変わったときは履歴 `display_name_changed`） |
 | POST | `/auth/email` | V | `{"email"}` | 下の「自分のメールアドレスの変更」 |
 | POST | `/auth/email/verify` | V | `{"code"}` | 下の「自分のメールアドレスの変更」 |
 | POST | `/auth/step-up` | A | - | 下の「再認証」 |
@@ -100,15 +100,16 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 | --- | --- | --- |
 | `/auth/login` | 200 | `Me`。ログインした（開発モード、または確認済みのブラウザ）。セッションの Cookie を設定 |
 | `/auth/login` | 202 | `{"two_step":true,"challenge":"<値>"}`。確認コードをアカウントのメールアドレスへ送った。challenge は `/auth/login/verify` に渡す値で、中身に意味は無い |
-| `/auth/login` | 401 | `{"error":"invalid e-mail address or password"}`（存在しないアドレス、パスワードの誤り、無効なアカウント） |
-| `/auth/login` | 423 | ロック中（`{"error":"login is temporarily locked after repeated failures"}`） |
+| `/auth/login` | 401 | `{"error":"invalid e-mail address or password"}`（存在しないアドレス、パスワードの誤り、無効なアカウント。`email` は前後の空白を除いて照合する） |
+| `/auth/login` | 423 | ロック中（`{"error":"login is temporarily locked after repeated failures"}`）。パスワードの誤り（無効なアカウントへの正しいパスワードを含む）と確認コードの誤りが続けて 5 回になると、そのアカウントのログインを 15 分受け付けない。ログインに成功するか、パスワードを変更すると回数は 0 に戻る |
 | `/auth/login` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}`。ログインは失敗し、セッションもコードも作らない |
 | `/auth/login/verify` | 200 | `Me`。ログインした。セッションの Cookie と `mimamori_verify` の Cookie を設定 |
 | `/auth/login/verify` | 401 | `{"error":"invalid code"}`。誤りはパスワードの誤りと同じ失敗の回数に数える |
 | `/auth/login/verify` | 423 | ロック中、またはこの誤りでロックした |
 | `/auth/login/verify` | 410 | `{"error":"the verification code has expired; log in again"}`。challenge が不明、期限切れ、使用済み、誤りの上限に達した、またはパスワードの入力からやり直して置き換わった。パスワードの入力からやり直す |
 
-- コードは 6 桁の数字で、有効期限は 10 分、1 つのコードで誤りは 5 回までです。再送の要求はありません（パスワードの入力からやり直す）。
+- コードは 6 桁の数字で、有効期限は 10 分、1 つのコードで誤りは 5 回までです。新しいコードは、パスワードの入力からやり直すと送ります。
+- ログインの成功、ロック、コードのメールを送れなかったことは、履歴（`account`、操作 `login`、`login_locked`、`login_code_failed`）に残します。
 - Cookie `mimamori_verify`（HttpOnly、SameSite=Strict、Path `/api/v1/auth/login`）は、`trust` の値に関係なく `Max-Age` が `trust_days` 日です。この Cookie があるブラウザで次にログインするときにコードを省くかどうかは、セントラルが判定します（[システム仕様.md](システム仕様.md) の 12.4）。
 
 自分のメールアドレスの変更（`POST /auth/email` と `POST /auth/email/verify`）:
@@ -121,11 +122,11 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 | `/auth/email` | 409 | ほかのアカウントのアドレス（大文字と小文字を区別しない） |
 | `/auth/email` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}` |
 | `/auth/email/verify` | 200 | `Me`（変更後）。同じアカウントの他のセッション、確認済みのブラウザ、送信済みの確認コードは無効になる |
-| `/auth/email/verify` | 400 | `{"error":"invalid code"}`（401 は使わない。ログインの失敗の回数にも数えない） |
+| `/auth/email/verify` | 400 | `{"error":"invalid code"}`（ログインの失敗の回数は変わらない） |
 | `/auth/email/verify` | 409 | 確認の間にほかのアカウントが同じアドレスを使った |
 | `/auth/email/verify` | 410 | 依頼が無い、期限切れ、または誤りが 5 回になって依頼を破棄した |
 
-- 現在のパスワードは求めません。確定できるのは、依頼したのと同じセッションだけです。新しい依頼は、確定していない古い依頼を置き換えます。
+- 要求の本文は新しいアドレスだけです。確定できるのは、依頼したのと同じセッションだけです。新しい依頼は、確定していない古い依頼を置き換えます。変更は履歴（`account`、操作 `email_changed`。コードのメールを送れなかったときは `email_code_failed`）に残します。
 
 再認証（`POST /auth/step-up` と `POST /auth/step-up/verify`）:
 
@@ -143,7 +144,7 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 | `/auth/step-up` | 202 | `{"required":true}`。確認コードをアカウントのメールアドレスへ送った。このセッションの前のコードは置き換わる |
 | `/auth/step-up` | 503 | `{"error":"the verification code could not be sent; contact an administrator"}`。コードは作らない（履歴に `step_up_code_failed`） |
 | `/auth/step-up/verify` | 200 | `{"required":true}`。再認証した（開発モードでは `{"required":false}` で何もしない） |
-| `/auth/step-up/verify` | 400 | `{"error":"invalid code"}`（401 は使わない。ログインの失敗の回数にも数えない） |
+| `/auth/step-up/verify` | 400 | `{"error":"invalid code"}`（ログインの失敗の回数は変わらない） |
 | `/auth/step-up/verify` | 410 | `{"error":"the verification code has expired or was entered wrongly too often; request a new code"}`。コードが無い（このセッションで求めていない、使用済み）、期限切れ、または誤りが 5 回になって破棄した |
 
 - コードの条件（6 桁、有効期限 10 分、誤りは 5 回まで）はログインと同じです。入力できるのはコードを求めたセッションだけで、1 つのコードで成功するのは 1 回だけです。
@@ -151,15 +152,17 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 
 ## 3. 概要
 
-| GET | `/overview` | V | - | `Overview` |
+| メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
+| GET | `/overview` | V | - | `Overview` |
 
 ```ts
 interface Overview {
   version: string;
   central_hostname: string;
   builtin_agent: { enabled: boolean; running: boolean; message: string; message_i18n: Msg | null };   // enabled は起動時の設定 builtin_agent。停止中の理由を message に入れる（設定で無効にしている場合は空）。message_i18n は同じ理由のメッセージ（message が空なら null）
-  agents: number; unacked_alerts: number;
+  agents: number;           // 監視対象の数（内蔵エージェントを含む）
+  unacked_alerts: number;   // すべての監視対象の、確認済みにしていない alert の検知の数
 }
 ```
 
@@ -168,7 +171,7 @@ interface Overview {
 | メソッド | パス | 権限 | 応答 |
 | --- | --- | --- | --- |
 | GET | `/agents` | V | `AgentSummary[]` |
-| GET | `/agents/{id}` | V | `AgentDetail` |
+| GET | `/agents/{id}` | V | `AgentDetail`（存在しない ID は 404、コード `agent.not_found`） |
 
 ```ts
 type ApplyStatus = 'none' | 'pending' | 'ok' | 'warning' | 'error';
@@ -178,9 +181,9 @@ interface AgentSummary {
   display_name: string;              // トークン名、または内蔵エージェントの固定の識別名 "(central)"
   hostname: string;
   token: TokenRef | null;            // 内蔵エージェントは null
-  last_report_at: string | null;
-  seconds_since_report: number | null;
-  responding: boolean;               // セントラルの判断で、エージェントが応答しているか（最後の同期から確認の間隔の 3 倍と 600 秒以内で、その後に終了すると報告していない。[システム仕様.md](システム仕様.md) の 12.5.5）。画面は false のとき最後の報告を古いものとして示す
+  last_report_at: string | null;     // 最後の報告を受け取った日時
+  seconds_since_report: number | null;   // 最後の報告から今までの秒数
+  responding: boolean;               // セントラルの判断で、エージェントが応答しているか（同期したことがあり、最後の同期から確認の間隔の 3 倍と 600 秒以内で、その後に終了すると報告していない。[システム仕様.md](システム仕様.md) の 12.5.5）。画面は false のとき最後の報告を古いものとして示す
   check_interval_sec: number | null; // 最後の同期の応答がエージェントに与えた確認の間隔（秒。同期したことが無ければ null）
   rule: {                            // 適用（割り当て）中の監視ルール。無ければ null
     id: number; name: string;
@@ -190,9 +193,9 @@ interface AgentSummary {
     outdated: boolean;               // assigned_version != latest_version
   } | null;
   apply: { status: ApplyStatus; message: string; version: number | null; at: string | null; warnings: string[]; message_i18n?: Msg; warnings_i18n?: Msg[] };
-  unacked_alerts: number;
-  auditd: AuditdStatus | null;
-  ca_up_to_date: boolean;            // 最新の独自CAを受け取っているか（一度も同期していないエージェントは true）
+  unacked_alerts: number;            // 確認済みにしていない alert の検知の数
+  auditd: AuditdStatus | null;       // 最後に報告された auditd の状態（報告が無ければ null）
+  ca_up_to_date: boolean;            // 最新の独自CA（使用中と配布中）を受け取っているか（内蔵エージェントと、一度も同期していないエージェントは true）
   builtin_running: boolean | null;   // 内蔵エージェントのみ（設定 builtin_agent で無効にしている場合は null）
 }
 interface TokenRef { id: number; name: string; status: TokenStatus; expires_at: string }
@@ -229,11 +232,11 @@ interface HostInfo {
 
 - `apply`（と `host_info.last_apply`）の `message_i18n` と `warnings_i18n` は、`message` と `warnings` をメッセージ（1.2 章の `error_i18n` と同じ形 `Msg`。`warnings_i18n` は `warnings` と同じ順）で表したもので、画面の言語で表示するために使います。エージェントが送ったメッセージのうち、英語にすると `message` / `warnings` と一致するものだけを返します（一致しない注意はその英文をそのまま表示する `{"code": "", "params": {"text": ...}}` にします）。メッセージを送らないエージェントの結果、2000 バイトで切り詰めた `message` では省略します。
 - `apply.status` の `none` は、監視ルールが適用されていない状態です。監視ルールの割り当てを外すと（6 章の `POST /rules/unassign`）、エージェントがルールを削除したと報告するまで `pending`、報告の後は `none` になります（`rule` は null、`apply.version` は null。適用も失敗も報告していなかったエージェントはすぐに `none`）。無効にした内蔵エージェントのルールをセントラルが削除した場合も `none` です。
-- セントラルは、エージェントが報告した適用の結果を、その監視対象の今の割り当てについてのもの（割り当てられた監視ルールとその版。割り当てが無いときは監視ルール無し）だけ記録します。前の割り当てについての結果（エージェントが変更を適用する前に送った報告にあるもの）は何も変えず、履歴にも残しません。そのため、監視ルールを割り当てる（別の版にする）と、その版の結果が届くまで `pending` で、割り当てを外すと、ルールを削除したという結果が届くまで `pending` です。
+- セントラルは、エージェントが報告した適用の結果を、その監視対象の今の割り当てについてのもの（割り当てられた監視ルールとその版。割り当てが無いときは監視ルール無し）だけ記録します。前の割り当てについての結果（エージェントが変更を適用する前に送った報告にあるもの）は何も変えず、履歴にも残しません。そのため、監視ルールを割り当てる（別の版にする）と、その版の結果が届くまで `pending` で（エージェントがすでにその版を適用したと報告しているときは今の状態のまま）、割り当てを外すと、ルールを削除したという結果が届くまで `pending` です。
 
 ## 4.1 コマンドセット
 
-監視対象のホストでエージェントが実行するコマンドの組（コマンドセット）の定義、手動の実行指示、結果です。定義は監視対象ごとに持ちます（監視対象をまたいだ定義の一覧はありません）。動作は [システム仕様.md](システム仕様.md) の 12.5 を参照してください。
+監視対象のホストでエージェントが実行するコマンドの組（コマンドセット）の定義、手動の実行指示、結果です。定義は監視対象ごとに、その監視対象の DB に持ちます（別の監視対象へはインポートで写します）。動作は [システム仕様.md](システム仕様.md) の 12.5 を参照してください。
 
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
@@ -252,14 +255,15 @@ interface HostInfo {
 | GET | `/agents/{id}/command-runs/{run}` | V | - | `CommandRunDetail` |
 
 - 「A（再認証）」の 4 つの操作（作成、変更、削除、インポート）は、ブラウザからは再認証の対象で、再認証が必要な場合は、要求の内容を確かめる前に 428 を返します（応答は 2 章の「再認証」、動作は [システム仕様.md](システム仕様.md) の 12.5.10）。`/admin/v1`（CLI）、開発モード、検証、実行指示と破棄は対象外です。
-- 定義の要求（`CommandSetSpec`）は JSON のオブジェクト 1 つです。未知のフィールド、型の誤り、不正な値、上限を超える入力は 400 で、本文は `{"error":"invalid command set: <問題>; <問題>","errors":["<問題>", ...],"errors_i18n":[<問題>, ...]}` です（各問題は `name: ...`、`command 2: timeout_sec: ...` のように項目と、コマンドなら位置（1 から）を示します）。日時を指定した 1 回のスケジュールで、過去の日時は 400 です（変更で、保存済みと同じ日時のままなら可）。
+- 存在しない監視対象は 404（`agent.not_found`）、存在しないか削除されたセットは 404（`command.set_not_found`。実行の一覧は削除されたセットも見られる）、存在しない実行は 404（`command.run_not_found`）、存在しないかその監視対象のものでない実行指示は 404（`command.request_not_found`）です。
+- 定義の要求（`CommandSetSpec`）は JSON のオブジェクト 1 つです。不正な値と上限を超える入力は 400 で、本文は `{"error":"invalid command set: <問題>; <問題>","error_i18n":{...},"errors":["<問題>", ...],"errors_i18n":[<問題>, ...]}` です（各問題は `name: ...`、`command 2: timeout_sec: ...` のように項目と、コマンドなら位置（1 から）を示します）。日時を指定した 1 回のスケジュールで、過去の日時は 400 です（変更で、保存済みと同じ日時のままなら可）。定義として読めない本文は 400 で、本文は `error` と `error_i18n` だけです: 未知のフィールド（`invalid command set: unknown field "<名前>"`、コード `command.spec.decode`）、型の誤り（`invalid command set: commands.0.command_line must be a string, not number` のように 0 から数えた位置、コード `command.spec.wrong_type`）、JSON のオブジェクトでない本文（空を含む。`command.spec.not_object`）、オブジェクトの後ろに続くデータ（`command.spec.one_object`）、そのほかの JSON の誤り（`command.spec.decode`）。
 - 名前が、その監視対象の削除されていない別のセットと同じ場合は 409 です。
-- `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にしません）。JSON として解釈できない場合も 200 で、`errors` に 1 件、`definition` は `null` です。`definition` は既定値を補った定義です。
-- インポートは、`source_agent_id` の監視対象（`{id}` と同じでもよい）の削除されていないセットを、OS のユーザーと作業ディレクトリを含めてすべて写します。`name` を省略するか空にすると元の名前です。写し先の削除されていないセットの名前、またはインポートの中で名前が重なると 409 で、本文は `{"error":"...","conflicts":["<名前>", ...]}`、何も作りません。存在しない、または削除されたセットと、不正な新しい名前は 400 で、本文は作成と同じ形（`errors` の各問題の前に `item <番号>: `）です。作ったセットの `imported_from` は「<元の監視対象名> / <元のセット名>」です。
-- 実行指示は `queued` で作ります（応答の `state` は `queued`）。エージェントの同期で、エージェントが指示を受け取れると送ったとき（14 章の `free_worker`）に、そのエージェントの `queued` の指示を古いものから 1 つずつ渡します（規則は [システム仕様.md](システム仕様.md) の 12.5.5）。そのセットにまだ応答の無い指示（`queued` または `delivered`）があれば 409 です。削除されたセットは 404 です。セットを削除すると、エージェントに渡すのを待っている指示（`queued`）は破棄します。実行指示とセットの削除が同時に届き、指示を保存した後にセットが削除されていた場合は、その指示を破棄して（履歴に残します）404 を返します。
-- 破棄は、エージェントに渡すのを待っている指示（`queued`。渡した後に `queued` に戻った指示も含む）だけで、それ以外は 409 です。
-- `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（`name` が空なら空の配列）。
-- 実行の一覧は新しい順で、`limit` は既定 50、最大 500、`before` はその ID より前の実行だけを返します（次のページは `next_before` を `before` に指定。最後のページでは `null`）。削除したセットの実行も、保存期間の間は見られます。
+- `validate` は保存しないで検証し、問題を `errors` に返します（名前の重複を含む。変更の画面では `set_id` に対象のセットの ID を指定すると、そのセット自身との重複を問題にせず、`os_user` を省略したときはそのセットの値を使います）。`set_id` が整数でなければ 400（`common.query_not_integer`）、存在しないか削除されたセットなら 404 です。定義として読めない本文も 200 で、`errors` にその 1 件、`definition` は `null` です。`definition` は既定値を補った定義です（`timeout_sec` は補わず、省略は 0）。
+- インポートは、`source_agent_id` の監視対象（`{id}` と同じでもよい）の削除されていないセットを、OS のユーザーと作業ディレクトリを含めてすべて写します。`items` が空なら 400（`command.import_select`）、`source_agent_id` が無いか監視対象でなければ 400（`command.import_source_not_found`）です。`name` を省略するか空にすると元の名前です。写し先の削除されていないセットの名前、またはインポートの中で名前が重なると 409 で、本文は `{"error":"...","conflicts":["<名前>", ...]}`、何も作りません。存在しない、または削除されたセットと、不正な新しい名前は 400 で、本文は作成と同じ形（`errors` の各問題の前に `item <番号>: `）です。作ったセットの `imported_from` は「<元の監視対象名> / <元のセット名>」（400 バイトまで）です。問題（400）と名前の重なり（409）の両方があるときは 400 です。
+- 実行指示は `queued` で作ります（応答の `state` は `queued`）。エージェントの同期で、エージェントが指示を受け取れると送ったとき（14 章の `free_worker`）に、そのエージェントの `queued` の指示を古いものから 1 つずつ渡します（規則は [システム仕様.md](システム仕様.md) の 12.5.5）。そのセットにまだ応答の無い指示（`queued` または `delivered`）があれば 409（`command.request_pending`）です。削除されたセットは 404 です。セットを削除すると、エージェントに渡すのを待っている指示（`queued`）は破棄します。実行指示とセットの削除が同時に届き、指示を保存した後にセットが削除されていた場合は、その指示を破棄して（履歴に残します）404 を返します。
+- 破棄は、エージェントに渡すのを待っている指示（`queued`。渡した後に `queued` に戻った指示も含む）だけで、それ以外は 409（`command.request_not_discardable`）です。応答は破棄した指示（`state` は `discarded`）です。
+- `/agents/{id}/command-results` の `results` は出力収集のセット、`sets` はすべてのセットの、最後に終わった実行です。`/command-results` の `names` は、すべての監視対象の削除されていない出力収集のセットの名前（重複なし、順に並べたもの）、`results` は `name` と同じ名前の出力収集のセットを持つ監視対象ごとの最後に終わった実行です（監視対象の名前の順。`name` が空なら空の配列）。
+- 実行の一覧は新しい順で、`limit` は既定 50 で 1〜500 の範囲に丸め、`before` はその ID より前の実行だけを返します（0 以下は指定なし。次のページは `next_before` を `before` に指定。最後のページでは `null`）。`limit` と `before` が整数でなければ 400 です。削除したセットの実行も、保存期間の間は見られます。
 - 閲覧者への応答には、定義の項目（コマンドライン、備考、OS のユーザー、作業ディレクトリ、スケジュール、用途、説明、正規表現、戻り値の指定）と、コマンドごとに取り出した値（`values`）、実行の始まり方（`trigger`、`scheduled_for`、`request_id`）、その前に飛ばした予定（`skipped_count`、`skipped_from`、`skipped_to`）とコマンドの数（`commands_total`）を含めません。下の型で「A のみ」と書いた項目は、閲覧者への応答ではキーごと省きます。管理者と CLI には全部を返します。
 - コマンドセットの作成、変更、削除、インポート、実行指示、破棄、指示の期限切れは、履歴の分類 `command` に記録します。
 
@@ -267,31 +271,31 @@ interface HostInfo {
 type CodeSpec = { kind: 'single' | 'range' | 'min' | 'max'; a: number; b?: number };   // 0〜255。b は range だけ（a < b）
 type CommandSchedule =
   | { kind: 'once'; at: string }                         // RFC3339（オフセット付き）。UTC に正規化して返す
-  | { kind: 'weekly'; weekdays: ('sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat')[]; time: string }   // time は "HH:MM"（00:00〜23:59。時と分はそれぞれ数字 0〜9 の 2 桁）
+  | { kind: 'weekly'; weekdays: ('sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat')[]; time: string }   // weekdays は 1 つ以上（大文字と小文字を区別せず、重なりはまとめて日曜からの順に返す）。time は "HH:MM"（00:00〜23:59。時と分はそれぞれ数字 0〜9 の 2 桁）
   | { kind: 'daily'; time: string }                      // time は weekly と同じ
   | { kind: 'every_hours'; every: 1 | 2 | 3 | 4 | 6 | 8 | 12 }
   | { kind: 'every_minutes'; every: 1 | 2 | 3 | 4 | 5 | 6 | 10 | 12 | 15 | 20 | 30 }
   | { kind: 'hourly_at'; minute: number };               // 0〜59
 // once 以外は監視対象のホストのローカル時刻で解釈する。at と time は書いたとおりに読む（前後に空白などがある値は時刻ではなく 400）
 interface CommandSpec {
-  command_line: string;               // bash -c にそのまま渡す。空、NUL を含む、102400 バイト超は 400
-  note: string;                       // 1000 文字まで
+  command_line: string;               // bash -c にそのまま渡す。空か空白だけ、NUL を含む、102400 バイト超は 400
+  note: string;                       // 1000 文字まで。改行とタブ以外の制御文字は 400
   success: CodeSpec;                  // 省略時 {kind:'single',a:0}
   failure: CodeSpec;                  // 省略時 {kind:'min',a:1}。success と重なると 400
   on_problems: 'stop' | 'continue_on_failure' | 'continue_always';   // 省略時 'stop'
   timeout_sec: number;                // 制限時間（秒）。0〜86400 で、0 は制限なし（終わるまで待つ）。省略時 0
-  line_limit: number;                 // 1〜10000、省略時 20（出力収集だけで使う）
+  line_limit: number;                 // 1〜10000、省略時と 0 は 20（出力収集だけで使う）
   patterns: string[];                 // 正規表現（名前付きグループが必須）。出力収集だけ（実行のみで指定すると 400）
 }
 interface CommandSetSpec {
   name: string;                       // 前後の空白を除いて 1〜100 文字、制御文字なし（前後も含む）。監視対象の中で一意
-  description: string;                // 1000 文字まで
-  purpose: 'collect_output' | 'run_only';
-  os_user: string;                    // 1〜256 文字、空白と制御文字なし、先頭が '-' でない
-  work_dir: string;                   // 空はそのユーザーのホーム。それ以外は絶対パス
+  description: string;                // 1000 文字まで。改行とタブ以外の制御文字は 400
+  purpose: 'collect_output' | 'run_only';   // 前後の空白は除く
+  os_user: string;                    // 前後の空白を除いて 1〜256 文字、空白と制御文字なし、先頭が '-' でない。作成で省略するとエージェントが報告した実行ユーザー（一度も報告が無ければ必須）
+  work_dir: string;                   // 空はそのユーザーのホーム。それ以外は絶対パスで、正規化した形（空、`.`、`..` の部分と末尾の `/` が無い）、NUL と改行なし、4096 バイトまで
   run_mode: 'manual' | 'schedule';    // 省略時は schedule の有無から決める
   schedule: CommandSchedule | null;   // manual では null
-  keep_runs: number;                  // 1〜10000、省略時 100
+  keep_runs: number;                  // 1〜10000、省略時と 0 は 100
   joiner: 'comma' | 'newline';        // 省略時 'comma'
   commands: CommandSpec[];            // 1 つ以上
 }
@@ -304,7 +308,7 @@ interface CommandSet extends CommandSetSpec {
   request: CommandRequest | null;     // まだ応答の無い実行指示（queued / delivered）
   last_run: CommandRun | null;        // 最後に終わった実行
   running: boolean;                   // 実行中の実行がある
-  agent_problems: string[];           // エージェントがこのセットを受け取らなかった理由（現在の定義について報告されたもの）
+  agent_problems: string[];           // エージェントがこのセットを受け取らなかった理由（エージェントが持っている定義、つまり最後に報告した署名の定義について報告されたもの。セットを変更しても、エージェントが新しい定義を受け取って報告するまでは前の定義の理由のまま）
   agent_problems_i18n: Problem[];     // 同じ理由を同じ順に問題（1.2 章）で表したもの。コードを送らないエージェントの理由は {"code": "", "params": {"text": <文>}}
 }
 interface CommandSetList {
@@ -389,8 +393,8 @@ interface CommandRunDetail extends CommandRun {
 | GET | `/tokens/{id}` | V | - | `Token` |
 | POST | `/tokens` | A | `{"name","valid_days"?,"rule_id"?,"rule_version"?}` | `{"token":Token,"value":"mmr_..."}` |
 | POST | `/tokens/{id}/reissue` | A | `{"valid_days"?}` | `{"token":Token,"value":"mmr_..."}` |
-| POST | `/tokens/{id}/unbind` | A | - | `Token` |
-| POST | `/tokens/{id}/revoke` | A | - | `Token` |
+| POST | `/tokens/{id}/unbind` | A | - | `Token`（エージェントのインスタンスとの結び付けを外す。次に認証に成功した要求のインスタンスに結び付く） |
+| POST | `/tokens/{id}/revoke` | A | - | `Token`（すぐに失効させ、渡し済みの自動更新の値も使えなくする。失効済みならそのまま返す） |
 
 ```ts
 type TokenStatus = 'unused' | 'active' | 'expired' | 'revoked';
@@ -402,13 +406,16 @@ interface Token {
   last_seen_at: string | null; instance_id: string; bound_at: string | null;
   reissued_at: string | null; renewed_at: string | null;
   pending_renewal: boolean;          // 自動更新の新しい値を渡し済みで、まだ使われていない
-  expiring_unconnected: boolean;     // 期限が近いのにエージェントが接続していない
-  agent_id: number;
+  expiring_unconnected: boolean;     // 未使用か使用中で、有効期限まで token_renew_before_days 日より短く、エージェントが一度も接続していないか、最後の接続から確認の間隔（そのエージェントの最後の同期の応答が与えたもの。同期したことが無ければ default_check_interval_sec）の 3 倍と 600 秒より長く経った
+  agent_id: number;                  // このトークンの監視対象
 }
 ```
 
-- 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザの管理者には略した形だけを返し、閲覧者にはトークンの値を返しません（一覧と詳細の `value` を省く。エージェントの一覧と詳細が含むトークンの参照にも値はありません）。
-- `valid_days` を省略または 0 にすると設定の既定値を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は前後の空白を除いて `[A-Za-z0-9._-]{1,64}` で一意です（前後にタブや改行などの制御文字がある名前は 400）。
+- 発行と再発行の応答の `value` は、新しい値の全体です（ブラウザにも返す。管理者が画面を閉じるまで表示してコピーするため）。それ以外の応答では、ブラウザの管理者には略した形だけを返し、閲覧者にはトークンの値を返しません（一覧と詳細の `value` を省く。エージェントの一覧と詳細が含むトークンの参照 `TokenRef` は ID、名前、状態、有効期限です）。
+- `valid_days` を省略または 0 にすると設定の既定値（`token_valid_days`）を使います。指定する場合は 1〜3650 で、範囲外は 400 です。トークン名は前後の空白を除いて `[A-Za-z0-9._-]{1,64}` で一意です（形の誤りは 400、前後にタブや改行などの制御文字がある名前も 400。重複は 409）。
+- 発行は、トークンと一緒にその監視対象（`agents` の行と監視対象ごとの DB）を作ります。`rule_id`（0 以下は指定なし）を指定すると、その監視ルールの `rule_version` の版（省略または 0 以下は最新の版）を割り当てます。存在しない監視ルールは 400（`rule.not_found`）、存在しない版は 400（`rule.rule_version_not_found`）で、何も作りません。
+- 再発行は、新しい値と有効期限にし、それまでの値と渡し済みの自動更新の値を使えなくし、失効を取り消して未使用（`unused`）にします。インスタンスとの結び付けはそのままです。
+- 存在しない ID は 404（`token.not_found`）です。発行、再発行、結び付けの解除、失効は履歴（`token`）に残します。
 
 ## 6. 監視ルール
 
@@ -416,15 +423,15 @@ interface Token {
 | --- | --- | --- | --- | --- |
 | GET | `/rules` | V | - | `RuleSummary[]` |
 | GET | `/rules/{id}` | V | - | `RuleDetail`（最新の版の内容） |
-| GET | `/rules/{id}/versions/{version}` | V | - | `RuleVersion` |
-| GET | `/rules/{id}/diff?from=N&to=M` | V | - | `{"from":N,"to":M,"lines":DiffLine[]}` |
+| GET | `/rules/{id}/versions/{version}` | V | - | `RuleVersion`（存在しない版は 404、コード `rule.version_not_found`） |
+| GET | `/rules/{id}/diff?from=N&to=M` | V | - | `{"from":N,"to":M,"lines":DiffLine[]}`（`from` と `to` が整数でなければ 400、どちらかの版が無ければ 404） |
 | POST | `/rules/merge-preview` | A | `{"templates":["base","nginx"],"choices"?:{field:template}}` | `MergePreview`（`choices` で解決した衝突は `conflicts` に含めない） |
-| POST | `/rules` | A | `RuleCreate` | `RuleDetail`（衝突のあるテンプレートで `choices` が足りないと 400） |
+| POST | `/rules` | A | `RuleCreate` | `RuleDetail`（`templates` があれば `content` は使わない。衝突のあるテンプレートで `choices` が足りないと 400、名前の重複は 409（`rule.name_taken`）） |
 | PUT | `/rules/{id}` | A | `{"description"?,"content","comment"?}` | `RuleDetail`（版が 1 上がる。`description` を省略すると現在の説明を保つ） |
-| POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400。指定したすべてのエージェントに適用するか、1 件も適用しない（途中で失敗したら何も変えない）） |
+| POST | `/rules/{id}/apply` | A | `{"version"?,"agent_ids":[1,2]}` | `{"applied":2}`（割り当てを変える。エージェントは次の同期でそれを受け取り、その後の監視の処理で適用する。`version` を省略または 0 にすると最新の版。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID や版があると 400。指定したすべてのエージェントに適用するか、1 件も適用しない（途中で失敗したら何も変えない）） |
 | POST | `/rules/unassign` | A | `{"agent_ids":[1,2]}` | `{"unassigned":1}`（監視ルールの割り当てを外す。エージェントは次の同期の後の監視の処理で auditd のルールとルールファイルを削除し、`none` を報告する。割り当ての無いエージェントはそのまま（件数に数えない）。重複した ID は 1 件として扱う。`agent_ids` が空、または存在しない ID があると 400。指定したすべてのエージェントから外すか、1 件も外さない（途中で失敗したら何も変えない。外したことの履歴も同じ）） |
 | POST | `/rules/{id}/to-template` | A | `{"version"?,"name","description"?}` | `TemplateDetail`（`version` を省略または 0 にすると最新の版。名前の形式の誤りは 400、組み込みと同名または既存と重複は 409） |
-| DELETE | `/rules/{id}` | A | - | `{}`（適用中なら 409） |
+| DELETE | `/rules/{id}` | A | - | `{}`（割り当てているエージェントがあれば 409、コード `rule.in_use`） |
 | POST | `/rules/validate` | A | `{"content":RuleContent}` | `{"errors":string[],"errors_i18n":Problem[]}` |
 
 ```ts
@@ -467,6 +474,7 @@ interface RuleCreate {
 }
 ```
 
+- 存在しない監視ルールは 404（`rule.not_found`）です。作成、保存、割り当て（`applied`）、割り当ての解除（`unassigned`）、削除、テンプレートの作成と変更と削除は履歴（`rule`、`template`）に残します。
 - `content`（監視ルールの作成と保存、テンプレートの作成と変更、`/rules/validate`）は JSON のオブジェクトである必要があります。`null`、配列、文字列などは、監視ルールの作成と保存、テンプレートの作成と変更では 400 です。`/rules/validate` は 200 で（`content` が無い場合も同じ）、`errors` にその問題（`invalid rule content: the content must be a JSON object`、コード `rule.content.not_object`）を返します。
 
 - 種類ごとの有効条件（項目を指定しなかった種類は行わない）:
@@ -491,9 +499,9 @@ interface RuleCreate {
 | --- | --- | --- | --- | --- |
 | GET | `/templates` | V | - | `TemplateSummary[]` |
 | GET | `/templates/{name}` | V | - | `TemplateDetail` |
-| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（`from_rule.version` が 0 または省略なら最新の版。名前は前後の空白を除いて `[A-Za-z0-9._-]{1,64}`（前後にタブや改行などの制御文字がある名前は 400）、組み込みと同名または既存と重複は 409） |
-| PUT | `/templates/{name}` | A | `{"description"?,"content"}` | `TemplateDetail`（`description` を省略すると現在の説明を保つ。組み込みは 403） |
-| DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403） |
+| POST | `/templates` | A | `{"name","description","content"?,"from_builtin"?,"from_rule"?:{"rule_id","version"?}}` | `TemplateDetail`（内容は `from_builtin`、`from_rule`、`content` のうち、この順で最初に指定したもの（どれも無ければ空の内容）。存在しない組み込みテンプレートは 400（`template.builtin_not_found`）、存在しない監視ルールの版は 400（`rule.rule_version_not_found`）。`from_rule.version` が 0 または省略なら最新の版。名前は前後の空白を除いて `[A-Za-z0-9._-]{1,64}`（前後にタブや改行などの制御文字がある名前は 400）、組み込みと同名または既存と重複は 409） |
+| PUT | `/templates/{name}` | A | `{"description"?,"content"}` | `TemplateDetail`（`description` を省略すると現在の説明を保つ。組み込みは 403、存在しない名前は 404） |
+| DELETE | `/templates/{name}` | A | - | `{}`（組み込みは 403、存在しない名前は 404） |
 
 ```ts
 interface TemplateSummary {
@@ -509,7 +517,7 @@ interface TemplateDetail extends TemplateSummary { content: RuleContent }
 | --- | --- | --- | --- | --- |
 | GET | `/detections` | V | クエリ（下記） | `{"items":Detection[],"total":N}` |
 | GET | `/detections/{agent_id}/{id}` | V | - | `Detection` |
-| POST | `/detections/ack` | A | `{"items":[{"agent_id","id"}]}` | `{"acknowledged":N}` |
+| POST | `/detections/ack` | A | `{"items":[{"agent_id","id"}]}` | `{"acknowledged":N}`（N は新しく確認済みにした数。存在しない監視対象や検知と、確認済みの検知は飛ばす。監視対象ごとに履歴（`detection`、操作 `acknowledged`）に残す） |
 
 クエリ: `agent_id`、`category`（alert/normal）、`type`（`DetectionType` の値）、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`（0 以上、最大 1000000）。
 
@@ -529,7 +537,7 @@ interface Detection {
 }
 ```
 
-検知の id は監視対象ごとの DB 内で採番されるため、`agent_id` と組で特定します。
+検知の id は監視対象ごとの DB 内で採番されるため、`agent_id` と組で特定します（`GET /detections/{agent_id}/{id}` で存在しない監視対象は 404 の `agent.not_found`、存在しない検知は 404 の `detection.not_found`）。一覧の `items` は、対象の監視対象（`agent_id` が無ければすべて）の検知を最後の発生時刻の新しい順に並べたもののうち `offset` から `limit` 件で、`total` は条件に合う検知の数です。`agent_id` を指定すると、その ID の監視対象の検知だけを返します（どの監視対象の ID でもなければ空の一覧）。
 
 監視対象の DB を開けない場合（別のビルドで作られた DB など）、`agent_id` を指定しない一覧はその監視対象を除いて返し、`agent_id` でその監視対象を指定した一覧は 500 を返します。どちらの場合もセントラルのログに理由が出ます。
 
@@ -549,14 +557,15 @@ interface Suppression {
 }
 ```
 
-削除すると、その条件で抑止していた未確認の検知はすべて抑止されていない状態に戻り、通知の対象になります（詳細は [システム仕様.md](システム仕様.md) の 12 章の抑止）。確認済みの検知は変えません。
+削除すると、その条件で抑止していた未確認の検知は、ほかの抑止条件に一致すればその条件の抑止に移り、一致しなければ抑止されていない状態に戻ります。戻った検知のうち通知を飛ばしていたもの（`skipped`）は、同じ検知を `notify.dedupe_hours` の間に通知していなければ通知の対象（`pending`）になります（詳細は [システム仕様.md](システム仕様.md) の 12 章の抑止）。確認済みの検知は変えません。存在しない ID は 404（`suppression.not_found`）です。作成と削除は履歴（`suppression`）に残します。
 
-作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要で、すべて空なら 400 です。未知の `type` と存在しない `agent_id` も 400 です。`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
+作成時の検証: 少なくとも 1 つの条件（`type`、`os_user`、`exe`、`target`）が必要で、すべて空なら 400 です。未知の `type` と、監視対象の ID ではない `agent_id` も 400 です。`type`、`os_user`、`exe`、`target`、`comment` は前後の空白を除いた値で、制御文字（NUL、CR、LF、タブなど）を含む場合、または上限（`exe` と `target` は 4096 バイト、`os_user` は 256 バイト、`comment` は 1000 文字）を超える場合は 400 を返します。
 
 ## 10. 証明書
 
-| GET | `/certificates` | V | - | `CertStatus` |
+| メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
+| GET | `/certificates` | V | - | `CertStatus` |
 
 ```ts
 interface CertInfo { fingerprint: string; subject: string; not_before: string; not_after: string; status: 'active' | 'next' | 'retired' }
@@ -570,8 +579,9 @@ interface CertStatus {
 
 ## 11. 履歴
 
-| GET | `/history?category=&limit=&offset=` | V | - | `{"items":HistoryItem[],"total":N}` |
+| メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
+| GET | `/history?category=&limit=&offset=` | V | - | `{"items":HistoryItem[],"total":N}`（最後の発生の新しい順） |
 
 `limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。`category` は `HistoryCategory` の値だけを受け付け、空の値は指定なしです。それ以外の値は 400 で、`error` は `invalid category "<値>": use one of account, rule, token, certificate, rejected, template, suppression, detection, config, command` です（コード `common.query_not_one_of`。8 章）。
 
@@ -599,7 +609,7 @@ interface HistoryItem {
 | PUT | `/accounts/{id}/display-name` | A | `{"display_name"}` | `Account`（セッションはそのまま） |
 | PUT | `/accounts/{id}/role` | A | `{"role"}` | `Account`（対象のセッションは無効になる） |
 | PUT | `/accounts/{id}/notify` | A | `{"notify": boolean}` | `Account`（通知メールの宛先にするかどうか。セッションはそのまま。`notify` が無い、真偽値でない場合は 400） |
-| PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
+| PUT | `/accounts/{id}/password` | A | `{"password"}` | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になり、ログインの失敗の回数とロックも消える） |
 | POST | `/accounts/{id}/disable` | A | - | `Account`（対象のセッション、確認済みのブラウザ、送信済みの確認コードはすべて無効になる） |
 | POST | `/accounts/{id}/enable` | A | - | `Account` |
 | DELETE | `/accounts/{id}` | A | - | `{}` |
@@ -612,6 +622,7 @@ interface Account {
 }
 ```
 
+- 存在しない ID は 404（`account.not_found`）です。作成と各変更、無効化、有効化、削除は履歴（`account`）に残します（値が変わらないメールアドレス、表示名、権限、通知の変更は、何も変えず履歴にも残さずに `Account` を返します）。
 - 有効な管理者が 1 人だけの場合、その管理者の削除、無効化、閲覧者への変更は 409 です（確認と変更は 1 つの書き込みのトランザクションで行うため、同時の要求でも有効な管理者が 0 人になることはありません）。
 - メールアドレス（ログイン ID）は前後の空白を除いて 254 バイト以下（UTF-8 のバイト数。超えると `the e-mail address must be at most 254 bytes`）の、表示名や引用符の無い 1 つのアドレスです（空白、制御文字、`"` `<` `>` `,` は不可。ドメインのドットは不要で `user@localhost` も可）。大文字と小文字を区別せずに一意です。
 - 表示名は前後の空白を除いて 1〜64 文字で、制御文字は前後も含めて使えません（前後の空白を除くのは、制御文字の無い名前だけです）。重複してもかまいません。
@@ -647,8 +658,9 @@ interface ConfigItem {
 
 ## 13. 導入の案内
 
-| GET | `/guide` | V | - | `Guide` |
+| メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
+| GET | `/guide` | V | - | `Guide` |
 
 ```ts
 interface Guide {
@@ -668,9 +680,10 @@ interface Guide {
 | POST | `/agent/v1/sync` | トークン | `SyncRequest` | `SyncResponse` |
 | POST | `/agent/v1/report` | トークン | `ReportBatch` | `{}` |
 
-- すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってローカル DB に保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致、インスタンス ID が空または 128 文字を超える場合は、理由を返さずに 401 とし、履歴（`rejected`）に残します。
+- すべての認証付きの要求に `X-Mimamori-Instance-Id`（エージェントが初期化時に作ってローカル DB に保存するインスタンス ID）を付けます。トークンが無い、無効、期限切れ、失効、インスタンスIDの不一致、インスタンス ID が空または 128 バイトを超える場合は、理由を返さずに 401（`{"error":"unauthorized"}`、コード `auth.unauthorized`）とし、履歴（`rejected`）に残します。結び付いていないトークン（発行の直後と結び付けの解除の後）は、認証に成功した要求のインスタンス ID に結び付けます（履歴 `bound`）。
 - 要求の本文が JSON として解釈できない場合は 400（`{"error":"invalid request"}`。`error_i18n` のコードは `common.invalid_request`）、セントラルの内部エラーは 500（`{"error":"internal error"}`。コード `common.internal_error`）です。未知のフィールドは無視します。
 - この章の日時は、1 章の例外として Unix 秒（整数）です。`0` は未設定を表します。
+- エージェントとセントラルは同じビルドのプログラムで動かします。この章の形（報告のまとまり、`free_worker` など）はそのビルドのものです。
 - 通信の流れは [システム仕様.md](システム仕様.md) の 8 章を参照してください。
 
 ### 14.1 同期（`POST /agent/v1/sync`）
@@ -713,7 +726,7 @@ interface SyncResponse {
 
 - 定義の署名は、監視対象の DB を作ったときの乱数と、削除されていない各セットの ID と版から作ります（DB を作り直すと署名が変わり、定義を送り直します）。セントラルは、エージェントが送った `command_sig` を監視対象ごとに記録します（4.1 章の `definitions_delivered`）。
 - 応答に要るもののうち読み取りに失敗しうるもの（それまでに作られた実行指示の ID の最大値、割り当てた監視ルールの版、コマンドセットの定義）は、下のトランザクションの前に、この順に読みます。読めなかったときは 500 で、同期の記録も指示を渡すことも行いません。
-- 同期は 1 つのトランザクションで、同期の記録（`command_sig` の記録を含む）、`running_requests` に無いこの監視対象の `running` の指示を `done` にすること（`running_requests` があるときだけ。同期の処理を始めた時刻より前に `running` にした指示だけで、`delivered` の指示は変えない）、トークンの自動更新の新しい値とその履歴の保存（[システム仕様.md](システム仕様.md) の 8.4）、指示を渡すことを行います（[システム仕様.md](システム仕様.md) の 12.5.5）。
+- 同期は 1 つのトランザクションで、同期の記録（同期の日時、`agent_version`、`rule_id` と `rule_version`、`ca_fingerprints`、この応答が与える確認の間隔（割り当てた監視ルールの版の `check_interval_sec`、0 なら 60。割り当てが無ければ `default_interval_sec`。4 章の `check_interval_sec`）、`command_sig`）、終了するという報告で「応答していない」としていた記憶を消すこと、`running_requests` に無いこの監視対象の `running` の指示を `done` にすること（`running_requests` があるときだけ。同期の処理を始めた時刻より前に `running` にした指示だけで、`delivered` の指示は変えない）、トークンの自動更新の新しい値とその履歴の保存（[システム仕様.md](システム仕様.md) の 8.4）、指示を渡すことを行います（[システム仕様.md](システム仕様.md) の 12.5.5）。
 - 指示を渡すこと: `free_worker` が true の同期では、この監視対象の `queued` の指示のうち、期限（`expires_at`）前で ID が上で読んだ最大値以下の最も古いもの（ID の順）を 1 つだけ `delivered` にします。`free_worker` が false の同期では新しい指示を渡しません。ほかの監視対象の指示は読みも変えもしません。応答の `command_requests` は、この監視対象の `delivered` の指示すべて（エージェントが応答するまで毎回）です。指示はセットを読んでから作るため、渡す指示のセットは、応答で送る定義か、エージェントが持っている定義（`command_sig` が現在の署名と同じとき）に含まれます（指示を作ってから定義を読むまでにセットを削除した場合を除きます。その指示は削除とともに破棄するか、エージェントが `unknown_set` と応答します）。定義を読んだ後に作られた指示は `queued` のままで、後の同期で渡します。内蔵エージェントにも同じものを渡します。
 
 ### 14.2 報告（`POST /agent/v1/report`）
@@ -731,7 +744,7 @@ interface ReportBatch {
   stopping: boolean;                   // エージェントが終了する前の最後の報告であること（すべてのワーカーが終わった後に送る。[システム仕様.md](システム仕様.md) の 4.1）。true の報告の後、セントラルはエージェントの次の同期まで、エージェントが応答していないものとする
   reports: ReportRequest[];            // 未送信の項目（古い順）。無ければ []（null にはしない）
 }
-interface ReportRequest {              // 報告の項目（識別子は持たない）
+interface ReportRequest {              // 報告の項目（まとまりの report_id で識別する）
   created_at: number;                  // 報告を作った日時（Unix 秒）
   detections: DetectionReport[];
   host_info?: HostInfo;                // 4 章の HostInfo と同じ項目（workers を含む）に、os_user、time_zone、utc_offset_sec を加えたもの。日時（collected_at、trusted_cas[].not_after、incomplete_scans[].started_at）は Unix 秒
@@ -763,14 +776,14 @@ interface CommandRunReport {
 ```
 
 - 報告は、`report_id` が 16 進数の小文字 32 文字で、`reports` が配列（空でもよい）の `ReportBatch` だけを受け付けます。それ以外（`report_id` が無いか形が違う、`reports` が無いか null、1 件の報告だけの本文）は 400（`common.invalid_request`）で、何も保存しません。項目は `reports` の順に保存します。
-- `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。
+- `ReportRequest` の `target` は 512 バイト、`exe` は 1024 バイトまでに切り詰めます。`apply.message` は 2000 バイトまでです。`host_info` の `os_user` は 256 バイト、`time_zone` は 64 バイトまで、`command_apply` はセットの名前を 400 バイト、理由をセットごとに 100 件、1 件 2000 バイト、セットを 1000 件までにします。`apply.status` の値は確かめずに記録します（同じビルドのエージェントは上の 5 つだけを送ります）。
 - `*_i18n` のフィールド（`message_i18n`、`warnings_i18n`、`problems_i18n`）は省略できます。省略したときは英文だけを保存します。セントラルは、英語にすると英文と一致するものだけを保存し、1 件の JSON が 16 KiB を超えるものは保存しません。
 - `apply` は、監視対象の今の割り当てについての結果（`rule_id` と `version` が割り当てられた監視ルールとその版のもの。割り当てが無いときは両方が 0 のもの）だけを記録します。それ以外の結果は何も変えず、履歴（`apply_result_*`）にも残しません（4 章）。`apply.status` が `none` の報告は、適用中の監視ルールを無し（`reported_version` も無し）として記録します。`error` の報告は、それまでに報告された適用中の監視ルールを変えません。
 - `host_info` の `os_user`（エージェントの実行ユーザー）、`time_zone`、`utc_offset_sec`（ホストのタイムゾーン）は監視対象ごとに記録し、新しいコマンドセットの OS のユーザーの既定値と、スケジュールの表示に使います。
-- コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。監視対象の DB に無いセットの実行は捨てます。
+- コマンドセットの実行は冪等に保存します。どの報告にも開始時の値があり、実行（`run_uid`）は最初に届いた報告から作ります。コマンドの結果は（実行、`position`）ごとに 1 回だけ保存し、実行は最初の `finished` の報告で 1 回だけ閉じます。`state` が 3 つの区分のどれでもなければ、保存済みのコマンドの区分の最も悪いもの（無ければ `error`）にします。実行の `reason` は 64 バイトまでに切り詰めます。`run_uid` が空か 128 バイトを超える実行と、監視対象の DB に無いセットの実行は捨てます（後者はセントラルのログに `run <run_uid> of unknown command set <ID> ignored`）。`trigger` が 2 つの値のどちらでもなければ `manual` にします。`position` が負か `commands_total` 以上の結果は捨て、`kind` が 3 つの区分のどれでもない結果は `error`（`reason` は 64 バイトまで）にします。
 - 報告は、項目ごとに順に、まず `command_request_acks` を、次に `command_runs` を指示に当てはめます。`started` は `delivered` の指示を `running` に（`run_uid` を記録）、`expired`（期限後に届いた）と `unknown_set`（そのセットを持っていない）は `delivered` の指示を `expired` にします（履歴に残す）。`request_id` のある実行は、終わっていなければ `delivered` の指示を `running` に、`finished` なら `delivered` または `running` の指示を `done` にします。どれも報告したエージェントの指示だけを変え、同じ報告を 2 回受け取っても 2 回目は何も変えません。`request_id` が 0 の実行（定期のセット）は指示を変えません。
 - `stopping` が true の報告では、指示の状態の変更（上）の後で、同じトランザクションの中で、この監視対象の `delivered` の指示をすべて `queued` に戻し（ログに `run request <ID> of <エージェント> waits again: the agent is stopping`）、エージェントの次の同期まで、エージェントを応答していないものとします（メモリーに覚えるだけで、セントラルを再起動すると忘れます）。同じ `report_id` の報告が再び届いた場合も同じです（戻す指示が無ければ何も変えません）。規則は [システム仕様.md](システム仕様.md) の 12.5.5 です。
 - `command_apply` は監視対象ごとに記録し、署名が現在の定義と一致する間、受け取らなかったセットの理由を 4.1 章の `agent_problems` に示します。
 - `report_id` が、この監視対象で最後に保存した報告と同じ報告は、保存済みとして扱い、`{}` で応答します。報告は監視対象の DB に書く部分とセントラル管理用 DB に書く部分に分けて保存し、どちらの部分もすべての項目を 1 つのトランザクションで保存します。どちらもすでに保存した部分は保存し直しません（上の指示の状態の変更は毎回行います）。前の送信でセントラル管理用 DB に書く部分を保存できなかった報告は、その部分をこのときに保存します（[システム仕様.md](システム仕様.md) の 12.1）。
-- コマンドセットの結果について、メールで通知することはありません。
+- 通知メール（[システム仕様.md](システム仕様.md) の 12.2）の対象は検知だけです。コマンドセットの結果は画面、API、CLI で見ます。
 - 応答は `{}` です。
