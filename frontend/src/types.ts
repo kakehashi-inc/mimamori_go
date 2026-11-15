@@ -506,6 +506,8 @@ export interface ConfigItem {
     is_set: boolean;
     /** Value when the item is not stored; for smtp.port the port of the stored smtp.security. */
     default: string;
+    /** smtp.port only: the default for every value of smtp.security. */
+    security_defaults?: Record<string, string>;
     /** false when the default applies. */
     stored: boolean;
     /** Takes effect when the central restarts. */

@@ -161,3 +161,26 @@ func TestConfigSMTPPortDefaultFollowsSecurity(t *testing.T) {
 		t.Errorf("smtp.port after reset with tls: %v", p)
 	}
 }
+
+// GET /config gives, with the item smtp.port, its default for every value of
+// smtp.security, so that the configuration screen shows the port that will
+// be saved for the security chosen in the form; the other items have none.
+func TestConfigSMTPPortDefaultsBySecurity(t *testing.T) {
+	e := newTestEnv(t)
+	items := configItems(t, e.admin("PUT", "/config", map[string]any{"set": map[string]string{"smtp.security": "tls"}}))
+	got, ok := items["smtp.port"]["security_defaults"].(map[string]any)
+	want := map[string]any{"starttls": "587", "tls": "465", "none": "25"}
+	if !ok || len(got) != len(want) {
+		t.Fatalf("smtp.port security_defaults: %v", items["smtp.port"]["security_defaults"])
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("security_defaults[%s] = %v, want %v", k, got[k], v)
+		}
+	}
+	for name, it := range items {
+		if _, has := it["security_defaults"]; has && name != "smtp.port" {
+			t.Errorf("%s has security_defaults", name)
+		}
+	}
+}

@@ -16,9 +16,13 @@ type configItemJSON struct {
 	IsSet bool   `json:"is_set"` // the secret item has a value
 	// Default is the value when the item is not stored (empty for the secret
 	// item); the port of the mail server is the one of the stored security.
-	Default string `json:"default"`
-	Stored  bool   `json:"stored"`  // false: the default applies
-	Restart bool   `json:"restart"` // takes effect when the central restarts
+	// SecurityDefaults (smtp.port only) is the default for every value of
+	// smtp.security, so that a form can show the port of the security it
+	// is about to save.
+	Default          string            `json:"default"`
+	SecurityDefaults map[string]string `json:"security_defaults,omitempty"`
+	Stored           bool              `json:"stored"`  // false: the default applies
+	Restart          bool              `json:"restart"` // takes effect when the central restarts
 	// Min and Max are the range of an item of kind int, both accepted (the
 	// validation uses the same); items of other kinds have none.
 	Min *int `json:"min,omitempty"`
@@ -51,6 +55,9 @@ func (c *core) configOut() (*configJSON, error) {
 			item.IsSet = f.Value(cfg) != ""
 		} else {
 			item.Value, item.Default = f.Value(cfg), f.Default(cfg)
+		}
+		if f.Name == "smtp.port" {
+			item.SecurityDefaults = modules.SMTPPortDefaults()
 		}
 		if f.Kind == "int" {
 			lo, hi := f.Min, f.Max

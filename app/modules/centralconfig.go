@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/mail"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -214,6 +215,19 @@ func (f *ConfigField) Default(c *CentralConfig) string {
 	return f.get(d)
 }
 
+// SMTPSecurities are the values of smtp.security.
+var SMTPSecurities = []string{"starttls", "tls", "none"}
+
+// SMTPPortDefaults returns the default of smtp.port (defaultSMTPPort) for
+// every value of smtp.security.
+func SMTPPortDefaults() map[string]string {
+	out := make(map[string]string, len(SMTPSecurities))
+	for _, s := range SMTPSecurities {
+		out[s] = strconv.Itoa(defaultSMTPPort(s))
+	}
+	return out
+}
+
 // defaultSMTPPort is the port of the mail server for a security (smtp.security)
 // when smtp.port is not stored.
 func defaultSMTPPort(security string) int {
@@ -382,9 +396,7 @@ func (c *CentralConfig) validationProblems() []Problem {
 			add(M("config.server_name_invalid", "name", "server_names", "value", strconv.Quote(n)))
 		}
 	}
-	switch c.SMTP.Security {
-	case "starttls", "tls", "none":
-	default:
+	if !slices.Contains(SMTPSecurities, c.SMTP.Security) {
 		add(M("config.smtp_security", "name", "smtp.security"))
 	}
 	if h := c.SMTP.Host; h != "" && net.ParseIP(h) == nil && !validMailHost(h) {

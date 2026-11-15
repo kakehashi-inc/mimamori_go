@@ -633,6 +633,7 @@ interface ConfigItem {
   value: string;                      // 保存した値または既定値（一覧はカンマ区切り、真偽値は "true" / "false"。secret は常に ""）
   is_set: boolean;                    // secret に値があるか
   default: string;                    // 保存していないときの値（secret は ""）。smtp.port は保存している smtp.security のポート（starttls 587、tls 465、none 25）
+  security_defaults?: Record<string, string>;   // smtp.port だけ。smtp.security の値ごとの smtp.port の既定値（{"starttls":"587","tls":"465","none":"25"}）
   stored: boolean;                    // false は既定値で動作中
   restart: boolean;                   // true はセントラルの再起動後に反映
   min?: number; max?: number;         // kind が int の項目だけ。受け付ける値の範囲（両端を含む。保存時の検証と同じ定義から作る）

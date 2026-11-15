@@ -82,7 +82,10 @@ function refusalProblems(err: unknown): ServerProblem[] {
 
 interface Draft {
     values: Record<string, string>;
+    /** Stored items that the save sets back to their default. */
     resets: Set<string>;
+    /** Items that are not stored and not typed into: they keep the default, and their fields show it. */
+    follow: Set<string>;
     password: string;
     clearPassword: boolean;
 }
@@ -90,7 +93,8 @@ interface Draft {
 function initialDraft(config: CentralConfig): Draft {
     const values: Record<string, string> = {};
     for (const item of config.items) values[item.name] = item.value;
-    return { values, resets: new Set(), password: '', clearPassword: false };
+    const follow = new Set(config.items.filter(i => !i.stored && i.kind !== 'secret').map(i => i.name));
+    return { values, resets: new Set(), follow, password: '', clearPassword: false };
 }
 
 export function ConfigPage() {
@@ -135,7 +139,16 @@ export function ConfigPage() {
 
     const pending = data.items.filter(i => i.pending).map(i => i.name);
 
-    // The update holds only what differs from the stored state.
+    // The default an item gets with the form as it is: smtp.port has the
+    // default of the smtp.security chosen in the form.
+    const defaultOf = (item: ConfigItem) => item.security_defaults?.[draft.values['smtp.security']] ?? item.default;
+    // The value the field shows: the default for an item set back to it or
+    // left at it, else what was typed.
+    const shown = (item: ConfigItem) =>
+        draft.resets.has(item.name) || draft.follow.has(item.name) ? defaultOf(item) : (draft.values[item.name] ?? '');
+
+    // The update holds only what differs from the state after the save
+    // without it: the stored value, or the default for an item that is not stored.
     const changes = (() => {
         const set: Record<string, string> = {};
         const unset: string[] = [];
@@ -147,8 +160,9 @@ export function ConfigPage() {
             }
             if (draft.resets.has(item.name)) {
                 if (item.stored) unset.push(item.name);
-            } else if (draft.values[item.name] !== item.value) {
-                set[item.name] = draft.values[item.name];
+            } else if (!draft.follow.has(item.name)) {
+                const v = draft.values[item.name];
+                if (v !== (item.stored ? item.value : defaultOf(item))) set[item.name] = v;
             }
         }
         return { set, unset };
@@ -158,7 +172,7 @@ export function ConfigPage() {
     const changed = configChanged || notifyChanges.length > 0;
     // Items in the order of the screen, for the first one to bring into view.
     const order = groups.flatMap(g => g.items);
-    const localProblem = (item: ConfigItem) => intProblem(t, item, draft.values[item.name] ?? '');
+    const localProblem = (item: ConfigItem) => intProblem(t, item, shown(item));
     const invalid = order.filter(n => {
         const item = byName.get(n);
         return item !== undefined && localProblem(item) !== null;
@@ -186,7 +200,9 @@ export function ConfigPage() {
             if (!d) return d;
             const resets = new Set(d.resets);
             resets.delete(name);
-            return { ...d, values: { ...d.values, [name]: value }, resets };
+            const follow = new Set(d.follow);
+            follow.delete(name);
+            return { ...d, values: { ...d.values, [name]: value }, resets, follow };
         });
     };
 
@@ -270,7 +286,7 @@ export function ConfigPage() {
 
     function input(item: ConfigItem, marked: boolean) {
         const id = inputId(item.name);
-        const value = draft!.values[item.name] ?? '';
+        const value = shown(item);
         const markClass = marked ? invalidInputClass : '';
         if (item.kind === 'secret') {
             return (
@@ -381,8 +397,8 @@ export function ConfigPage() {
                 {item.min !== undefined && item.max !== undefined && (
                     <> {t('config.range', { min: item.min, max: item.max })}</>
                 )}
-                {item.kind !== 'secret' && item.default !== '' && (
-                    <> {t('config.defaultValue', { value: item.default })}</>
+                {item.kind !== 'secret' && defaultOf(item) !== '' && (
+                    <> {t('config.defaultValue', { value: defaultOf(item) })}</>
                 )}
             </>
         );
@@ -403,7 +419,7 @@ export function ConfigPage() {
                             {t('config.pending')}
                         </Badge>
                     )}
-                    {!item.stored && !reset && <Badge>{t('config.usingDefault')}</Badge>}
+                    {draft!.follow.has(item.name) && <Badge>{t('config.usingDefault')}</Badge>}
                     <span className='font-mono text-xs text-muted'>{item.name}</span>
                     {item.stored && item.kind !== 'secret' && (
                         <button
