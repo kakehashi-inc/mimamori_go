@@ -212,6 +212,13 @@ func (rt *AgentRuntime) storeRunReport(r *commandRun, what string, rep CommandRu
 // came first, the execution stays unfinished and the next start reports the
 // run as interrupted.
 //
+// Nothing starts after the stop: when it came before the start of the run
+// is recorded, nothing is recorded (a manual request is answered at its next
+// delivery, the occurrence of a scheduled set stays not executed); when it
+// came before a command, that command does not start and the run is closed
+// as interrupted. A starting record is not written after the stop
+// (storeRunStart).
+//
 // A panic while the run is processed is logged and the run is closed with
 // what it has (closeAfterPanic); its command is not signalled for it.
 func (rt *AgentRuntime) runCommandJob(job *commandJob) (started bool) {
@@ -230,6 +237,10 @@ func (rt *AgentRuntime) runCommandJob(job *commandJob) (started bool) {
 func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	job := run.job
 	def := job.def
+	if isClosed(rt.stop) {
+		rt.logf("command set %q not started: the agent stops", def.Name)
+		return false
+	}
 	now := rt.now().Unix()
 	uid, err := RandomHex(16)
 	if err != nil {
@@ -248,7 +259,7 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	// never run twice and never lost (a run cut short by a crash is reported
 	// as interrupted). The occurrences skipped before this one are counted
 	// from the schedule state read in the same transaction.
-	err = rt.storeRunRecord(fmt.Sprintf("command set %q: the start of run %s", def.Name, uid), func() error {
+	err = rt.storeRunStart(fmt.Sprintf("command set %q: the start of run %s", def.Name, uid), func() error {
 		return rt.out.queueBuilt(func(tx models.Writer) (*ReportRequest, error) {
 			base := run.base
 			if job.trigger == TriggerSchedule {
@@ -278,12 +289,16 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 			return rt.stamped(start), nil
 		})
 	})
+	var stopped *stoppedBeforeRecord
 	switch {
 	case errors.Is(err, models.ErrAlreadyExecuted):
 		// Only for the answer: the run that was recorded first.
 		if e, err := models.CommandExecutionByRequest(rt.DB.Read(), job.requestID); err == nil && e != nil {
 			rt.queueAcks([]CommandRequestAck{{RequestID: job.requestID, Status: RequestAckStarted, RunUID: e.RunUID, At: now}})
 		}
+		return false
+	case errors.As(err, &stopped):
+		rt.logf("command set %q not started: the agent stops%s", def.Name, stopped.cause("recording its start failed"))
 		return false
 	case err != nil:
 		rt.logf("command set %q not run: recording its start failed: %v", def.Name, err)
@@ -293,17 +308,27 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	rt.logf("command set %q started (%s, run %s)", def.Name, job.trigger, uid)
 
 	for i := range def.Commands {
-		if i > 0 && isClosed(rt.stop) {
+		// No command starts after the stop: the run is closed as
+		// interrupted below.
+		if isClosed(rt.stop) {
 			break
 		}
 		c := &def.Commands[i]
 		// Recorded while the command runs, so that a run cut short by the end
 		// of the agent reports this command as interrupted at the next start.
 		startedAt := time.Now().Unix()
-		if err := rt.storeRunRecord(fmt.Sprintf("command set %q: command %d of run %s", def.Name, i+1, uid), func() error {
+		if err := rt.storeRunStart(fmt.Sprintf("command set %q: command %d of run %s", def.Name, i+1, uid), func() error {
 			return rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionRunning(tx, uid, i, startedAt) })
 		}); err != nil {
-			rt.logf("command set %q: recording the start of command %d of run %s failed, it is not run: %v", def.Name, i+1, uid, err)
+			if errors.As(err, &stopped) {
+				rt.logf("command set %q: command %d of run %s not started: the agent stops%s", def.Name, i+1, uid,
+					stopped.cause("recording its start failed"))
+			} else {
+				rt.logf("command set %q: recording the start of command %d of run %s failed, it is not run: %v", def.Name, i+1, uid, err)
+			}
+			break
+		}
+		if isClosed(rt.stop) {
 			break
 		}
 		run.cur = startCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
@@ -351,7 +376,7 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 		}
 	}
 	if !run.closed {
-		// The agent stopped between two commands.
+		// The agent stopped before a command started.
 		rep := run.base
 		rep.Results = append([]CommandResultReport{}, run.unstored...)
 		reason := ""
@@ -452,22 +477,63 @@ func (rt *AgentRuntime) leaveCommand(run *commandRun) {
 	}
 }
 
-// storeRunRecord writes one record of a run (write is one transaction) and,
-// when that fails, writes it again after RunRecordRetryFirst, doubling the
-// wait up to RunRecordRetryMax, until it is stored or the stop comes; after
-// the stop it makes one more attempt. A record whose row is gone
-// (sql.ErrNoRows) or whose request already ran (models.ErrAlreadyExecuted)
-// is not written again. It returns nil when the record was stored, else the
-// last error. what names the record in the log line of a repeated attempt.
+// storeRunRecord writes a record that ends something of a run (the result
+// of a command, the end of the run; write is one transaction) and, when that
+// fails, writes it again after RunRecordRetryFirst, doubling the wait up to
+// RunRecordRetryMax, until it is stored or the stop comes; after the stop it
+// makes one more attempt. A record whose row is gone (sql.ErrNoRows) or
+// whose request already ran (models.ErrAlreadyExecuted) is not written
+// again. It returns nil when the record was stored, else the last error.
+// what names the record in the log line of a repeated attempt.
 func (rt *AgentRuntime) storeRunRecord(what string, write func() error) error {
+	return rt.writeRunRecord(what, true, write)
+}
+
+// storeRunStart writes a record that starts something (the start of a run,
+// the command that starts) as storeRunRecord does, except that nothing is
+// written once the stop came, also not before the first attempt: it then
+// returns a *stoppedBeforeRecord.
+func (rt *AgentRuntime) storeRunStart(what string, write func() error) error {
+	return rt.writeRunRecord(what, false, write)
+}
+
+// stoppedBeforeRecord is the error of a starting record that was not stored
+// because the stop came; last is the failure of the last attempt (nil when
+// none was made).
+type stoppedBeforeRecord struct{ last error }
+
+func (e *stoppedBeforeRecord) Error() string { return "the agent stops" + e.cause("storing it failed") }
+
+// cause returns " (<what>: <last failure>)", or "" when no attempt failed.
+func (e *stoppedBeforeRecord) cause(what string) string {
+	if e.last == nil {
+		return ""
+	}
+	return fmt.Sprintf(" (%s: %v)", what, e.last)
+}
+
+// writeRunRecord is storeRunRecord (afterStop: one more attempt after the
+// stop) and storeRunStart (no attempt after the stop).
+func (rt *AgentRuntime) writeRunRecord(what string, afterStop bool, write func() error) error {
 	wait, most := RunRecordRetryFirst, RunRecordRetryMax
 	if rt.recordRetry > 0 {
 		wait, most = rt.recordRetry, rt.recordRetry*(RunRecordRetryMax/RunRecordRetryFirst)
 	}
+	var last error
 	for {
+		if !afterStop && isClosed(rt.stop) {
+			return &stoppedBeforeRecord{last: last}
+		}
 		err := write()
-		if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, models.ErrAlreadyExecuted) || isClosed(rt.stop) {
+		if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, models.ErrAlreadyExecuted) {
 			return err
+		}
+		last = err
+		if isClosed(rt.stop) {
+			if afterStop {
+				return err
+			}
+			return &stoppedBeforeRecord{last: last}
 		}
 		rt.logf("%s: storing it failed, tried again in %s: %v", what, wait, err)
 		t := time.NewTimer(wait)

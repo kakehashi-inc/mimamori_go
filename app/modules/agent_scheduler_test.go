@@ -313,7 +313,7 @@ func TestSchedulerNoBusyRetry(t *testing.T) {
 	if retries == 0 || retries > 2+int(math.Log2(float64(took/(100*time.Millisecond))+1)) {
 		t.Fatalf("%d repeated starts in %s", retries, took)
 	}
-	if !strings.Contains(logged, "not run: recording its start failed") {
+	if !strings.Contains(logged, `command set "setb" not started: the agent stops (recording its start failed: `) {
 		t.Fatalf("the start must be given up at the stop: %q", logged)
 	}
 	if all, _ := countRuns(rt.DB); all != 0 {
