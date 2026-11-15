@@ -364,17 +364,17 @@ type tokenJSON struct {
 	AgentID             int64   `json:"agent_id"`
 }
 
-// tokenOut converts a token for the API. The value is given in full only to
-// the management CLI; administrators in the browser receive a shortened form
-// and viewers none.
+// tokenOut converts a token for the API, judging its state at now (Unix
+// seconds; one answer judges all its tokens at the same moment). The value
+// is given in full only to the management CLI; administrators in the
+// browser receive a shortened form and viewers none.
 //
 // ExpiringUnconnected flags a token close to its expiry that was not seen
 // for longer than an agent may be silent (silenceAllowed) with the check
 // interval its agent's last sync answer gave it (agents.check_interval_sec,
 // as whether the agent responds is judged), or, while no agent of the token
 // has synced, with default_check_interval_sec.
-func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
-	now := time.Now().Unix()
+func (c *core) tokenOut(r *http.Request, t *models.Token, now int64) tokenJSON {
 	out := tokenJSON{ID: t.ID, Name: t.Name, Value: tokenValueFor(r, t.Value), Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
 		CreatedBy: c.operatorShown(r)(t.CreatedBy), LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
@@ -400,8 +400,9 @@ func (c *core) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]tokenJSON, 0, len(list))
+	now := time.Now().Unix()
 	for _, t := range list {
-		out = append(out, c.tokenOut(r, t))
+		out = append(out, c.tokenOut(r, t, now))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -426,7 +427,7 @@ func (c *core) loadToken(w http.ResponseWriter, r *http.Request) *models.Token {
 
 func (c *core) handleGetToken(w http.ResponseWriter, r *http.Request) {
 	if t := c.loadToken(w, r); t != nil {
-		writeJSON(w, http.StatusOK, c.tokenOut(r, t))
+		writeJSON(w, http.StatusOK, c.tokenOut(r, t, time.Now().Unix()))
 	}
 }
 
@@ -516,7 +517,7 @@ func (c *core) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		detail = modules.M("history.detail.token_issued_rule", "expires", expires, "rule", agent.AssignedRuleID.Int64, "version", agent.AssignedRuleVersion)
 	}
 	c.history(p, models.HistToken, "issued", tok.Name, detail)
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok), "value": value})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, tok, time.Now().Unix()), "value": value})
 }
 
 func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +555,7 @@ func (c *core) handleReissueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistToken, "reissued", t.Name, modules.M("history.detail.token_reissued", "expires", time.Unix(t.ExpiresAt, 0).UTC().Format(time.RFC3339)))
-	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t), "value": value})
+	writeJSON(w, http.StatusOK, map[string]any{"token": c.tokenOut(r, t, now), "value": value})
 }
 
 func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
@@ -569,7 +570,7 @@ func (c *core) handleUnbindToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.history(principalFrom(r), models.HistToken, "unbound", t.Name, modules.M("history.detail.token_unbound", "instance", prev))
-	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
+	writeJSON(w, http.StatusOK, c.tokenOut(r, t, time.Now().Unix()))
 }
 
 func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
@@ -586,7 +587,7 @@ func (c *core) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		}
 		c.history(principalFrom(r), models.HistToken, "revoked", t.Name, modules.Msg{})
 	}
-	writeJSON(w, http.StatusOK, c.tokenOut(r, t))
+	writeJSON(w, http.StatusOK, c.tokenOut(r, t, time.Now().Unix()))
 }
 
 // tokenValueFor returns a stored token value as the caller may see it: in
