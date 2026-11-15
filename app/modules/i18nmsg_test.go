@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -135,12 +136,22 @@ func TestMessageCatalog(t *testing.T) {
 	}
 }
 
+// textTags matches the element tags of a screen text ("<first>", "</first>")
+// that the screens fill in with their own elements (react-i18next Trans).
+var textTags = regexp.MustCompile(`</?[A-Za-z][A-Za-z0-9]*>`)
+
+func sortedTags(s string) []string {
+	tags := textTags.FindAllString(s, -1)
+	sort.Strings(tags)
+	return tags
+}
+
 // TestScreenTextKeySets keeps the English and the Japanese screen texts of
 // each bundle (the application's and the administrator module's) in step,
 // beyond the server's codes of TestMessageCatalog: both files have the same
-// keys, and each text has the same placeholders in both languages, so that
-// no screen shows a raw key, an English text in the Japanese screens or an
-// empty placeholder.
+// keys, and each text has the same placeholders and the same element tags in
+// both languages, so that no screen shows a raw key, an English text in the
+// Japanese screens, an empty placeholder or a tag as text.
 func TestScreenTextKeySets(t *testing.T) {
 	for _, dir := range []string{"i18n", "admin/i18n"} {
 		en, ja := readTexts(t, dir+"/en.json"), readTexts(t, dir+"/ja.json")
@@ -155,6 +166,9 @@ func TestScreenTextKeySets(t *testing.T) {
 			}
 			if !reflect.DeepEqual(sortedPlaceholders(text), sortedPlaceholders(jt)) {
 				t.Errorf("%s: placeholders of %s/en.json %v and ja.json %v differ", key, dir, sortedPlaceholders(text), sortedPlaceholders(jt))
+			}
+			if !reflect.DeepEqual(sortedTags(text), sortedTags(jt)) {
+				t.Errorf("%s: tags of %s/en.json %v and ja.json %v differ", key, dir, sortedTags(text), sortedTags(jt))
 			}
 		}
 		for key := range ja {

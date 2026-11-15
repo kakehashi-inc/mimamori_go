@@ -565,8 +565,8 @@
                 "schedule": "定期"
             },
             "scheduledFor": "予定 {{at}}",
-            "skippedOne": "この実行の前に、定期の予定を 1 回飛ばしました（{{at}}）。",
-            "skipped": "この実行の前に、定期の予定を {{count}} 回飛ばしました（{{from}} から {{to}} まで）。",
+            "skippedOne": "この実行の前に、定期の予定を 1 回飛ばしました（<first>{{at}}</first>）。",
+            "skipped": "この実行の前に、定期の予定を {{count}} 回飛ばしました（<first>{{from}}</first> から <last>{{to}}</last> まで）。",
             "commandsRun": "実行したコマンド",
             "commandsCount": "{{total}} 個中 {{done}} 個"
         }

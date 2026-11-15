@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { ApiError, listAgents } from '../../api/client';
 import { Badge } from '../../components/Badge';
@@ -467,21 +467,34 @@ function RunTrigger({ run }: { run: CommandRun }) {
     );
 }
 
-/** How many occurrences of the schedule were skipped before a scheduled run, and when; nothing when none was. */
+/** How many occurrences of the schedule were skipped before a scheduled run, and when; nothing when none were. */
 function SkippedOccurrences({ run }: { run: CommandRun }) {
-    const { t } = useTranslation();
     const count = run.skipped_count ?? 0;
     if (count <= 0) return null;
-    const from = formatDateTime(run.skipped_from);
+    // The times are the <first> and <last> elements of the text, each kept on one line.
+    const components = {
+        first: <time dateTime={run.skipped_from ?? undefined} className='whitespace-nowrap' />,
+        last: <time dateTime={run.skipped_to ?? undefined} className='whitespace-nowrap' />,
+    };
     return (
-        <span className='flex max-w-80 min-w-56 items-start gap-1 text-xs text-warning'>
+        <span className='flex max-w-96 min-w-56 items-start gap-1 text-xs text-warning'>
             <span className='material-icons-outlined text-sm leading-4' aria-hidden='true'>
                 event_busy
             </span>
             <span>
-                {count === 1
-                    ? t('commandSets.run.skippedOne', { at: from })
-                    : t('commandSets.run.skipped', { count, from, to: formatDateTime(run.skipped_to) })}
+                {count === 1 ? (
+                    <Trans
+                        i18nKey='commandSets.run.skippedOne'
+                        values={{ at: formatDateTime(run.skipped_from) }}
+                        components={components}
+                    />
+                ) : (
+                    <Trans
+                        i18nKey='commandSets.run.skipped'
+                        values={{ count, from: formatDateTime(run.skipped_from), to: formatDateTime(run.skipped_to) }}
+                        components={components}
+                    />
+                )}
             </span>
         </span>
     );

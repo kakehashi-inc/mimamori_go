@@ -565,8 +565,8 @@
                 "schedule": "Schedule"
             },
             "scheduledFor": "Scheduled for {{at}}",
-            "skippedOne": "1 scheduled occurrence was skipped before this run ({{at}}).",
-            "skipped": "{{count}} scheduled occurrences were skipped before this run (from {{from}} to {{to}}).",
+            "skippedOne": "1 scheduled occurrence was skipped before this run (<first>{{at}}</first>).",
+            "skipped": "{{count}} scheduled occurrences were skipped before this run (from <first>{{from}}</first> to <last>{{to}}</last>).",
             "commandsRun": "Commands run",
             "commandsCount": "{{done}} of {{total}}"
         }
