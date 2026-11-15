@@ -20,7 +20,8 @@ import (
 // TestCommandStartsAfterItsGroupIsStored: while the record of the command
 // that starts and its process group cannot be written, the command does not
 // run (its gate waits); the record is written again until it is stored, then
-// the command runs, and its time limit counts from then on.
+// the command runs, recorded as started when its record was stored, and its
+// time limit counts from then on.
 func TestCommandStartsAfterItsGroupIsStored(t *testing.T) {
 	requireBash(t)
 	rt := newCommandRuntime(t, &cmdTransport{})
@@ -41,6 +42,26 @@ func TestCommandStartsAfterItsGroupIsStored(t *testing.T) {
 	}
 	stored := time.Now()
 	execOnDB(t, rt.DB, `DROP TRIGGER fail_group`)
+	for i := 0; ; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if i == 500 {
+			t.Fatal("the command did not run after its group was stored")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The start time of the running command is that of the attempt that
+	// stored its record (the next start reports it as the start of an
+	// interrupted command).
+	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("unfinished runs %+v, %v", runs, err)
+	}
+	if runs[0].RunningStartedAt < stored.Unix() {
+		t.Fatalf("the running command is recorded as started at %d, before its record was stored at %d",
+			runs[0].RunningStartedAt, stored.Unix())
+	}
 	if !returned(t, done) {
 		t.Fatal("not started")
 	}

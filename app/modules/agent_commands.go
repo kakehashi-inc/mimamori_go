@@ -413,10 +413,11 @@ func (rt *AgentRuntime) recordCommandStart(run *commandRun, pos int) bool {
 	if err != nil {
 		rt.logf("command set %q: command %d of run %s: %v; its process group is recorded without it", def.Name, pos+1, run.uid, err)
 	}
-	at := time.Now().Unix()
 	err = rt.storeRunStart(fmt.Sprintf("command set %q: the start of command %d of run %s", def.Name, pos+1, run.uid), func() error {
 		return rt.DB.Write(func(tx models.Writer) error {
-			return models.SetCommandExecutionRunning(tx, run.uid, pos, at, pgid, boot.String())
+			// The start time is that of the attempt that stores it: the
+			// command is released right after.
+			return models.SetCommandExecutionRunning(tx, run.uid, pos, time.Now().Unix(), pgid, boot.String())
 		})
 	})
 	var stopped *stoppedBeforeRecord
