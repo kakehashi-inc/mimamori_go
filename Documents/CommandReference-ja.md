@@ -206,7 +206,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | 1 | 一般エラー（`ctl` では、ほかのコードが示さない状態のセントラルの応答も含む。500 など） |
 | 2 | 引数エラー（不明なコマンドやフラグ、値の不足など、コマンドラインそのものの誤りと、名前の重複や組み込みテンプレートの変更など、セントラルが受け付けない値を含む） |
 | 3 | 設定または DB のエラー（多重起動、待ち受けを開けない場合（使用中など）、エージェントの動作中の `agent init` と `agent set-central`、別のビルドのプログラムが作ったデータディレクトリの `central.db`、`agent.db` または `builtin-agent.db`（`agent set-workers --builtin`）を含む。その DB を開くコマンドは `status` も含めてファイル名を示すメッセージで失敗し、データディレクトリを作り直す必要がある）。`status` では停止中 |
-| 4 | 認証または権限のエラー（`ctl` では、`cli.secret` が稼働中のセントラルと一致しない場合と、セントラルの証明書を `ca.crt` で検証できない場合） |
+| 4 | 認証または権限のエラー（`ctl` では、`cli.secret` が稼働中のセントラルと一致しない場合と、セントラルの証明書を `ca.crt` で検証できない場合。`central stop` と `agent stop` では、実行したユーザーがシグナルを送れないプロセスの場合: `not permitted to signal process <pid> (run as the user running it)`） |
 | 5 | 実行エラー（外部コマンドまたはセントラル）。セントラルから 60 秒何も届かずに打ち切った `ctl` の要求を含む |
 | 6 | ファイルまたはディレクトリの I/O エラー（`ctl` では、`cli.secret` や `ca.crt` を読めない場合と、`ca.crt` に証明書が無い場合を含む） |
 | 7 | タイムアウト（`central stop` または `agent stop` が `--timeout` の時間を過ぎても待ち終わらなかった） |
