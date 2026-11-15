@@ -26,9 +26,10 @@ func frontendOnly(code string) bool {
 	return false
 }
 
-// readSrv returns the "srv" section of a frontend i18n file, flattened to
-// code -> text.
-func readSrv(t *testing.T, rel string) map[string]string {
+// readTexts returns every text of a frontend i18n file (path below
+// frontend/src), flattened to key -> text with the sections joined by dots
+// ("commandRun.title").
+func readTexts(t *testing.T, rel string) map[string]string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "..", "frontend", "src", filepath.FromSlash(rel)))
 	if err != nil {
@@ -39,29 +40,40 @@ func readSrv(t *testing.T, rel string) map[string]string {
 		t.Fatalf("%s: %v", rel, err)
 	}
 	out := map[string]string{}
-	var walk func(prefix string, v any)
-	walk = func(prefix string, v any) {
+	var walk func(key string, v any)
+	walk = func(key string, v any) {
 		switch x := v.(type) {
 		case string:
-			out[prefix] = x
+			out[key] = x
 		case map[string]any:
 			for k, c := range x {
-				walk(prefix+"."+k, c)
+				if key != "" {
+					k = key + "." + k
+				}
+				walk(k, c)
 			}
 		default:
-			t.Errorf("%s: srv%s is neither a text nor a section", rel, prefix)
+			t.Errorf("%s: %s is neither a text nor a section", rel, key)
 		}
 	}
-	srv, ok := doc["srv"].(map[string]any)
-	if !ok {
+	walk("", doc)
+	return out
+}
+
+// readSrv returns the "srv" section of a frontend i18n file, flattened to
+// code -> text.
+func readSrv(t *testing.T, rel string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for key, text := range readTexts(t, rel) {
+		if code, ok := strings.CutPrefix(key, "srv."); ok {
+			out[code] = text
+		}
+	}
+	if len(out) == 0 {
 		t.Fatalf("%s: no srv section", rel)
 	}
-	walk("", srv)
-	flat := make(map[string]string, len(out))
-	for k, v := range out {
-		flat[strings.TrimPrefix(k, ".")] = v
-	}
-	return flat
+	return out
 }
 
 func sortedPlaceholders(s string) []string {
@@ -118,6 +130,36 @@ func TestMessageCatalog(t *testing.T) {
 		for code := range ja[admin] {
 			if _, ok := en[admin][code]; !ok {
 				t.Errorf("%s/ja.json: srv.%s is not in en.json", dir, code)
+			}
+		}
+	}
+}
+
+// TestScreenTextKeySets keeps the English and the Japanese screen texts of
+// each bundle (the application's and the administrator module's) in step,
+// beyond the server's codes of TestMessageCatalog: both files have the same
+// keys, and each text has the same placeholders in both languages, so that
+// no screen shows a raw key, an English text in the Japanese screens or an
+// empty placeholder.
+func TestScreenTextKeySets(t *testing.T) {
+	for _, dir := range []string{"i18n", "admin/i18n"} {
+		en, ja := readTexts(t, dir+"/en.json"), readTexts(t, dir+"/ja.json")
+		if len(en) == 0 {
+			t.Fatalf("%s/en.json: no texts", dir)
+		}
+		for key, text := range en {
+			jt, ok := ja[key]
+			if !ok {
+				t.Errorf("%s/ja.json: %s missing", dir, key)
+				continue
+			}
+			if !reflect.DeepEqual(sortedPlaceholders(text), sortedPlaceholders(jt)) {
+				t.Errorf("%s: placeholders of %s/en.json %v and ja.json %v differ", key, dir, sortedPlaceholders(text), sortedPlaceholders(jt))
+			}
+		}
+		for key := range ja {
+			if _, ok := en[key]; !ok {
+				t.Errorf("%s/en.json: %s missing (it is in ja.json)", dir, key)
 			}
 		}
 	}
