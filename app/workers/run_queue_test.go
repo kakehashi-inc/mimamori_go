@@ -323,31 +323,41 @@ func wantResponding(t *testing.T, e *testEnv, agentID, now, ago int64, want bool
 // of the check intervals its last sync answer gave it and 600 seconds. That
 // interval is the one the agent uses after the answer: the assigned rule
 // version's (60 when the version does not specify one), else
-// default_check_interval_sec as it was configured at that sync. A later
-// change of the default changes nothing until the next sync.
+// default_check_interval_sec as it was configured at that sync. The rule
+// version the agent reports running plays no role (it differs from the
+// assignment while an application or a removal fails). A later change of
+// the default changes nothing until the next sync.
 func TestQueueInterval(t *testing.T) {
 	e := newTestEnv(t)
 	insertRule(t, e, 900, 3600)
 	insertRule(t, e, 901, 0)
+	insertRule(t, e, 902, 10)
 	now := time.Now().Unix()
 	for i, tc := range []struct {
 		name     string
 		def      int   // default_check_interval_sec at the sync
 		rule     int64 // the assigned rule (0: none)
+		reported int64 // the rule the agent reports running, version 1 (0: none)
 		interval int   // the interval the answer gives the agent
 	}{
-		{"default", 60, 0, 60},
-		{"configured default", 120, 0, 120},
-		{"rule 3600", 60, 900, 3600},
-		{"rule 3600, other default", 10, 900, 3600},
-		{"rule without an interval", 300, 901, modules.DefaultCheckIntervalSec},
+		{"default", 60, 0, 0, 60},
+		{"configured default", 120, 0, 0, 120},
+		{"rule 3600", 60, 900, 0, 3600},
+		{"rule 3600, other default", 10, 900, 0, 3600},
+		{"rule without an interval", 300, 901, 0, modules.DefaultCheckIntervalSec},
+		{"rule 10 assigned, rule 3600 reported", 60, 902, 900, 10},
+		{"no rule assigned, rule 3600 reported", 120, 0, 900, 120},
 	} {
 		A := newQueueAgent(t, e, fmt.Sprintf("int-%d", i), 0)
 		if tc.rule > 0 {
 			e.admin("POST", "/rules/"+itoa64(tc.rule)+"/apply", map[string]any{"agent_ids": []int64{A.a.ID}})
 		}
 		setDefaultInterval(e, tc.def)
-		resp := syncFree(t, e, A.tok)
+		req := modules.SyncRequest{RunningRequests: []int64{}, FreeWorker: true}
+		if tc.reported > 0 {
+			req.RuleID, req.RuleVersion = tc.reported, 1
+		}
+		resp := syncWith(t, e, A.tok, req)
 		given := resp.DefaultIntervalSec
 		if resp.Rule != nil {
 			given = resp.Rule.Content.CheckInterval()
@@ -358,6 +368,9 @@ func TestQueueInterval(t *testing.T) {
 		}
 		if given != tc.interval || a.CheckIntervalSec != tc.interval {
 			t.Fatalf("%s: the answer gives %d, stored %d, want %d", tc.name, given, a.CheckIntervalSec, tc.interval)
+		}
+		if a.ReportedRuleID != tc.reported {
+			t.Fatalf("%s: the agent reports rule %d, want %d", tc.name, a.ReportedRuleID, tc.reported)
 		}
 		setDefaultInterval(e, 3000)
 		wantResponding(t, e, A.a.ID, now, 0, true)
