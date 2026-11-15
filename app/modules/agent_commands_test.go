@@ -914,11 +914,17 @@ func TestLeftoverWriterNotBlockedWhileWorkerBusy(t *testing.T) {
 		defer close(done)
 		rt.Run(stop)
 	}()
+	// Every wait for Run is bounded, so that a reader that does not end
+	// fails the test instead of hanging it.
 	stopped := false
 	t.Cleanup(func() {
 		if !stopped {
 			close(stop)
-			<-done
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Error("Run did not return after the stop")
+			}
 		}
 	})
 	holder := pidFrom(t, pidFile)
@@ -936,7 +942,11 @@ func TestLeftoverWriterNotBlockedWhileWorkerBusy(t *testing.T) {
 	}
 	stopped = true
 	close(stop)
-	<-done
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Run did not return after the stop (a pipe reader did not end; %d pipes held)", rt.leftovers.held())
+	}
 	if n := rt.leftovers.held(); n != 0 {
 		t.Fatalf("pipes held after Run returned: %d", n)
 	}
