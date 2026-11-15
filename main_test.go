@@ -674,6 +674,15 @@ func TestListFlagsHelpStatesDefaultAndRange(t *testing.T) {
 	}
 }
 
+// The --help of ctl suppressions create names the value of --agent ID, as
+// the command references write it.
+func TestSuppressionsCreateHelpNamesTheAgentID(t *testing.T) {
+	help, _, code := runMain(t, "ctl", "suppressions", "create", "--help")
+	if want := "--agent=ID Only this agent id (omitted: all agents)"; code != 0 || !strings.Contains(strings.Join(strings.Fields(help), " "), want) {
+		t.Errorf("help lacks %q: exit %d\n%s", want, code, help)
+	}
+}
+
 // The filters of ctl history and ctl detections list take only the values
 // the program defines (the lists of the models and of the rule content):
 // another value ends the program with exit code 2 and kong's message, which

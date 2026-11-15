@@ -1025,7 +1025,7 @@ type CtlSuppressionsCmd struct {
 }
 type CtlSuppressionsListCmd struct{}
 type CtlSuppressionsCreateCmd struct {
-	Agent   *int64 `help:"Only this agent id (omitted: all agents)"`
+	Agent   *int64 `placeholder:"ID" help:"Only this agent id (omitted: all agents)"`
 	Type    string `help:"Detection type"`
 	User    string `help:"OS user"`
 	Exe     string `help:"Executable (glob with *)"`
