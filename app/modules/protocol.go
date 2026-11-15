@@ -56,14 +56,21 @@ type SyncRequest struct {
 	CommandSig string `json:"command_sig"`
 	// RunningRequests are the request IDs of the manual runs the agent has
 	// started and not finished (its command_executions with request_id >
-	// 0), read when the request is built. Always a list, empty when nothing
-	// runs, so that a central can tell it from an agent that does not send
-	// it.
+	// 0), read from the local database when the request is built. The
+	// syncs of the rounds always send a list (empty when nothing runs) and
+	// the central ends the agent's running requests that are not in it. The
+	// syncs of agent init and agent set-central leave it out (null), and the
+	// central ends nothing for them.
 	RunningRequests []int64 `json:"running_requests"`
-	// FreeWorker tells that the agent can take a manual run request now:
-	// one of its workers is free and no manual request waits in the agent.
-	// The central hands a new request over only with a sync that says so
-	// (at most one per sync).
+	// FreeWorker tells that the agent can take a manual run request now: it
+	// has more workers than command set runs in progress plus command set
+	// entries that may start now and wait for a worker. The monitoring
+	// entry does not count (queued, due or being processed), nor does an
+	// entry that waits because its own set runs, is held by a surviving
+	// process group or waits for the record of its interrupted run
+	// (agentScheduler.freeWorker). The central hands a new request over only
+	// with a sync that says so (at most one per sync); the syncs of agent
+	// init and agent set-central send false.
 	FreeWorker bool `json:"free_worker"`
 }
 

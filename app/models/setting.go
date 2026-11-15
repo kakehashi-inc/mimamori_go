@@ -70,9 +70,10 @@ func SetSetting(db Writer, key, value string) error {
 	return err
 }
 
-// DeleteSetting removes a setting row if present (no error when absent). Used to
-// keep the table free of values equal to the code default, so a later change to a
-// default is not overridden by a baked-in row.
+// DeleteSetting removes a setting row if present (no error when absent). It
+// removes a configuration item that is unset (the item uses its default from
+// then on) and the record of the configuration the running central started
+// with when it stops.
 func DeleteSetting(db Writer, key string) error {
 	_, err := db.Exec(`DELETE FROM settings WHERE key = ?`, key)
 	return err

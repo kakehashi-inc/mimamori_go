@@ -2,10 +2,10 @@ import { listUiModules } from '../api/client';
 import type { Role } from '../types';
 import { hasExtensions } from './registry';
 
-// Module the development server loads instead of asking the server: in
-// development (yarn dev) no built files exist. The path is a variable so that
-// neither TypeScript nor the bundler follows it, and the branch is removed from
-// production builds.
+// Module loaded for administrators instead of asking the server when the page
+// is served by the Vite development server (import.meta.env.DEV), where no
+// built files exist. The path is a variable so that neither TypeScript nor the
+// bundler follows it, and the branch is removed from production builds.
 const DEV_MODULE = '/src/admin/entry.tsx';
 
 let loaded: Promise<void> | null = null;

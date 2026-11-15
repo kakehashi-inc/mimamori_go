@@ -168,8 +168,8 @@ func recordCommandApply(tx models.Writer, agent *models.Agent, ap *modules.Comma
 // checkedProblemsI18n returns the coded problems an agent reported for the
 // English problems (in their order): a coded problem whose English rendering
 // differs from the English one (an unknown code, a cut text) or whose JSON
-// is too large is replaced by the English as data. Nil when the agent sent
-// none or they do not line up (an agent of an older build sends none).
+// is too large is replaced by the English as data. Nil when the report
+// carries no coded problems or fewer than English ones.
 func checkedProblemsI18n(texts []string, ps []modules.Problem) []modules.Problem {
 	if len(ps) == 0 || len(ps) < len(texts) {
 		return nil
@@ -193,9 +193,11 @@ type setProblems struct {
 }
 
 // agentCommandProblems returns the problems the agent reported for the
-// definitions it holds, by set ID (only when they are the current ones). A
-// problem reported without its code (an agent of an older build) is coded
-// as its English text (data).
+// definitions it holds, by set ID: only when the stored result was reported
+// for the signature the agent last said it holds (agent.CommandSig, recorded
+// by its syncs and reports), else none. Each problem keeps the coded form
+// the agent reported when that renders to its English text, else it is
+// coded as the English text (data; checkedProblemsI18n).
 func agentCommandProblems(agent *models.Agent) map[int64]*setProblems {
 	out := map[int64]*setProblems{}
 	if agent.CommandProblems == "" {
