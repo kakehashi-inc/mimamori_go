@@ -54,13 +54,14 @@ func referenceRows(lines []string) []referenceRow {
 // The two command references say the same thing line for line: the same
 // number of lines, and on every line the same code spans (commands, flags,
 // values, messages and output they quote; in the order of each language),
-// except for the two placeholders written in each language.
+// except for the placeholders written in each language (<central>,
+// <error>, <status>).
 func TestCommandReferencesSayTheSame(t *testing.T) {
 	en, ja := readReference(t, referenceFiles[0]), readReference(t, referenceFiles[1])
 	if len(en) != len(ja) {
 		t.Fatalf("the references have %d and %d lines", len(en), len(ja))
 	}
-	words := strings.NewReplacer("<セントラル>", "<central>", "<エラー>", "<error>")
+	words := strings.NewReplacer("<セントラル>", "<central>", "<エラー>", "<error>", "<状態>", "<status>")
 	for i := range en {
 		a := slices.Sorted(slices.Values(referenceCodeRe.FindAllString(en[i], -1)))
 		b := slices.Sorted(slices.Values(referenceCodeRe.FindAllString(words.Replace(ja[i]), -1)))
