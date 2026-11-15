@@ -20,17 +20,20 @@ import (
 // signal mask and dispositions (of its shell and of a child), process group
 // and session, umask and limits. It turns a trace the environment asks for
 // off for itself (the traces of the members of a pipeline come in any
-// order); what the wrapper traced before stays in the output. The shell
-// reads its own signal state with builtins only: a child that reads it sees
-// whatever the shell is doing at that moment (blocking signals around the
-// fork, catching SIGINT while it waits for the child).
+// order); what the wrapper traced before stays in the output. What the
+// shell itself has is read so that the shell is in the same state every
+// time: its signal state with builtins only, its descriptors by one child
+// that is no pipeline. A child that reads the state of a shell busy with a
+// pipeline sees whatever the shell does at that moment (the pipe it has
+// not closed yet, signals blocked around the fork or SIGINT caught while it
+// waits for the child).
 const gateProbe = `{ set +x; } 2>/dev/null
 echo "--- pid $$"
 env | sort
 echo "--- argv"; tr '\0' '\n' < /proc/$$/cmdline; echo
 echo "--- 0: $0"
 echo "--- cwd"; pwd; readlink /proc/$$/cwd
-echo "--- fds of the shell"; ls -l /proc/$$/fd | awk 'NR > 1 {print $9, $11}'
+echo "--- fds of the shell"; find /proc/$$/fd -mindepth 1 -printf '%f %l\n'
 echo "--- fds of a child"; ls -l /proc/self/fd | awk 'NR > 1 {print $9, $11}'
 echo "--- signals of the shell"; while read -r k v; do case $k in SigBlk:|SigIgn:|SigCgt:) echo "$k $v";; esac; done < /proc/$$/status
 echo "--- signals of a child"; grep -E '^Sig(Blk|Ign|Cgt)' /proc/self/status
