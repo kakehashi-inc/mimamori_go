@@ -3,9 +3,9 @@ package modules
 // Messages exchanged between an agent and the central (/agent/v1). The
 // central hands an agent rule values, its own token renewal, CA
 // certificates, and the command sets an administrator defined for that
-// monitored target with the pending manual run requests of those sets. The
-// agent runs only the command lines of these definitions (as the OS user
-// each set names); nothing here can load an arbitrary auditd rule.
+// monitored target with the manual run requests of those sets handed over to
+// it. The agent runs only the command lines of these definitions (as the OS
+// user each set names); nothing here can load an arbitrary auditd rule.
 
 // HeaderInstanceID carries the agent's instance ID (created at agent init and
 // kept in its data directory) on authenticated requests; the token is bound

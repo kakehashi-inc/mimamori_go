@@ -54,8 +54,8 @@ func TestBuiltinAgentInvalidWorkers(t *testing.T) {
 	}
 
 	// Another reason is logged with the text the screens show.
-	e.c.setBuiltinStatus(false, modules.M("builtin.stopped"))
-	if got := e.c.builtinLogReason(); got != "stopped" {
-		t.Fatalf("log reason after another status: %q", got)
+	e.c.setBuiltinStatus(false, modules.M("builtin.auditd_unusable", "cause", modules.M("auditd.not_running")))
+	if got, want := e.c.builtinLogReason(), "auditd is not usable: "+modules.M("auditd.not_running").Text(); got != want {
+		t.Fatalf("log reason after another status: %q, want %q", got, want)
 	}
 }
