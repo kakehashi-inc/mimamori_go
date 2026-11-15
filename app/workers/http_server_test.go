@@ -536,16 +536,15 @@ func TestServeSilentPeerCut(t *testing.T) {
 		}()
 	}
 	// Meanwhile requests are answered at once. No silent peer is closed
-	// before one idle time after the first setup began: a server that held
-	// the requests behind the silent peers would answer the first one only
-	// after that.
-	for i := 0; i < 5; i++ {
+	// before one idle time after the first setup began (checked above), so a
+	// request answered before that moment was answered while every silent
+	// peer was held; a server that kept requests waiting behind the silent
+	// peers would answer them only after a peer was cut.
+	for i := 1; i <= 5; i++ {
 		a := roundTrip(t, s.dialWeb(t), getReq("/api/v1/health"))
-		if a.status != http.StatusOK {
-			t.Errorf("request next to silent peers: %d %v", a.status, a.err)
-		}
-		if since := time.Since(first); i == 0 && since >= s.idle {
-			t.Errorf("the first request next to the silent peers was answered %v after they were set up, want within their idle time %v", since, s.idle)
+		since := time.Since(first)
+		if a.status != http.StatusOK || since >= s.idle {
+			t.Errorf("request %d next to the silent peers: %d %v, answered %v after the first of them was set up, want within their idle time %v", i, a.status, a.err, since, s.idle)
 		}
 		time.Sleep(s.idle / 10)
 	}
