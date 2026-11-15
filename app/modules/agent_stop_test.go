@@ -172,8 +172,9 @@ func TestStopWhileStartRecordWaits(t *testing.T) {
 			job := nextCommandJob(rt)
 			done := runInBackground(rt, job)
 			<-held
-			// The worker's record waits for the write connection.
-			time.Sleep(300 * time.Millisecond)
+			// The worker's record waits for the write connection: two flows
+			// are in a Write, the holder and the worker.
+			waitFor(t, "the worker's record to wait for the write connection", func() bool { return writeFlowCount.Load() >= 2 })
 			close(stop)
 			close(hold)
 			<-free
@@ -532,8 +533,8 @@ func TestStopWhileWaitingForHeldSet(t *testing.T) {
 //
 //	set 1, 2: end at SIGTERM
 //	set 3:    ignores SIGTERM: SIGKILL when the grace is over
-//	set 4:    its main process ends at SIGTERM, a member of the group ignores
-//	          it and ends by itself one second later: no SIGKILL
+//	set 4:    its main process ends at SIGTERM, a member of the group ends
+//	          one second after SIGTERM: no SIGKILL
 func TestStopEveryCommandAtOnce(t *testing.T) {
 	requireBash(t)
 	dir := t.TempDir()
@@ -542,8 +543,8 @@ func TestStopEveryCommandAtOnce(t *testing.T) {
 		return fmt.Sprintf(`trap 'exit 0' TERM; echo $$ > %s; sleep 30 & wait`, f(fmt.Sprintf("pid%d", n)))
 	}
 	ignore := fmt.Sprintf(`trap '' TERM; echo $$ > %s; sleep 30`, f("pid3"))
-	member := fmt.Sprintf(`( trap '' TERM; sleep 1; echo $EPOCHREALTIME > %s ) & trap 'exit 0' TERM; echo $$ > %s; sleep 30 & wait`,
-		f("member4"), f("pid4"))
+	member := fmt.Sprintf(`( trap 'sleep 1; echo $EPOCHREALTIME > %s; exit 0' TERM; echo > %s; sleep 30 & wait ) & trap 'exit 0' TERM; echo $$ > %s; sleep 30 & wait`,
+		f("member4"), f("ready4"), f("pid4"))
 	sig := recordSignals(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 4)
@@ -557,7 +558,8 @@ func TestStopEveryCommandAtOnce(t *testing.T) {
 	for n := 1; n <= 4; n++ {
 		pids[n] = pidFrom(t, f(fmt.Sprintf("pid%d", n)))
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Every script has set its traps: each writes its file after them.
+	waitFor(t, "the member of set 4", func() bool { _, err := os.Stat(f("ready4")); return err == nil })
 	stopAt := time.Now()
 	close(stop)
 	took := wait(30 * time.Second)
