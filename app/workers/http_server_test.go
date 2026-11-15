@@ -87,7 +87,18 @@ type serveEnv struct {
 	inWork      atomic.Int32
 	maxInWork   atomic.Int32
 	stopOnce    sync.Once
-	baselineCnt int // places held by the two listeners waiting in accept
+	baselineCnt int      // places held by the two listeners waiting in accept
+	states      sync.Map // remote address of a connection -> its http.ConnState
+}
+
+// connState returns the state the server last gave the connection whose
+// client side is c (http.StateNew until the server has read a request
+// head, http.StateActive while it works on the request).
+func (s *serveEnv) connState(c net.Conn) http.ConnState {
+	if st, ok := s.states.Load(c.LocalAddr().String()); ok {
+		return st.(http.ConnState)
+	}
+	return http.StateNew
 }
 
 func startServe(t *testing.T, o serveOpts) *serveEnv {
@@ -118,6 +129,10 @@ func startServe(t *testing.T, o serveOpts) *serveEnv {
 	s.webAddr, s.agentAddr = webLn.Addr().String(), agentLn.Addr().String()
 	s.web = newHTTPServer(s.routes(e.web), s.admit(e.c.admitWebBody), nil, s.budget, logger)
 	s.agent = newHTTPServer(s.routes(e.agent), s.admit(e.c.admitAgentBody), e.c.tlsConfig(), s.budget, logger)
+	// The tests only look at the states (newHTTPServer sets no hook).
+	for _, srv := range []*http.Server{s.web, s.agent} {
+		srv.ConnState = func(c net.Conn, st http.ConnState) { s.states.Store(c.RemoteAddr().String(), st) }
+	}
 	go func() { _ = s.web.Serve(s.lim.listener(webLn, o.idle)) }()
 	go func() { _ = s.agent.ServeTLS(s.lim.listener(agentLn, o.idle), "", "") }()
 	t.Cleanup(s.stop)
@@ -887,10 +902,12 @@ func TestServeStop(t *testing.T) {
 	_, _ = io.WriteString(tlsWork, getReq("/test/slow?ms=1500"))
 	arriving := s.dialWeb(t)
 	_, _ = io.WriteString(arriving, "POST /test/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n01234")
-	// The stop begins when every connection is accepted and both requests
-	// in work are in their handlers.
-	waitFor(t, "six connections and two requests in work", func() bool {
-		return s.lim.open() == s.baselineCnt+6 && s.inWork.Load() == 2
+	// The stop begins when every connection is accepted, both requests in
+	// work are in their handlers and the server has read the head of the
+	// request whose body is still to come (a head the server reads only
+	// after the stop began is not answered: net/http closes its connection).
+	waitFor(t, "six connections, two requests in work and the head of the third read", func() bool {
+		return s.lim.open() == s.baselineCnt+6 && s.inWork.Load() == 2 && s.connState(arriving) == http.StateActive
 	})
 
 	stopped := make(chan struct{})
