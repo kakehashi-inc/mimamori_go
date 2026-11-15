@@ -20,7 +20,10 @@ import (
 // signal mask and dispositions (of its shell and of a child), process group
 // and session, umask and limits. It turns a trace the environment asks for
 // off for itself (the traces of the members of a pipeline come in any
-// order); what the wrapper traced before stays in the output.
+// order); what the wrapper traced before stays in the output. The shell
+// reads its own signal state with builtins only: a child that reads it sees
+// whatever the shell is doing at that moment (blocking signals around the
+// fork, catching SIGINT while it waits for the child).
 const gateProbe = `{ set +x; } 2>/dev/null
 echo "--- pid $$"
 env | sort
@@ -29,9 +32,9 @@ echo "--- 0: $0"
 echo "--- cwd"; pwd; readlink /proc/$$/cwd
 echo "--- fds of the shell"; ls -l /proc/$$/fd | awk 'NR > 1 {print $9, $11}'
 echo "--- fds of a child"; ls -l /proc/self/fd | awk 'NR > 1 {print $9, $11}'
-echo "--- signals of the shell"; grep -E '^Sig(Blk|Ign|Cgt)' /proc/$$/status
+echo "--- signals of the shell"; while read -r k v; do case $k in SigBlk:|SigIgn:|SigCgt:) echo "$k $v";; esac; done < /proc/$$/status
 echo "--- signals of a child"; grep -E '^Sig(Blk|Ign|Cgt)' /proc/self/status
-echo "--- group and session"; read -r _ _ _ _ pgrp sid _ < <(sed 's/.*) //' /proc/$$/stat); [ "$pgrp" = $$ ] && [ "$sid" = $$ ] && echo leader
+echo "--- group and session"; read -r _ _ pgrp sid _ < <(sed 's/.*) //' /proc/$$/stat); [ "$pgrp" = $$ ] && [ "$sid" = $$ ] && echo leader
 echo "--- umask"; umask
 echo "--- limits"; ulimit -a
 echo "--- end"`
