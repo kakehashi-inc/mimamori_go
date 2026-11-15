@@ -14,12 +14,14 @@ import (
 // The inputs and expected texts of TestEnglishUnchanged. The expected texts
 // were produced by running the validators of the version before they were
 // given coded messages (commit c7fa753) on these inputs: the English of the
-// coded messages must be exactly the same. Three texts are exceptions: the
+// coded messages must be exactly the same. Four texts are exceptions: the
 // time limit of a command, whose range starts at 0 (no limit), so 0 is valid
 // and the text of a value out of range names 0; email/2, which names bytes,
-// the unit in which the limit of an address counts; and config/1, which gives
+// the unit in which the limit of an address counts; config/1, which gives
 // the problems of the number items in the order of the items, the lower
-// bound of default_check_interval_sec among them.
+// bound of default_check_interval_sec among them; and display_name/1, a
+// space and a tab: the tab is a control character, which a name is refused
+// for before the white space around it is taken away (TrimName).
 
 // englishLong is the long value of the inputs below; in the expected texts
 // it is written as englishLongMark.
@@ -316,7 +318,7 @@ var englishWant = map[string][]string{
 	"config_item/4":       {"builtin_agent must be true or false"},
 	"config_item/5":       {"smtp.auth must be true or false"},
 	"display_name/0":      {"a display name is required"},
-	"display_name/1":      {"a display name is required"},
+	"display_name/1":      {"the display name must not contain control characters"},
 	"display_name/2":      {"the display name must be at most 64 characters"},
 	"display_name/3":      {"the display name must not contain control characters"},
 	"display_name/4":      {"the display name must be at most 64 characters"},
