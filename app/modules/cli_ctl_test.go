@@ -112,12 +112,12 @@ func TestCtlParseTime(t *testing.T) {
 	if got, err := parseCtlTime("to", ""); got != "" || err != nil {
 		t.Errorf("empty value = %q, %v", got, err)
 	}
-	// The refusal names every form that is accepted.
+	// The refusal names every form that is accepted, each layout quoted the
+	// same way.
 	_, err := parseCtlTime("from", "garbage")
-	for _, form := range []string{`"YYYY-MM-DD HH:MM:SS"`, `"YYYY-MM-DD HH:MM"`, "YYYY-MM-DDTHH:MM:SS,", "YYYY-MM-DDTHH:MM,", "YYYY-MM-DD (local time)", "RFC3339"} {
-		if err == nil || !strings.Contains(err.Error(), form) {
-			t.Errorf("the refusal %v does not name %s", err, form)
-		}
+	want := `invalid --from "garbage": use "YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD HH:MM", "YYYY-MM-DDTHH:MM:SS", "YYYY-MM-DDTHH:MM", "YYYY-MM-DD" (local time) or RFC3339`
+	if err == nil || err.Error() != want {
+		t.Errorf("the refusal %v, want %s", err, want)
 	}
 	if len(ctlTimeLayouts) != 5 {
 		t.Errorf("%d layouts: name every form in the refusal and in the help", len(ctlTimeLayouts))

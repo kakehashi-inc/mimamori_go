@@ -926,7 +926,7 @@ func parseCtlTime(flag, s string) (string, error) {
 			return t.UTC().Format(time.RFC3339), nil
 		}
 	}
-	return "", NewExitErrorf(ExitArgument, "invalid --%s %q: use \"YYYY-MM-DD HH:MM:SS\", \"YYYY-MM-DD HH:MM\", YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM, YYYY-MM-DD (local time) or RFC3339", flag, s)
+	return "", NewExitErrorf(ExitArgument, `invalid --%s %q: use "YYYY-MM-DD HH:MM:SS", "YYYY-MM-DD HH:MM", "YYYY-MM-DDTHH:MM:SS", "YYYY-MM-DDTHH:MM", "YYYY-MM-DD" (local time) or RFC3339`, flag, s)
 }
 
 func (c *CtlDetectionsListCmd) Run(p *CtlCmd) error {
