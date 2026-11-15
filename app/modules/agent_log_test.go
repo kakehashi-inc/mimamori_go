@@ -1,9 +1,13 @@
 package modules
 
 import (
+	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,7 +39,8 @@ func TestLogNamesTheCentralsAnswer(t *testing.T) {
 		{"no connection", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}, true,
 			"report: cannot reach the central: dial tcp: connection refused"},
 		{"cut by the stop", errRequestCut, true, "report: cut by the agent's stop"},
-		{"answer not understood", errors.New("unexpected EOF"), true, "report failed: unexpected EOF"},
+		{"answer not understood", errors.New("invalid character 'x' looking for beginning of value"), true,
+			"report failed: invalid character 'x' looking for beginning of value"},
 		{"built-in agent", errors.New("database is locked (5) (SQLITE_BUSY)"), false,
 			"report: the central could not take it: database is locked (5) (SQLITE_BUSY)"},
 	} {
@@ -49,6 +54,69 @@ func TestLogNamesTheCentralsAnswer(t *testing.T) {
 			rt.flushOutbox()
 			if got := strings.TrimSpace(logs.String()); got != c.want {
 				t.Fatalf("log %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestLogOfAPeerThatCloses: a connection the peer closes before the request
+// is answered (in the TLS handshake, after the request, in the middle of the
+// answer) is logged as a central that cannot be reached, like a reset
+// connection.
+func TestLogOfAPeerThatCloses(t *testing.T) {
+	sc, cc := clientTestTLS(t)
+	for _, c := range []struct {
+		name  string
+		serve func(raw net.Conn)
+	}{
+		{"in the handshake", func(raw net.Conn) {
+			// The whole ClientHello is read, so that the close is a FIN and
+			// not a reset of unread data.
+			head := make([]byte, 5)
+			if _, err := io.ReadFull(raw, head); err != nil {
+				return
+			}
+			_, _ = io.CopyN(io.Discard, raw, int64(head[3])<<8|int64(head[4]))
+		}},
+		{"after the request", func(raw net.Conn) {
+			c := tls.Server(raw, sc)
+			req, err := http.ReadRequest(bufio.NewReader(c))
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, req.Body)
+		}},
+		{"in the answer", func(raw net.Conn) {
+			c := tls.Server(raw, sc)
+			req, err := http.ReadRequest(bufio.NewReader(c))
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, req.Body)
+			_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{"))
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ln := clientTestListener(t, 0)
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				raw, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer raw.Close()
+				c.serve(raw)
+			}()
+			var logs lockedLog
+			rt := newCommandRuntime(t, &RemoteTransport{client: testClient(ln, cc)})
+			rt.Logger = logs.logger()
+			rt.comm.config = &AgentConfig{}
+			rt.flushOutbox()
+			<-served
+			got := strings.TrimSpace(logs.String())
+			if !strings.HasPrefix(got, "report: cannot reach the central: ") || !strings.Contains(got, "EOF") {
+				t.Fatalf("log %q, want the central that cannot be reached with the closed connection's EOF", got)
 			}
 		})
 	}

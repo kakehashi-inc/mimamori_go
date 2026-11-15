@@ -2,6 +2,7 @@ package modules
 
 import (
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -288,7 +289,10 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
 	case errors.As(err, &he):
 		rt.logf("%s: the central answered %v", op, err)
-	case errors.As(err, &ne):
+	case errors.As(err, &ne), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		// A network error, or a connection the peer closed before the
+		// answer was complete (in the TLS handshake, after the request, in
+		// the middle of the answer).
 		rt.logf("%s: cannot reach the central: %v", op, err)
 	case rt.comm.config == nil:
 		// The built-in agent hands its requests to the central in process.
