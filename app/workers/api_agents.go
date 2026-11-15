@@ -367,18 +367,28 @@ type tokenJSON struct {
 // tokenOut converts a token for the API. The value is given in full only to
 // the management CLI; administrators in the browser receive a shortened form
 // and viewers none.
+//
+// ExpiringUnconnected flags a token close to its expiry that was not seen
+// for longer than an agent may be silent (silenceAllowed) with the check
+// interval its agent's last sync answer gave it (agents.check_interval_sec,
+// as whether the agent responds is judged), or, while no agent of the token
+// has synced, with default_check_interval_sec.
 func (c *core) tokenOut(r *http.Request, t *models.Token) tokenJSON {
 	now := time.Now().Unix()
 	out := tokenJSON{ID: t.ID, Name: t.Name, Value: tokenValueFor(r, t.Value), Status: t.Status(now), ExpiresAt: ts(t.ExpiresAt), CreatedAt: ts(t.CreatedAt),
 		CreatedBy: c.operatorShown(r)(t.CreatedBy), LastSeenAt: ts(t.LastSeenAt), InstanceID: t.InstanceID, BoundAt: ts(t.BoundAt),
 		ReissuedAt: ts(t.ReissuedAt), RenewedAt: ts(t.RenewedAt), PendingRenewal: t.PendingHash != "" && t.PendingExpiresAt > now}
-	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
-		near := t.ExpiresAt-now < int64(c.conf().TokenRenewBeforeDays)*86400
-		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > int64(3*c.conf().DefaultCheckIntervalSec)+600
-		out.ExpiringUnconnected = near && stale
-	}
+	interval := c.conf().DefaultCheckIntervalSec
 	if a, err := models.GetAgentByToken(c.db.Read(), t.ID); err == nil {
 		out.AgentID = a.ID
+		if a.CheckIntervalSec > 0 {
+			interval = a.CheckIntervalSec
+		}
+	}
+	if out.Status == models.TokenUnused || out.Status == models.TokenActive {
+		near := t.ExpiresAt-now < int64(c.conf().TokenRenewBeforeDays)*86400
+		stale := t.LastSeenAt == 0 || now-t.LastSeenAt > silenceAllowed(interval)
+		out.ExpiringUnconnected = near && stale
 	}
 	return out
 }

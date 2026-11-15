@@ -38,7 +38,14 @@ func (c *core) responding(a *models.Agent, now int64) bool {
 // changed at the central meanwhile. An agent that never synced is not
 // responding.
 func agentResponding(a *models.Agent, now int64) bool {
-	return a.LastSyncAt > 0 && now-a.LastSyncAt <= 3*int64(a.CheckIntervalSec)+600
+	return a.LastSyncAt > 0 && now-a.LastSyncAt <= silenceAllowed(a.CheckIntervalSec)
+}
+
+// silenceAllowed returns the time in seconds an agent with the check
+// interval sec may be without contact before it counts as not connecting:
+// three intervals and ten minutes.
+func silenceAllowed(sec int) int64 {
+	return 3*int64(sec) + 600
 }
 
 // markStopping remembers that the agent said it stops (a report with
