@@ -135,7 +135,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 ### command-sets
 
-1 つのエージェント（内蔵エージェントを含む）のコマンドセットの定義、実行の指示、結果を扱います。`AGENT_ID` は `ctl agents list` の id です。これらのコマンドで確認コードを求められることはありません。
+1 つのエージェント（内蔵エージェントを含む）のコマンドセットの定義、実行の指示、結果を扱います。`AGENT_ID` は `ctl agents list` の id です。これらのコマンドは確認コードなしで使えます。
 
 | コマンド | 説明 |
 | --- | --- |

@@ -135,7 +135,7 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 
 ### command-sets
 
-Command sets of one agent (the built-in agent included): definitions, run requests and results. `AGENT_ID` is the id of `ctl agents list`. These commands are never asked for a verification code.
+Command sets of one agent (the built-in agent included): definitions, run requests and results. `AGENT_ID` is the id of `ctl agents list`. These commands work without a verification code.
 
 | Command | Description |
 | --- | --- |
