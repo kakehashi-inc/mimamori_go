@@ -113,6 +113,8 @@ func TestLogOfAPeerThatCloses(t *testing.T) {
 			rt.Logger = logs.logger()
 			rt.comm.config = &AgentConfig{}
 			rt.flushOutbox()
+			// The request is over: a server that was never reached ends too.
+			ln.Close()
 			<-served
 			got := strings.TrimSpace(logs.String())
 			if !strings.HasPrefix(got, "report: cannot reach the central: ") || !strings.Contains(got, "EOF") {
