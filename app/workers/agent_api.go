@@ -427,10 +427,24 @@ func (c *core) centralReport(agent *models.Agent, batch *modules.ReportBatch) er
 	return nil
 }
 
+// applyIsCurrent reports whether an application result is about the agent's
+// current assignment: the assigned rule and version, or no rule (rule 0,
+// version 0: "none", a failed removal) while none is assigned. A result
+// about an earlier assignment, which the agent sends until it applied the
+// change, is not.
+func applyIsCurrent(a *models.Agent, ap *modules.ApplyResult) bool {
+	if !a.AssignedRuleID.Valid {
+		return ap.RuleID == 0 && ap.Version == 0
+	}
+	return ap.RuleID == a.AssignedRuleID.Int64 && ap.Version == a.AssignedRuleVersion
+}
+
 // storeCentralItem applies one item of a batch to central.db inside the
 // batch's transaction tx: the outcome of storing definitions, the summary on
 // the agent row (cur, read in tx) with the batch's identity id, and the
 // history rows of a changed application result and of dropped detections.
+// An application result about an earlier assignment changes nothing and
+// writes no row (applyIsCurrent).
 func (c *core) storeCentralItem(tx models.Writer, cur *models.Agent, item *modules.ReportRequest, id string, now int64) error {
 	f := models.AgentReportFields{Now: now, Dropped: int64(max(item.Dropped, 0)), ReportID: id}
 	if hi := item.HostInfo; hi != nil {
@@ -445,7 +459,7 @@ func (c *core) storeCentralItem(tx models.Writer, cur *models.Agent, item *modul
 			return err
 		}
 	}
-	if ap := item.Apply; ap != nil {
+	if ap := item.Apply; ap != nil && applyIsCurrent(cur, ap) {
 		f.HasApply = true
 		f.ApplyStatus, f.ApplyMessage, f.ApplyVersion, f.ApplyAt = ap.Status, truncate(ap.Message, 2000), ap.Version, ap.At
 		w, _ := json.Marshal(nonNil(ap.Warnings))
