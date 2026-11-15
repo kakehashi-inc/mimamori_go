@@ -307,8 +307,12 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 			break
 		}
 		run.cur = startCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
-			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add,
-			Started: func(pgid int) { rt.recordGroup(def, uid, i, pgid) }})
+			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add})
+		// The command is known to the run (run.cur) before anything else is
+		// done, so that a panic from here on waits for it (closeAfterPanic).
+		if pgid := run.cur.pgid(); pgid > 0 {
+			rt.recordGroup(def, uid, i, pgid)
+		}
 		run.cur.wait()
 		res := run.cur.result(run.collect)
 		run.res = res
@@ -397,11 +401,13 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 		r := *run.res
 		hit = &r
 	case run.cur != nil:
-		if rt.recovered("worker panic", run.cur.wait) {
+		if rt.recovered("worker panic", func() {
+			run.cur.wait()
+			hit = run.cur.result(false)
+		}) {
 			rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
 			return
 		}
-		hit = run.cur.result(false)
 	}
 	rep := run.base
 	rep.Results = append([]CommandResultReport{}, run.unstored...)

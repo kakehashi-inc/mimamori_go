@@ -2,6 +2,9 @@ package modules
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -173,6 +176,89 @@ func TestPanicInRunWhileCommandRuns(t *testing.T) {
 	}
 	if r := runs[2]; r.State != ResultSuccess || string(r.Results[0].Output) != "next\n" {
 		t.Fatalf("the next run: %+v", r)
+	}
+	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
+		t.Fatalf("unfinished runs: %d", len(open))
+	}
+}
+
+// TestPanicWhenRecordingTheGroup: a panic right after the command started,
+// while the run records its process group, is handled as any panic while a
+// command runs: the worker waits for the command in the plain way and closes
+// the run with its result (internal_error), the command is not signalled, and
+// a second request for the same set starts only after the first run ended
+// (the same set never runs twice at the same time).
+func TestPanicWhenRecordingTheGroup(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	var logged lockedLog
+	rt.Logger = logged.logger()
+	// The first call is the one of the start of Run (recoverInterruptedRuns),
+	// the second the one of the first run.
+	var calls atomic.Int32
+	var injected atomic.Bool
+	bootTime = func() (int64, error) {
+		if calls.Add(1) == 2 {
+			injected.Store(true)
+			panic("test panic while the process group is recorded")
+		}
+		return sysBootTime()
+	}
+	t.Cleanup(func() { bootTime = sysBootTime })
+	var signals atomic.Int32
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		if sig != 0 {
+			signals.Add(1)
+		}
+		return syscall.Kill(pid, sig)
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+	logPath := filepath.Join(t.TempDir(), "log")
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly,
+		fmt.Sprintf("echo start >> %[1]s; echo begin; sleep 3; echo end >> %[1]s; echo done", logPath)))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	// The second request for the same set comes from the second sync on,
+	// while the first run runs.
+	tr.onSync = func(n int) {
+		if n == 1 {
+			tr.mu.Lock()
+			tr.resp.CommandRequests = manualRequests(1, 1, 1)
+			tr.mu.Unlock()
+		}
+	}
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 2))
+	if !injected.Load() {
+		t.Fatal("the panic was not injected")
+	}
+	panicLogHas(t, logged.String(), "worker panic: test panic while the process group is recorded", "recordGroup")
+	if n := signals.Load(); n != 0 {
+		t.Fatalf("%d signals were sent to commands", n)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); got != "start\nend\nstart\nend\n" {
+		t.Fatalf("log of the command: %q, want the two runs one after the other", got)
+	}
+	runs := map[int64]CommandRunReport{}
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished {
+			runs[r.RequestID] = r
+		}
+	}
+	r := runs[1]
+	if r.State != ResultError || r.Reason != ReasonInternalError || len(r.Results) != 1 {
+		t.Fatalf("the run the panic hit: %+v", r)
+	}
+	res := r.Results[0]
+	if res.Kind != ResultError || res.Reason != ReasonInternalError || res.ExitCode == nil || *res.ExitCode != 0 ||
+		string(res.Output) != "begin\ndone\n" || res.FinishedAt-res.StartedAt < 3 {
+		t.Fatalf("the command the panic hit ran to its end: %+v %q", res, res.Output)
+	}
+	if r2 := runs[2]; r2.State != ResultSuccess || r2.StartedAt < r.FinishedAt {
+		t.Fatalf("the second run of the set: %+v (first ended at %d)", r2, r.FinishedAt)
 	}
 	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
 		t.Fatalf("unfinished runs: %d", len(open))

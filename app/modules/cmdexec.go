@@ -72,10 +72,6 @@ type CommandExecInput struct {
 	Stop <-chan struct{}
 	// Logf writes to the agent's log (may be nil).
 	Logf func(format string, a ...any)
-	// Started, when not nil, is called with the process group of the
-	// command once its process runs (not for a command that could not be
-	// started).
-	Started func(pgid int)
 	// Leftover, when not nil, takes the output pipe when the reading ended
 	// while processes the command left behind still hold it open (they
 	// may write on; whoever holds the pipe reads and drops it). Otherwise
@@ -202,10 +198,16 @@ func startCommand(in CommandExecInput) *commandProcess {
 	if viaSudo {
 		p.sig.osUser = in.OSUser
 	}
-	if in.Started != nil {
-		in.Started(proc.Pid)
-	}
 	return p
+}
+
+// pgid returns the process group of the command (the process ID of its
+// main process), or 0 when its process could not be started.
+func (p *commandProcess) pgid() int {
+	if p.proc == nil {
+		return 0
+	}
+	return p.proc.Pid
 }
 
 // failStart ends p as a command whose process could not be started.

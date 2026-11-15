@@ -219,10 +219,14 @@ func parseProcStat(b []byte) (procStat, bool) {
 	return procStat{state: f[0][0], pgrp: pgrp, threads: threads}, true
 }
 
-// bootTime returns when the host booted (Unix seconds): the current time less
-// the uptime of the kernel (sysinfo; nothing is read from /proc). Successive
-// calls may differ by a second.
-func bootTime() (int64, error) {
+// bootTime returns when the host booted (Unix seconds; sysBootTime, replaced
+// by tests).
+var bootTime = sysBootTime
+
+// sysBootTime returns when the host booted (Unix seconds): the current time
+// less the uptime of the kernel (sysinfo; nothing is read from /proc).
+// Successive calls may differ by a second.
+func sysBootTime() (int64, error) {
 	var info syscall.Sysinfo_t
 	if err := syscall.Sysinfo(&info); err != nil {
 		return 0, err
