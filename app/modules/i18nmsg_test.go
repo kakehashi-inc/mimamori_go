@@ -85,9 +85,10 @@ func sortedPlaceholders(s string) []string {
 
 // TestMessageCatalog keeps the Go catalog and the frontend's "srv" sections
 // equal: every code is in the bundle of its audience with the identical
-// English template and nowhere else, the Japanese file has the same keys
-// with the same placeholders, and no key exists without a Go code except
-// the frontend-only groups.
+// English template of the screens and nowhere else, the Japanese file has
+// the same keys with the same placeholders, and no key exists without a Go
+// code except the frontend-only groups. A screen template of its own has
+// the placeholders of the English template and differs from it.
 func TestMessageCatalog(t *testing.T) {
 	bundles := map[bool]string{false: "i18n", true: "admin/i18n"}
 	en := map[bool]map[string]string{}
@@ -101,14 +102,22 @@ func TestMessageCatalog(t *testing.T) {
 			t.Errorf("code %q must not be in the Go catalog", code)
 			continue
 		}
-		if !def.isASCII() {
-			t.Errorf("%s: the English template is not ASCII", code)
+		if !isASCII(def.en) || !isASCII(def.screen) {
+			t.Errorf("%s: an English template is not ASCII", code)
+		}
+		if def.screen != "" {
+			if def.screen == def.en {
+				t.Errorf("%s: the screen template equals the English template", code)
+			}
+			if !reflect.DeepEqual(sortedPlaceholders(def.screen), sortedPlaceholders(def.en)) {
+				t.Errorf("%s: placeholders of the screen template %v and the English template %v differ", code, sortedPlaceholders(def.screen), sortedPlaceholders(def.en))
+			}
 		}
 		got, ok := en[def.admin][code]
 		if !ok {
 			t.Errorf("%s: missing in %s/en.json", code, bundles[def.admin])
-		} else if got != def.en {
-			t.Errorf("%s: %s/en.json has %q, Go has %q", code, bundles[def.admin], got, def.en)
+		} else if want := def.screenText(); got != want {
+			t.Errorf("%s: %s/en.json has %q, Go has %q", code, bundles[def.admin], got, want)
 		}
 		if _, ok := en[!def.admin][code]; ok {
 			t.Errorf("%s: also in %s/en.json (wrong audience)", code, bundles[!def.admin])
@@ -179,13 +188,55 @@ func TestScreenTextKeySets(t *testing.T) {
 	}
 }
 
-func (d msgDef) isASCII() bool {
-	for i := 0; i < len(d.en); i++ {
-		if d.en[i] >= 0x80 {
+// screenToolName matches the name of a command line tool in a screen text:
+// the audit tools and service managers of the host, sudo, the program's own
+// commands, and a command line flag after a space or an opening parenthesis
+// (U+FF08 is the one of the Japanese texts).
+var screenToolName = regexp.MustCompile(`\b(auditctl|ausearch|aureport|augenrules|autrace|systemctl|journalctl|sudo|set-workers)\b|\bservice auditd\b|\bmimamori (agent|central|ctl)\b|\bagent (init|start|stop|status)\b|\bctl [a-z]|\bcentral (start|stop|status|config|init-admin|reset-password)\b|(^|[\s(\x{FF08}])--[a-z][a-z-]*`)
+
+// installationGuidance are the screen texts that may name command line
+// tools: the setup guide and the agent init command of the token dialogs
+// (keys of a bundle, a key ending in "." names a group).
+var installationGuidance = map[string][]string{
+	"i18n":       {"guide."},
+	"admin/i18n": {"tokens.initCommand", "tokens.fullValueNote"},
+}
+
+// TestScreenTextsNameNoTool keeps the screens from naming command line
+// tools: no text of either bundle names one in English or in Japanese,
+// except the installation guidance.
+func TestScreenTextsNameNoTool(t *testing.T) {
+	for dir, allowed := range installationGuidance {
+		for _, lang := range []string{"en", "ja"} {
+			for key, text := range readTexts(t, dir+"/"+lang+".json") {
+				guidance := false
+				for _, a := range allowed {
+					guidance = guidance || key == a || strings.HasSuffix(a, ".") && strings.HasPrefix(key, a)
+				}
+				if found := screenToolName.FindString(text); found != "" && !guidance {
+					t.Errorf("%s/%s.json: %s names a command line tool (%q): %q", dir, lang, key, strings.TrimSpace(found), text)
+				}
+			}
+		}
+	}
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
 			return false
 		}
 	}
 	return true
+}
+
+// screenText returns the English template of the screens: the screen
+// template when the code has one, else the English template.
+func (d msgDef) screenText() string {
+	if d.screen != "" {
+		return d.screen
+	}
+	return d.en
 }
 
 // TestMsgText checks the English rendering of messages, nested messages,
@@ -336,8 +387,10 @@ func TestMStrict(t *testing.T) {
 // formed and every code can be built with its placeholders.
 func TestMsgCatalogTemplates(t *testing.T) {
 	for code, def := range msgCatalog {
-		if strings.Count(def.en, "{{") != strings.Count(def.en, "}}") {
-			t.Errorf("%s: unbalanced braces in %q", code, def.en)
+		for _, tmpl := range []string{def.en, def.screen} {
+			if strings.Count(tmpl, "{{") != strings.Count(tmpl, "}}") {
+				t.Errorf("%s: unbalanced braces in %q", code, tmpl)
+			}
 		}
 		var kv []any
 		for _, name := range placeholders(def.en) {

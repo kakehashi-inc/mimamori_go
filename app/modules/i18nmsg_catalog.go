@@ -2,11 +2,12 @@ package modules
 
 // msgCatalog holds the English template and the audience of every message
 // code the server and the agent send for display (see Msg). Placeholders use
-// the i18next syntax {{name}}. The frontend carries the same templates in the
-// "srv" section of frontend/src/i18n/en.json (admin false) or
-// frontend/src/admin/i18n/en.json (admin true, texts only an administrator
-// can receive), with a Japanese translation in ja.json beside it;
-// TestMessageCatalog keeps them equal. Keep the entries sorted by code.
+// the i18next syntax {{name}}. The frontend carries the English templates of
+// the screens (screen when it is set, else en) in the "srv" section of
+// frontend/src/i18n/en.json (admin false) or frontend/src/admin/i18n/en.json
+// (admin true, texts only an administrator can receive), with a Japanese
+// translation in ja.json beside it; TestMessageCatalog keeps them equal. Keep
+// the entries sorted by code.
 var msgCatalog = map[string]msgDef{
 	"account.current_password_wrong":                {en: "the current password is wrong"},
 	"account.display_name_control":                  {en: "the display name must not contain control characters"},
@@ -35,7 +36,7 @@ var msgCatalog = map[string]msgDef{
 	"apply.builtin_disabled":                        {en: "the built-in agent is disabled; its audit rules were removed"},
 	"apply.cleared_by_init":                         {en: "the stored rule was cleared when the agent was initialized again; the next sync decides"},
 	"apply.failed_file_unknown":                     {en: "applying audit rules failed and the previous state was restored except {{file}}, which could not be read before the change ({{detail}}): {{cause}}"},
-	"apply.failed_partly_restored":                  {en: "applying audit rules failed and the previous state could not be restored completely ({{count}} steps failed; check the loaded rules with auditctl -l): {{cause}}"},
+	"apply.failed_partly_restored":                  {en: "applying audit rules failed and the previous state could not be restored completely ({{count}} steps failed; check the loaded rules with auditctl -l): {{cause}}", screen: "applying audit rules failed and the previous state could not be restored completely ({{count}} steps failed; check the audit rules loaded on the host): {{cause}}"},
 	"apply.failed_restored":                         {en: "applying audit rules failed and the previous state was restored: {{cause}}"},
 	"apply.global_settings":                         {en: "global settings not effective (failure {{failure}}, backlog_wait_time {{wait}})"},
 	"apply.globals_record_failed":                   {en: "recording the global audit settings before the change failed: {{cause}}"},
@@ -54,11 +55,11 @@ var msgCatalog = map[string]msgDef{
 	"apply.warn_rules_dir_missing":                  {en: "{{dir}} does not exist; the rules are not kept for the next boot (the agent applies them again when it starts)"},
 	"apply.warn_scan_base_missing":                  {en: "scan origin {{value}} does not exist"},
 	"apply.warn_user_missing":                       {en: "OS user {{value}} does not exist"},
-	"auditd.command_failed":                         {en: "auditctl {{args}}: {{cause}}"},
-	"auditd.disabled":                               {en: "auditing is disabled (auditctl -s reports enabled 0)"},
-	"auditd.list_failed":                            {en: "auditctl -l failed: {{cause}}"},
+	"auditd.command_failed":                         {en: "auditctl {{args}}: {{cause}}", screen: "changing the audit setting {{args}} failed: {{cause}}"},
+	"auditd.disabled":                               {en: "auditing is disabled (auditctl -s reports enabled 0)", screen: "auditing is disabled on the host (the audit status reports enabled 0)"},
+	"auditd.list_failed":                            {en: "auditctl -l failed: {{cause}}", screen: "reading the loaded audit rules failed: {{cause}}"},
 	"auditd.not_running":                            {en: "auditd is not running"},
-	"auditd.status_failed":                          {en: "auditctl -s failed: {{cause}}"},
+	"auditd.status_failed":                          {en: "auditctl -s failed: {{cause}}", screen: "reading the audit status failed: {{cause}}"},
 	"auditd.tool_missing":                           {en: "audit tool {{tool}} is not available: {{cause}}"},
 	"auth.code_mail_failed":                         {en: "the verification code could not be sent; contact an administrator"},
 	"auth.email_code_expired":                       {en: "the verification code has expired or was entered wrongly too often; request the change again"},

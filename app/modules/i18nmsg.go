@@ -9,12 +9,17 @@ import (
 	"testing"
 )
 
-// msgDef is the catalog entry of a message code: its English template and
-// whether only an administrator can receive it (the frontend keeps such
-// texts in the administrator bundle).
+// msgDef is the catalog entry of a message code: its English template (en,
+// the text of the CLI, the logs and the English fields of the API), the
+// English template of the screens when it differs (screen), and whether only
+// an administrator can receive it (the frontend keeps such texts in the
+// administrator bundle). A template that names a command line tool of the
+// host has a screen template with the same placeholders that names none:
+// the screens name no command line tool outside the installation guidance.
 type msgDef struct {
-	en    string
-	admin bool
+	en     string
+	screen string
+	admin  bool
 }
 
 // Msg is a text for display: a stable code and its parameters. Its English

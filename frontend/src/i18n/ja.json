@@ -610,7 +610,7 @@
             "builtin_disabled": "内蔵エージェントが無効のため、監査ルールを削除しました。",
             "cleared_by_init": "エージェントの初期化で、保存していた監視ルールを消去しました。適用する監視ルールは次の同期で決まります。",
             "failed_file_unknown": "監査ルールを適用できなかったため、以前の状態に戻しました。ただし {{file}} は変更前に読めなかったため戻していません（{{detail}}）: {{cause}}",
-            "failed_partly_restored": "監査ルールを適用できず、以前の状態にも完全には戻せませんでした（失敗した手順: {{count}} 件。読み込まれている監査ルールを auditctl -l で確認してください）: {{cause}}",
+            "failed_partly_restored": "監査ルールを適用できず、以前の状態にも完全には戻せませんでした（失敗した手順: {{count}} 件。ホストに読み込まれている監査ルールを確認してください）: {{cause}}",
             "failed_restored": "監査ルールを適用できなかったため、以前の状態に戻しました: {{cause}}",
             "global_settings": "監査の全体の設定が反映されていません（failure {{failure}}、backlog_wait_time {{wait}}）。",
             "globals_record_failed": "変更前の監査の全体の設定を記録できませんでした: {{cause}}",
@@ -631,11 +631,11 @@
             "warn_user_missing": "OSユーザー {{value}} は存在しません。"
         },
         "auditd": {
-            "command_failed": "auditctl {{args}} が失敗しました: {{cause}}",
-            "disabled": "監査が無効になっています（auditctl -s の enabled が 0）。",
-            "list_failed": "auditctl -l が失敗しました: {{cause}}",
+            "command_failed": "監査の設定 {{args}} を変更できませんでした: {{cause}}",
+            "disabled": "ホストの監査が無効になっています（監査の状態の enabled が 0）。",
+            "list_failed": "読み込まれている監査ルールを読み取れませんでした: {{cause}}",
             "not_running": "auditd が動いていません。",
-            "status_failed": "auditctl -s が失敗しました: {{cause}}",
+            "status_failed": "監査の状態を読み取れませんでした: {{cause}}",
             "tool_missing": "監査のコマンド {{tool}} を実行できません: {{cause}}"
         },
         "auth": {
