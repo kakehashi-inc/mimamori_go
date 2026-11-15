@@ -370,7 +370,7 @@ function CreateAccountModal({
                 void run(async () => {
                     await createAccount({
                         email: email.trim(),
-                        display_name: displayName.trim(),
+                        display_name: displayName,
                         role,
                         language,
                         password,
@@ -533,7 +533,7 @@ function DisplayNameModal({
                 e.preventDefault();
                 if (!account) return;
                 void run(async () => {
-                    await setAccountDisplayName(account.id, displayName.trim());
+                    await setAccountDisplayName(account.id, displayName);
                     onClose();
                     onSaved();
                 });

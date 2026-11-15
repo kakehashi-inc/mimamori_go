@@ -304,7 +304,7 @@ function ToTemplateModal({
         setBusy(true);
         setError(null);
         try {
-            const tpl = await ruleToTemplate(rule.id, { version, name: name.trim(), description: description.trim() });
+            const tpl = await ruleToTemplate(rule.id, { version, name, description: description.trim() });
             onClose();
             onCreated(tpl.name);
         } catch (err) {

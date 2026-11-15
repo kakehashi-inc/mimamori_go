@@ -231,7 +231,7 @@ function CreateTemplateModal({
 
     async function submit(e: FormEvent) {
         e.preventDefault();
-        const body: TemplateCreate = { name: name.trim(), description: description.trim() };
+        const body: TemplateCreate = { name, description: description.trim() };
         if (source === 'builtin') {
             if (!builtin) {
                 setError(t('templates.chooseBuiltin'));

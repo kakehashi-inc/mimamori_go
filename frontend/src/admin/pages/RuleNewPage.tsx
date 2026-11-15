@@ -14,6 +14,7 @@ import { useToast } from '../../context/ToastContext';
 import { useApi } from '../../hooks/useApi';
 import type { MergePreview } from '../../types';
 import { errorMessage } from '../../utils/format';
+import { trimName } from '../../utils/names';
 import { serverText } from '../../utils/serverText';
 
 type Mode = 'templates' | 'empty';
@@ -62,7 +63,7 @@ export function RuleNewPage() {
         try {
             if (mode === 'templates') {
                 const rule = await createRule({
-                    name: name.trim(),
+                    name,
                     description: description.trim(),
                     templates: selected,
                     choices,
@@ -70,7 +71,7 @@ export function RuleNewPage() {
                 showToast(t('rules.created'));
                 navigate(`/rules/${rule.id}`);
             } else {
-                const rule = await createRule({ name: name.trim(), description: description.trim() });
+                const rule = await createRule({ name, description: description.trim() });
                 showToast(t('rules.created'));
                 navigate(`/rules/${rule.id}/edit`);
             }
@@ -81,7 +82,7 @@ export function RuleNewPage() {
         }
     }
 
-    const canCreate = name.trim() !== '' && (mode === 'empty' || preview !== null);
+    const canCreate = trimName(name) !== '' && (mode === 'empty' || preview !== null);
 
     return (
         <>

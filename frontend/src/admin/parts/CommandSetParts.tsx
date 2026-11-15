@@ -22,6 +22,7 @@ import type {
     CommandSet,
 } from '../../types';
 import { errorMessage, formatDateTime } from '../../utils/format';
+import { trimName } from '../../utils/names';
 import { codedText, codedTexts } from '../../utils/serverText';
 import { deleteCommandSet, discardCommandRequest, importCommandSets, listCommandSets, requestCommandRun } from '../api';
 import { hostZoneText, scheduleSummary } from '../components/commandSetDraft';
@@ -309,7 +310,8 @@ function ImportDialog({
 
     const row = (id: number, name: string): ImportRow => rows[id] ?? { checked: false, name };
     const chosen = list.filter(s => row(s.id, s.name).checked);
-    const finalName = (id: number, name: string) => row(id, name).name.trim() || name;
+    // The name the server gives the copy: the typed name (sent as typed), or the source name when it is empty.
+    const finalName = (id: number, name: string) => trimName(row(id, name).name) || name;
 
     // Names that clash with a set of this agent or with another set of the import.
     const clashes = (() => {
@@ -326,7 +328,7 @@ function ImportDialog({
         setBusy(true);
         setError(null);
         try {
-            const items = chosen.map(s => ({ set_id: s.id, name: finalName(s.id, s.name) }));
+            const items = chosen.map(s => ({ set_id: s.id, name: row(s.id, s.name).name }));
             const r = await runChange(() => importCommandSets(agentId, Number(source), items));
             onImported(r.sets.length);
         } catch (e) {

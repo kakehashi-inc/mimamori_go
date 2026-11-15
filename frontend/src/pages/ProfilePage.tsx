@@ -18,6 +18,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import type { Me } from '../types';
 import { accountErrorMessage } from '../utils/accountErrors';
+import { trimName } from '../utils/names';
 
 /** The signed-in account: its fields and the changes the user makes alone. */
 export function ProfilePage() {
@@ -62,7 +63,7 @@ function DisplayNameCard({ me }: { me: Me }) {
         setBusy(true);
         setError(null);
         try {
-            updateMe(await setOwnDisplayName(name.trim()));
+            updateMe(await setOwnDisplayName(name));
             showToast(t('profile.displayNameChanged'));
         } catch (err) {
             setError(accountErrorMessage(t, err));
@@ -96,7 +97,7 @@ function DisplayNameCard({ me }: { me: Me }) {
                         variant='primary'
                         icon='save'
                         busy={busy}
-                        disabled={name.trim() === me.display_name}
+                        disabled={trimName(name) === me.display_name}
                     >
                         {t('profile.changeDisplayName')}
                     </Button>

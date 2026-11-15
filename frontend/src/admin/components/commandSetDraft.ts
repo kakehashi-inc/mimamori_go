@@ -250,7 +250,7 @@ export function draftSchedule(d: SetDraft): CommandSchedule | null {
 export function draftToSpec(d: SetDraft): CommandSetSpec {
     const collect = d.purpose === 'collect_output';
     return {
-        name: d.name.trim(),
+        name: d.name,
         description: d.description,
         purpose: d.purpose,
         os_user: d.osUser.trim(),
