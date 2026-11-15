@@ -2,6 +2,7 @@ package modules
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -28,7 +29,8 @@ import (
 // set has one entry at its next occurrence (CommandSchedule.Plan), queued
 // again only after its run ended. A manual run request is an entry without a
 // time that replaces a waiting scheduled entry of its set; while its set
-// runs it waits.
+// runs it waits. When a manual entry leaves the queue, after its run or
+// answered without one, the entry of its set is computed again.
 //
 // Who owns which state of the agent (nothing else is shared):
 //
@@ -127,6 +129,10 @@ type agentScheduler struct {
 	running map[int64]bool
 	taken   map[int64]bool
 	held    map[int64]*groupProbe
+	// replan are the scheduled sets whose entry could not be computed (the
+	// schedule state could not be read); a worker that looks for an entry
+	// computes them again.
+	replan map[int64]bool
 	// defs are the stored definitions (valid or not), valid the sets that
 	// passed validation on the agent.
 	defs  *CommandDefinitions
@@ -135,7 +141,8 @@ type agentScheduler struct {
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location) *agentScheduler {
 	return &agentScheduler{db: db, now: now, loc: loc, workers: 1, changed: make(chan struct{}),
-		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, valid: map[int64]*CommandSetDef{}}
+		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, replan: map[int64]bool{},
+		valid: map[int64]*CommandSetDef{}}
 }
 
 // changedLocked wakes the waiting workers.
@@ -192,17 +199,28 @@ func (s *agentScheduler) scheduledIDsLocked() []int64 {
 // (CommandSchedule.Plan), replacing a waiting scheduled entry of the set
 // unless that one is the same (it keeps its place). A set that runs, or that
 // has a manual entry waiting, gets none now (its entry is computed again
-// when the run ended); a set without a schedule state or without a next
-// occurrence gets none.
+// when the run ended or the manual entry left the queue); a set without a
+// schedule state or without a next occurrence gets none. When the schedule
+// state cannot be read, a waiting scheduled entry stays as it is; a set
+// without one is computed again each time a worker looks for an entry
+// (replan) until the state can be read.
 func (s *agentScheduler) planLocked(id int64, now time.Time) {
 	old := s.entryOfSetLocked(id)
 	if old >= 0 && s.entries[old].request != nil {
 		return
 	}
+	delete(s.replan, id)
 	var plan *queueEntry
 	def := s.valid[id]
 	if !s.running[id] && def != nil && def.RunMode == RunModeSchedule && def.Schedule != nil {
-		if st, err := models.GetCommandSchedule(s.db.Read(), id); err == nil && st != nil {
+		st, err := models.GetCommandSchedule(s.db.Read(), id)
+		if err != nil {
+			if old < 0 {
+				s.replan[id] = true
+			}
+			return
+		}
+		if st != nil {
 			if due, startAt, ok := def.Schedule.Plan(now, time.Unix(st.ArmedAt, 0), time.Unix(st.LastDue, 0), s.loc()); ok {
 				plan = &queueEntry{setID: id, startAt: startAt, scheduledFor: due.Unix()}
 			}
@@ -273,8 +291,13 @@ func (s *agentScheduler) next() (*agentUnit, []CommandRequestAck) {
 // pickLocked takes the entry to process now by the rule of the file comment.
 // A manual entry is answered instead of started when a run is already
 // recorded for its request, its expiry has passed or its set is not valid;
-// the answers are returned and the next entry is looked at.
+// the answers are returned, the entry of its set is computed again (as after
+// a run) and the next entry is looked at. The sets whose entry could not be
+// computed before are computed again first.
 func (s *agentScheduler) pickLocked(now time.Time) (*agentUnit, []CommandRequestAck) {
+	for _, id := range slices.Sorted(maps.Keys(s.replan)) {
+		s.planLocked(id, now)
+	}
 	var acks []CommandRequestAck
 	for {
 		best := -1
@@ -300,6 +323,7 @@ func (s *agentScheduler) pickLocked(now time.Time) (*agentUnit, []CommandRequest
 		if r := e.request; r != nil {
 			if ack, done := s.answerLocked(r, now); done {
 				acks = append(acks, ack)
+				s.planLocked(e.setID, now)
 				continue
 			}
 			s.running[def.ID], s.taken[r.ID] = true, true
@@ -333,9 +357,13 @@ func (s *agentScheduler) answerLocked(r *CommandRunRequest, now time.Time) (Comm
 
 // waitLocked is how long a waiting worker waits at most: until the earliest
 // startAt, or heldSetPoll while an entry that may start waits only for a
-// set kept by a surviving process group.
+// set kept by a surviving process group or the entry of a set could not be
+// computed.
 func (s *agentScheduler) waitLocked(now time.Time) time.Duration {
 	wait := time.Hour
+	if len(s.replan) > 0 {
+		wait = heldSetPoll
+	}
 	for _, e := range s.entries {
 		switch {
 		case e.startAt.After(now):
@@ -420,7 +448,8 @@ func (s *agentScheduler) acceptDefinitions(defs *CommandDefinitions, valid map[i
 // queue, made from what is stored every time a request is delivered: a run
 // recorded for it is answered started with that run; a request that waits in
 // the queue or is being started gets no new answer (a waiting one whose
-// expiry has passed is taken out and answered expired); an expired request
+// expiry has passed is taken out and answered expired, and the entry of its
+// set is computed again); an expired request
 // is answered expired and one whose set is not valid unknown_set. The
 // others are queued; a manual entry replaces a waiting scheduled entry of
 // its set. A request for a set that has another manual entry waiting is
@@ -448,8 +477,10 @@ func (s *agentScheduler) receive(reqs []CommandRunRequest) []CommandRequestAck {
 		}
 		if i := slices.IndexFunc(s.entries, func(e *queueEntry) bool { return e.request != nil && e.request.ID == r.ID }); i >= 0 {
 			if ack, done := s.answerLocked(s.entries[i].request, now); done && ack.Status == RequestAckExpired {
+				setID := s.entries[i].setID
 				s.removeLocked(i)
 				acks = append(acks, ack)
+				s.planLocked(setID, now)
 			}
 			continue
 		}

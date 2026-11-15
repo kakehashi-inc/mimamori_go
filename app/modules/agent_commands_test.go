@@ -683,6 +683,136 @@ func TestManualEntryReplacesScheduled(t *testing.T) {
 	}
 }
 
+// TestManualEntryAnsweredKeepsSchedule: a manual entry that leaves the queue
+// without a run (its expiry passed while it waited: answered expired when a
+// worker picks it, or taken out when the request is delivered again) gets the
+// scheduled entry of its set computed again, as after a run; so does a set
+// that became scheduled while its manual entry waited. The occurrences of the
+// schedule go on running afterwards.
+func TestManualEntryAnsweredKeepsSchedule(t *testing.T) {
+	requireBash(t)
+	at := func(hh, mm int) time.Time { return time.Date(2026, 11, 12, hh, mm, 0, 0, time.UTC) }
+	for _, c := range []struct {
+		name string
+		// scheduledFirst: the set is scheduled before the request comes;
+		// otherwise it becomes scheduled while the manual entry waits.
+		scheduledFirst bool
+		// redelivered: the request is delivered again after its expiry;
+		// otherwise a worker picks it.
+		redelivered bool
+	}{
+		{"picked", true, false},
+		{"delivered again", true, true},
+		{"scheduled while it waited, picked", false, false},
+		{"scheduled while it waited, delivered again", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := newCommandRuntime(t, &cmdTransport{})
+			rt.loc = time.UTC
+			now := at(8, 0).Add(30 * time.Second)
+			rt.clock = func() time.Time { return now }
+			set := testSet(1, PurposeRunOnly, "true")
+			every := set
+			every.Schedule = &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 5}
+			every.RunMode = RunModeSchedule
+			if c.scheduledFirst {
+				rt.storeCommandDefinitions(defsOf(every))
+				if e := entryOf(rt, 1); e == nil || e.request != nil || !e.startAt.Equal(at(8, 5)) {
+					t.Fatalf("the scheduled entry at 08:05: %+v", e)
+				}
+			} else {
+				rt.storeCommandDefinitions(defsOf(set))
+			}
+			// The request expires at 08:02; no worker takes it before.
+			req := CommandRunRequest{ID: 7, SetID: 1, RequestedAt: now.Unix() - 10, ExpiresAt: at(8, 2).Unix()}
+			receiveRequests(rt, []CommandRunRequest{req})
+			if !c.scheduledFirst {
+				rt.storeCommandDefinitions(defsOf(every))
+			}
+			if es := queuedEntries(rt); len(es) != 1 || es[0].request == nil {
+				t.Fatalf("only the manual entry of the set waits: %+v", es)
+			}
+			now = at(8, 3)
+			if c.redelivered {
+				receiveRequests(rt, []CommandRunRequest{req})
+			} else if job := nextCommandJob(rt); job != nil {
+				t.Fatalf("the expired request started: %+v", job)
+			}
+			if acks := acksOf(queuedReports(t, rt)); len(acks) != 1 || acks[0].RequestID != 7 || acks[0].Status != RequestAckExpired {
+				t.Fatalf("answers: %+v", acks)
+			}
+			if e := entryOf(rt, 1); e == nil || e.request != nil || !e.startAt.Equal(at(8, 5)) || e.scheduledFor != at(8, 5).Unix() {
+				t.Fatalf("the scheduled set lost its entry: %+v", queuedEntries(rt))
+			}
+			ran := 0
+			for range 12 {
+				now = now.Add(5 * time.Minute)
+				for runNext(rt) {
+					ran++
+				}
+			}
+			if ran != 12 {
+				t.Fatalf("runs of the every-5-minutes set in the following hour: %d, want 12", ran)
+			}
+		})
+	}
+}
+
+// TestScheduledEntryKeptWhenStateUnreadable: when the schedule state cannot
+// be read while the entry of a set is computed, the waiting scheduled entry
+// stays; a set left without an entry (its run ended meanwhile) gets it once
+// the state can be read again.
+func TestScheduledEntryKeptWhenStateUnreadable(t *testing.T) {
+	requireBash(t)
+	at := func(hh, mm int) time.Time { return time.Date(2026, 11, 12, hh, mm, 0, 0, time.UTC) }
+	rt := newCommandRuntime(t, &cmdTransport{})
+	rt.loc = time.UTC
+	now := at(8, 0).Add(30 * time.Second)
+	rt.clock = func() time.Time { return now }
+	every := testSet(1, PurposeRunOnly, "true")
+	every.Schedule = &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 5}
+	every.RunMode = RunModeSchedule
+	other := testSet(2, PurposeRunOnly, "true")
+	other.Schedule = &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 5}
+	other.RunMode = RunModeSchedule
+	defs := defsOf(every, other)
+	rt.storeCommandDefinitions(defs)
+	now = at(8, 5)
+	job := nextCommandJob(rt)
+	if job == nil || job.def.ID != 1 {
+		t.Fatalf("the run of set 1: %+v", job)
+	}
+	rt.runCommandJob(job)
+	execOnDB(t, rt.DB, `ALTER TABLE command_schedules RENAME TO command_schedules_hidden`)
+	// Set 2 waits; computing its entry again finds no state: it keeps it.
+	rt.sched.acceptDefinitions(defs, rt.sched.valid)
+	if e := entryOf(rt, 2); e == nil || e.scheduledFor != at(8, 5).Unix() {
+		t.Fatalf("the waiting scheduled entry of set 2 must stay: %+v", queuedEntries(rt))
+	}
+	// Set 1 ended its run; its next entry cannot be computed yet.
+	rt.sched.doneRun(job)
+	if e := entryOf(rt, 1); e != nil {
+		t.Fatalf("an entry computed without the schedule state: %+v", e)
+	}
+	// A waiting worker looks again soon.
+	rt.sched.mu.Lock()
+	wait := rt.sched.waitLocked(now.Add(time.Second))
+	rt.sched.mu.Unlock()
+	if wait != heldSetPoll {
+		t.Fatalf("a waiting worker waits %s, want %s while an entry could not be computed", wait, heldSetPoll)
+	}
+	execOnDB(t, rt.DB, `ALTER TABLE command_schedules_hidden RENAME TO command_schedules`)
+	if j := nextCommandJob(rt); j == nil || j.def.ID != 2 {
+		t.Fatalf("set 2 runs its occurrence: %+v", j)
+	} else {
+		rt.runCommandJob(j)
+		rt.sched.doneRun(j)
+	}
+	if e := entryOf(rt, 1); e == nil || e.scheduledFor != at(8, 10).Unix() {
+		t.Fatalf("set 1 gets its entry once the state can be read: %+v", queuedEntries(rt))
+	}
+}
+
 // TestCommandRunKeepsMonitoring runs the whole flow: a request delivered by
 // sync runs while the monitoring step keeps going, and the results are sent
 // with the following reports.
