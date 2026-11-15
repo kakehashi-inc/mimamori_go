@@ -159,7 +159,7 @@ func TestInitConnectErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr.client.TLS.ServerName = "not-in-the-certificate.example"
-	_, err = syncCheck(tr, &SyncRequest{})
+	_, err = syncCheck(tr, &SyncRequest{}, false)
 	if err == nil || !strings.HasPrefix(err.Error(), "the central host is not one of the certificate names") {
 		t.Fatalf("host name mismatch: %v", err)
 	}
@@ -350,5 +350,40 @@ func TestAgentSetCentralKeepsPort(t *testing.T) {
 	var ee *ExitError
 	if err := (&AgentSetCentralCmd{Host: host, Port: &zero}).Run(); !errors.As(err, &ee) || ee.Code != ExitArgument {
 		t.Fatalf("--port 0: %v", err)
+	}
+}
+
+// TestAgentSetCentralOtherCA: agent set-central to a central whose
+// certificate is signed by a CA the agent does not trust says what the
+// running agent says (re-initialize) and gives no hint about the
+// certificate names, which are not the problem (TestInitConnectErrors: a
+// host that is not one of the names). Nothing is changed.
+func TestAgentSetCentralOtherCA(t *testing.T) {
+	trusted, err := GenerateCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := GenerateCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port := fakeCentral(t, other, []string{other.CertPEM}, http.StatusOK)
+	MigrationsFS = os.DirFS("../..")
+	dir := t.TempDir()
+	db, err := OpenSQLite(filepath.Join(dir, AgentLocalDBFileName), SchemaAgentLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &AgentConfig{AgentID: "id", CentralHost: "192.0.2.1", CentralPort: port, Token: "tok", CAPEMs: []string{trusted.CertPEM}}
+	if err := db.Write(cfg.Save); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	err = AgentSetCentral(dir, host, port)
+	var ee *ExitError
+	if !errors.As(err, &ee) || ee.Code != ExitExec || strings.Contains(err.Error(), "server_names") ||
+		!strings.Contains(err.Error(), "not signed by a CA this agent trusts") || !strings.Contains(err.Error(), "re-initialize the agent") ||
+		!strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("another CA: %v", err)
 	}
 }

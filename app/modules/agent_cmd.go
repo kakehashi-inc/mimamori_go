@@ -265,7 +265,7 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := syncCheck(tr, &SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)})
+	resp, err := syncCheck(tr, &SyncRequest{AgentVersion: AppVersion, CAFingerprints: CAFingerprintsOf(cfg.CAPEMs)}, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -274,7 +274,11 @@ func initConnect(o AgentInitOptions, token, agentID string) (*AgentConfig, *Sync
 }
 
 // syncCheck performs one sync and turns the usual failures into messages.
-func syncCheck(tr *RemoteTransport, req *SyncRequest) (*SyncResponse, error) {
+// stored tells that the agent trusts the CAs it stored (agent set-central),
+// not the CA the central just sent (agent init): a certificate that none of
+// them signed then belongs to a central with another CA, which the agent
+// can only use after it was initialized again (as the running agent says).
+func syncCheck(tr *RemoteTransport, req *SyncRequest, stored bool) (*SyncResponse, error) {
 	resp, err := tr.Sync(req)
 	if err != nil {
 		var he *HTTPError
@@ -286,8 +290,11 @@ func syncCheck(tr *RemoteTransport, req *SyncRequest) (*SyncResponse, error) {
 			return nil, fmt.Errorf("the central host is not one of the certificate names (server_names): %w", err)
 		}
 		var ue x509.UnknownAuthorityError
+		if stored && errors.As(err, &ue) {
+			return nil, fmt.Errorf("the central certificate is not signed by a CA this agent trusts (%w); if that central has another CA, re-initialize the agent for it (agent init --overwrite)", err)
+		}
 		if errors.As(err, &ue) || IsCertificateError(err) {
-			return nil, fmt.Errorf("the central certificate does not match its CA (check that the central host is one of the certificate names, server_names): %w", err)
+			return nil, fmt.Errorf("the central certificate does not match its CA: %w", err)
 		}
 		return nil, err
 	}
@@ -357,7 +364,7 @@ func AgentSetCentral(dataDir, host string, port int) error {
 	if json.Unmarshal([]byte(models.GetLocalState(db.Read(), stateApply)), &ap) == nil && ap.Status != "" {
 		req.LastApply = &ap
 	}
-	resp, err := syncCheck(tr, req)
+	resp, err := syncCheck(tr, req, true)
 	if err != nil {
 		code := ExitExec
 		var ee *ExitError
