@@ -1086,11 +1086,14 @@ func TestLeftoverWriterNotBlockedWhileWorkerBusy(t *testing.T) {
 }
 
 // pipeReaders returns the number of goroutines that read a pipe kept for
-// processes left behind (leftoverPipes).
+// processes left behind (leftoverPipes), counted by the line that names
+// their creator (leftoverPipes.add starts each): a goroutine that has not
+// run yet shows only the wrapper of its go statement, not the reader's
+// frame, but always its creator.
 func pipeReaders() int {
 	buf := make([]byte, 8<<20)
 	n := runtime.Stack(buf, true)
-	return strings.Count(string(buf[:n]), "(*leftoverPipes).read(")
+	return strings.Count(string(buf[:n]), "(*leftoverPipes).add in goroutine")
 }
 
 // TestScheduledRunsCarrySkipped: the run of a scheduled set carries how many
