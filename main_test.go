@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +68,19 @@ func testParser(t *testing.T, cli *CLI, out io.Writer) *kong.Kong {
 	}
 	return p
 }
+
+// readModel returns the model of a real parser of the command line that the
+// tests only read (commands, values, their kinds and fillers); no test
+// parses with it. Building a parser is the costly part of a parse (kong.New
+// interpolates every help text), so it is built once.
+var readModel = sync.OnceValue(func() *kong.Application {
+	var cli CLI
+	p, err := newParser(&cli, kong.Writers(io.Discard, io.Discard), kong.Exit(func(code int) { panic(exitCalled(code)) }))
+	if err != nil {
+		panic(err)
+	}
+	return p.Model
+})
 
 // valueKind is how a test gives and checks a value of the command line.
 type valueKind int
@@ -191,15 +205,14 @@ func filler(v *kong.Value) string {
 // is needed) other than --help.
 func cliValues(t *testing.T) []cliValue {
 	t.Helper()
-	var cli CLI
-	p := testParser(t, &cli, io.Discard)
+	model := readModel()
 	var out []cliValue
-	for _, f := range p.Model.Flags {
+	for _, f := range model.Flags {
 		if f.Name != "help" {
 			out = append(out, cliValue{path: []string{"version"}, name: f.Name, flag: true})
 		}
 	}
-	for _, leaf := range p.Model.Leaves(false) {
+	for _, leaf := range model.Leaves(false) {
 		path := commandPath(leaf)
 		for _, v := range leaf.Positional {
 			out = append(out, cliValue{path: path, name: v.Name})
@@ -219,9 +232,7 @@ func cliValues(t *testing.T) []cliValue {
 // every other required argument and flag.
 func argsWith(t *testing.T, c cliValue, text string, equals bool) []string {
 	t.Helper()
-	var cli CLI
-	p := testParser(t, &cli, io.Discard)
-	n := findNode(t, p.Model, c.path)
+	n := findNode(t, readModel(), c.path)
 	args := append([]string{}, c.path...)
 	for _, v := range n.Positional {
 		if !c.flag && v.Name == c.name {
@@ -245,22 +256,41 @@ func argsWith(t *testing.T, c cliValue, text string, equals bool) []string {
 	return args
 }
 
-// parseValue parses args with the real parser and returns the value c
-// received.
-func parseValue(t *testing.T, c cliValue, args []string) (reflect.Value, error) {
+// valueParser parses command lines that give the value c, all with the
+// same real parser. kong resets every value of the command line to its
+// default before it applies a parse, so a successful parse gives what a
+// new parser gives; a refused parse applies nothing the test reads.
+type valueParser struct {
+	t *testing.T
+	p *kong.Kong
+	v *kong.Value
+}
+
+func newValueParser(t *testing.T, c cliValue) *valueParser {
 	t.Helper()
 	var cli CLI
-	var out bytes.Buffer
-	p := testParser(t, &cli, &out)
-	v := findValue(t, p.Model, c)
-	_, err := parseArgs(p, args)
+	p := testParser(t, &cli, io.Discard)
+	return &valueParser{t: t, p: p, v: findValue(t, p.Model, c)}
+}
+
+// parse parses args and returns the value c received.
+func (vp *valueParser) parse(args []string) (reflect.Value, error) {
+	vp.t.Helper()
+	_, err := parseArgs(vp.p, args)
 	if err != nil {
 		if s := err.Error(); strings.Contains(s, negativeMark) || strings.Contains(s, `\x00`) {
-			t.Errorf("%q: the mark is in the error %q", args, s)
+			vp.t.Errorf("%q: the mark is in the error %q", args, s)
 		}
 		return reflect.Value{}, err
 	}
-	return v.Target, nil
+	return vp.v.Target, nil
+}
+
+// parseValue parses args with a new real parser and returns the value c
+// received.
+func parseValue(t *testing.T, c cliValue, args []string) (reflect.Value, error) {
+	t.Helper()
+	return newValueParser(t, c).parse(args)
 }
 
 // intValue returns the number an int value received (an int, a pointer to
@@ -304,9 +334,7 @@ func stringValue(v reflect.Value) (string, bool) {
 func TestEveryValueHasOurMapper(t *testing.T) {
 	kinds := map[valueKind]int{}
 	for _, c := range cliValues(t) {
-		var cli CLI
-		p := testParser(t, &cli, io.Discard)
-		v := findValue(t, p.Model, c)
+		v := findValue(t, readModel(), c)
 		k, ok := kindOf(v)
 		if !ok {
 			t.Errorf("%s: no mapper of ours reads a %s (add one to valueMappers)", c, v.Target.Type())
@@ -327,12 +355,12 @@ func TestEveryIntValue(t *testing.T) {
 	bad := []string{"+3", " 3", "3 ", "0x10", "-0x10", "1_0", "1e1", "1.5", "-1.5", "", "\uff13", "99999999999999999999"}
 	n := 0
 	for _, c := range cliValues(t) {
-		var cli CLI
-		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		v := findValue(t, readModel(), c)
 		if k, _ := kindOf(v); k != kindInt {
 			continue
 		}
 		n++
+		vp := newValueParser(t, c)
 		forms := []bool{false}
 		if c.flag {
 			forms = append(forms, true)
@@ -340,7 +368,7 @@ func TestEveryIntValue(t *testing.T) {
 		for _, equals := range forms {
 			for text, want := range good {
 				args := argsWith(t, c, text, equals)
-				got, err := parseValue(t, c, args)
+				got, err := vp.parse(args)
 				if err != nil {
 					t.Errorf("%q: %v", args, err)
 					continue
@@ -351,7 +379,7 @@ func TestEveryIntValue(t *testing.T) {
 			}
 			for _, text := range bad {
 				args := argsWith(t, c, text, equals)
-				_, err := parseValue(t, c, args)
+				_, err := vp.parse(args)
 				if err == nil {
 					t.Errorf("%q accepted", args)
 					continue
@@ -384,16 +412,16 @@ func TestEveryIntListElement(t *testing.T) {
 	}
 	n := 0
 	for _, c := range cliValues(t) {
-		var cli CLI
-		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		v := findValue(t, readModel(), c)
 		if v.Target.Type() != reflect.TypeOf([]int64(nil)) {
 			continue
 		}
 		n++
+		vp := newValueParser(t, c)
 		for _, equals := range []bool{false, true} {
 			for text, want := range good {
 				args := argsWith(t, c, text, equals)
-				got, err := parseValue(t, c, args)
+				got, err := vp.parse(args)
 				if err != nil {
 					t.Errorf("%q: %v", args, err)
 					continue
@@ -404,7 +432,7 @@ func TestEveryIntListElement(t *testing.T) {
 			}
 			for text, elem := range bad {
 				args := argsWith(t, c, text, equals)
-				_, err := parseValue(t, c, args)
+				_, err := vp.parse(args)
 				want := fmt.Sprintf("--%s: %q is not a whole number", c.name, elem)
 				if err == nil || !strings.HasPrefix(err.Error(), want) {
 					t.Errorf("%q: error %v, want %s", args, err, want)
@@ -424,8 +452,7 @@ func TestEveryIntValueExitCode(t *testing.T) {
 	bad := []string{"+3", " 3", "0x10", "1_0", "1e1", "1.5", "", "\uff13", "-0x10"}
 	i := 0
 	for _, c := range cliValues(t) {
-		var cli CLI
-		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		v := findValue(t, readModel(), c)
 		if k, _ := kindOf(v); k != kindInt {
 			continue
 		}
@@ -448,19 +475,19 @@ func TestEveryIntValueExitCode(t *testing.T) {
 func TestEveryStringValue(t *testing.T) {
 	n := 0
 	for _, c := range cliValues(t) {
-		var cli CLI
-		v := findValue(t, testParser(t, &cli, io.Discard).Model, c)
+		v := findValue(t, readModel(), c)
 		if k, _ := kindOf(v); k != kindString {
 			continue
 		}
 		n++
+		vp := newValueParser(t, c)
 		forms := []bool{false}
 		if c.flag {
 			forms = append(forms, true)
 		}
 		for _, equals := range forms {
 			args := argsWith(t, c, "-1-", equals)
-			got, err := parseValue(t, c, args)
+			got, err := vp.parse(args)
 			if v.Enum != "" {
 				// A value outside the choices is refused and shown as given.
 				if err == nil || !strings.Contains(err.Error(), `"-1-"`) {
