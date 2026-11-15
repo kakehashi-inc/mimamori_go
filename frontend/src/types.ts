@@ -127,6 +127,10 @@ export interface AgentSummary {
     token: TokenRef | null;
     last_report_at: string | null;
     seconds_since_report: number | null;
+    /** The central's judgement: the agent synced within three of its check intervals and 10 minutes and did not report that it stopped. */
+    responding: boolean;
+    /** The check interval the answer to its last sync gave the agent (null before the first sync). */
+    check_interval_sec: number | null;
     rule: AgentRuleRef | null;
     apply: ApplyResult;
     unacked_alerts: number;

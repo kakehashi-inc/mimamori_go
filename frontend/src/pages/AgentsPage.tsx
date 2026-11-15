@@ -73,7 +73,7 @@ export function AgentsPage() {
                                             )}
                                         </Td>
                                         <Td>
-                                            <ElapsedSinceReport seconds={a.seconds_since_report} />
+                                            <ElapsedSinceReport agent={a} />
                                             <div className='text-xs whitespace-nowrap text-muted'>
                                                 {formatDateTime(a.last_report_at)}
                                             </div>

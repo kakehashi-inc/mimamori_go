@@ -86,7 +86,7 @@ function AgentDetailBody({ agent, reloadAgent }: { agent: AgentDetail; reloadAge
                                 label: t('agents.lastReport'),
                                 value: (
                                     <span className='flex flex-wrap gap-2'>
-                                        <ElapsedSinceReport seconds={agent.seconds_since_report} />
+                                        <ElapsedSinceReport agent={agent} />
                                         <span className='text-muted'>{formatDateTime(agent.last_report_at)}</span>
                                     </span>
                                 ),

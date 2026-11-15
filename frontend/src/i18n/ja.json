@@ -161,7 +161,9 @@
         "builtin": "内蔵エージェント",
         "builtinStopped": "停止中",
         "caOutdated": "新しいCA未受領",
-        "caOutdatedTitle": "このエージェントは最新の独自CAをまだ受け取っていません"
+        "caOutdatedTitle": "このエージェントは最新の独自CAをまだ受け取っていません",
+        "notResponding": "エージェントは応答していません。確認の間隔（{{interval}} 秒）の 3 倍と 10 分の間に同期していないか、停止すると報告しました",
+        "neverSynced": "エージェントは応答していません。まだ同期していません"
     },
     "auditd": {
         "running": "稼働中",

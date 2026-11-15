@@ -90,19 +90,25 @@ func jsonSize(v any) int {
 }
 
 type agentSummaryJSON struct {
-	ID                 int64                 `json:"id"`
-	Kind               string                `json:"kind"`
-	DisplayName        string                `json:"display_name"`
-	Hostname           string                `json:"hostname"`
-	Token              *tokenRefJSON         `json:"token"`
-	LastReportAt       *string               `json:"last_report_at"`
-	SecondsSinceReport *int64                `json:"seconds_since_report"`
-	Rule               *agentRuleJSON        `json:"rule"`
-	Apply              applyJSON             `json:"apply"`
-	UnackedAlerts      int                   `json:"unacked_alerts"`
-	Auditd             *modules.AuditdStatus `json:"auditd"`
-	CAUpToDate         bool                  `json:"ca_up_to_date"`
-	BuiltinRunning     *bool                 `json:"builtin_running"`
+	ID                 int64         `json:"id"`
+	Kind               string        `json:"kind"`
+	DisplayName        string        `json:"display_name"`
+	Hostname           string        `json:"hostname"`
+	Token              *tokenRefJSON `json:"token"`
+	LastReportAt       *string       `json:"last_report_at"`
+	SecondsSinceReport *int64        `json:"seconds_since_report"`
+	// Responding is the central's judgement of the agent (responding):
+	// the screens mark the last report as old when it is false.
+	// CheckIntervalSec is the check interval the answer to its last sync
+	// gave it (null before the first sync).
+	Responding       bool                  `json:"responding"`
+	CheckIntervalSec *int                  `json:"check_interval_sec"`
+	Rule             *agentRuleJSON        `json:"rule"`
+	Apply            applyJSON             `json:"apply"`
+	UnackedAlerts    int                   `json:"unacked_alerts"`
+	Auditd           *modules.AuditdStatus `json:"auditd"`
+	CAUpToDate       bool                  `json:"ca_up_to_date"`
+	BuiltinRunning   *bool                 `json:"builtin_running"`
 }
 
 type agentDetailJSON struct {
@@ -174,6 +180,11 @@ func (c *core) agentSummary(a *models.Agent, latestCAs []string, rules map[int64
 	if a.LastReportAt > 0 {
 		d := now - a.LastReportAt
 		s.SecondsSinceReport = &d
+	}
+	s.Responding = c.responding(a, now)
+	if a.CheckIntervalSec > 0 {
+		v := a.CheckIntervalSec
+		s.CheckIntervalSec = &v
 	}
 	if a.Kind == models.AgentBuiltin {
 		// A built-in agent disabled in the configuration is the

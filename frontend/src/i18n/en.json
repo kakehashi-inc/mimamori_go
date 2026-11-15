@@ -161,7 +161,9 @@
         "builtin": "Built-in agent",
         "builtinStopped": "Stopped",
         "caOutdated": "New CA not received",
-        "caOutdatedTitle": "This agent has not received the latest private CA yet"
+        "caOutdatedTitle": "This agent has not received the latest private CA yet",
+        "notResponding": "The agent is not responding: it has not synced within three of its check intervals ({{interval}} s) and 10 minutes, or it reported that it stopped",
+        "neverSynced": "The agent is not responding: it has not synced yet"
     },
     "auditd": {
         "running": "Running",

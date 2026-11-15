@@ -180,6 +180,8 @@ interface AgentSummary {
   token: TokenRef | null;            // 内蔵エージェントは null
   last_report_at: string | null;
   seconds_since_report: number | null;
+  responding: boolean;               // セントラルの判断で、エージェントが応答しているか（最後の同期から確認の間隔の 3 倍と 600 秒以内で、その後に終了すると報告していない。[システム仕様.md](システム仕様.md) の 12.5.5）。画面は false のとき最後の報告を古いものとして示す
+  check_interval_sec: number | null; // 最後の同期の応答がエージェントに与えた確認の間隔（秒。同期したことが無ければ null）
   rule: {                            // 適用（割り当て）中の監視ルール。無ければ null
     id: number; name: string;
     assigned_version: number;        // 管理者が適用した版

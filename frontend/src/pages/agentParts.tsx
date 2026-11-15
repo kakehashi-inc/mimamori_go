@@ -4,9 +4,6 @@ import { Badge } from '../components/Badge';
 import type { AgentRuleRef, AgentSummary, AuditdStatus } from '../types';
 import { formatElapsed } from '../utils/format';
 
-// Reports older than this are highlighted as stale.
-export const STALE_REPORT_SEC = 300;
-
 /**
  * Link to the detections list narrowed to an agent's unacknowledged alerts.
  * Suppressed ones are left out, as in the count shown next to the link.
@@ -15,12 +12,21 @@ export function unackedAlertsLink(agentId: number): string {
     return `/detections?agent_id=${agentId}&category=alert&acknowledged=false&suppressed=false`;
 }
 
-/** Elapsed time since the last report, highlighted when stale. */
-export function ElapsedSinceReport({ seconds }: { seconds: number | null }) {
+/**
+ * Elapsed time since the last report, marked as old when the central judges
+ * that the agent is not responding (by its own check interval).
+ */
+export function ElapsedSinceReport({ agent }: { agent: AgentSummary }) {
     const { t } = useTranslation();
-    const stale = seconds === null || seconds > STALE_REPORT_SEC;
+    const old = !agent.responding;
+    const why =
+        agent.check_interval_sec === null
+            ? t('agents.neverSynced')
+            : t('agents.notResponding', { interval: agent.check_interval_sec });
     return (
-        <span className={`whitespace-nowrap ${stale ? 'text-warning' : 'text-ink'}`}>{formatElapsed(t, seconds)}</span>
+        <span className={`whitespace-nowrap ${old ? 'text-warning' : 'text-ink'}`} title={old ? why : undefined}>
+            {formatElapsed(t, agent.seconds_since_report)}
+        </span>
     );
 }
 
