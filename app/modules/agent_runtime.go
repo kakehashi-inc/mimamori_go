@@ -130,10 +130,11 @@ type monitorState struct {
 }
 
 // syncLink is what the communication flow and the monitoring step hand each
-// other, under its own mutex: the monitoring step publishes what it applied
-// (sent with every sync); the communication flow puts what the last sync
-// brought (the rule assignment, which the next monitoring step applies, and
-// the check interval of the rounds and the monitoring entry).
+// other, under its own mutex: the monitoring step takes the assignment it
+// applies and publishes what it applied (sent with every sync); the
+// communication flow puts what the last sync brought (the rule assignment,
+// which the next monitoring step applies, and the check interval of the
+// rounds and the monitoring entry).
 type syncLink struct {
 	mu sync.Mutex
 	// Published by the monitoring step. ruleInterval is the applied rule's
@@ -144,6 +145,10 @@ type syncLink struct {
 	holds        bool
 	failedRule   string
 	lastApply    *ApplyResult
+	// Taken by the monitoring step that runs: taking is set from take to
+	// publish, taken is the assignment it applies (nil: no rule).
+	taking bool
+	taken  *RuleAssignment
 	// Put by the communication flow. known: a sync brought an assignment;
 	// cas are the CAs the agent trusts; syncInterval is the check interval
 	// the last sync answer gave (SyncResponse.CheckInterval; at the start
@@ -154,10 +159,12 @@ type syncLink struct {
 	syncInterval int
 }
 
-// publish takes over what the monitoring step applied.
+// publish takes over what the monitoring step applied; the step no longer
+// applies the assignment it took.
 func (l *syncLink) publish(m *monitorState) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.taking, l.taken = false, nil
 	l.ruleID, l.ruleVersion, l.ruleInterval = 0, 0, 0
 	if m.rule != nil {
 		l.ruleID, l.ruleVersion, l.ruleInterval = m.rule.ID, m.rule.Version, m.rule.Content.CheckInterval()
@@ -198,8 +205,9 @@ func (l *syncLink) interval() time.Duration {
 
 // offer puts what a sync brought: the rule assignment and the check interval
 // the answer gives (0 keeps the interval). It reports whether the assignment
-// differs from what is applied (a version whose application failed does not
-// count: it is not tried again) and whether the interval changed.
+// differs from what is applied and from what the running monitoring step is
+// applying (a version whose application failed does not count: it is not
+// tried again) and whether the interval changed.
 func (l *syncLink) offer(rule *RuleAssignment, interval int) (differs, intervalChanged bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -207,6 +215,9 @@ func (l *syncLink) offer(rule *RuleAssignment, interval int) (differs, intervalC
 		l.syncInterval, intervalChanged = interval, true
 	}
 	l.known, l.assigned = true, rule
+	if l.taking && sameAssignment(l.taken, rule) {
+		return false, intervalChanged
+	}
 	if rule == nil {
 		return l.holds, intervalChanged
 	}
@@ -227,12 +238,23 @@ func (l *syncLink) trustedCAs() []string {
 	return l.cas
 }
 
-// assignment returns the rule assignment of the last sync that brought one
-// (known is false before the first).
-func (l *syncLink) assignment() (rule *RuleAssignment, known bool) {
+// take returns the rule assignment of the last sync that brought one (known
+// is false before the first) to the monitoring step, which applies it: until
+// the step publishes, a sync that brings the same assignment is no change.
+func (l *syncLink) take() (rule *RuleAssignment, known bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.taking, l.taken = l.known, l.assigned
 	return l.assigned, l.known
+}
+
+// sameAssignment reports whether two assignments are the same rule version
+// (nil: no rule).
+func sameAssignment(a, b *RuleAssignment) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ID == b.ID && a.Version == b.Version
 }
 
 // NewAgentRuntime loads the stored state. tr is the transport to the central.
@@ -499,7 +521,7 @@ func (rt *AgentRuntime) monitorStep() {
 // step of the agent applies the stored rule again when no sync brought an
 // assignment yet or the assignment is the stored rule.
 func (rt *AgentRuntime) applyAssignment() {
-	assigned, known := rt.link.assignment()
+	assigned, known := rt.link.take()
 	if !rt.mon.started {
 		rt.mon.started = true
 		if r := rt.mon.rule; r != nil && (!known || (assigned != nil && assigned.ID == r.ID && assigned.Version == r.Version)) {

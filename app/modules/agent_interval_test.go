@@ -188,3 +188,85 @@ func TestIntervalBeforeTheFirstSync(t *testing.T) {
 		t.Fatalf("stored interval after agent init --overwrite: %q", got)
 	}
 }
+
+// TestSyncDuringTheStepThatAppliesTheAssignment: a sync that brings the
+// assignment the running monitoring step is applying does not count as a
+// change (the step applies it): the step is queued again one check
+// interval after it ended, not at once. Here the step removes the rule and
+// the sync comes while it removes.
+func TestSyncDuringTheStepThatAppliesTheAssignment(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	rt, tr := intervalRuntime(t, intervalRule(1, 1, 3600), &now)
+	fakeAuditctl(t, "1", nil)
+	tr.resp = SyncResponse{DefaultIntervalSec: 30}
+	rt.sync()
+	rt.sched.start()
+	syncs := 0
+	rt.removeAudit = func(*AuditGlobals) error {
+		rt.sync()
+		syncs++
+		return nil
+	}
+	at := monitorStartAt(t, rt)
+	if syncs != 1 || rt.mon.rule != nil || rt.mon.lastApply == nil || rt.mon.lastApply.Status != ApplyStatusNone {
+		t.Fatalf("the step must have removed the rule: %d sync(s), %+v %+v", syncs, rt.mon.rule, rt.mon.lastApply)
+	}
+	if !at.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("next monitoring step at %s, want %s (one interval after the step)", at, now.Add(30*time.Second))
+	}
+	// A sync after the step that brings the same assignment changes nothing
+	// either; one that brings another assignment removes the time.
+	rt.sync()
+	if at := queuedMonitorAt(t, rt); !at.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("after a sync with the applied assignment: %s", at)
+	}
+	tr.resp.Rule = intervalRule(1, 2, 30)
+	rt.sync()
+	if at := queuedMonitorAt(t, rt); !at.IsZero() {
+		t.Fatalf("after a sync with another assignment: %s, want no time", at)
+	}
+}
+
+// queuedMonitorAt returns the time the queued monitoring entry may start at.
+func queuedMonitorAt(t *testing.T, rt *AgentRuntime) time.Time {
+	t.Helper()
+	rt.sched.mu.Lock()
+	defer rt.sched.mu.Unlock()
+	for _, e := range rt.sched.entries {
+		if e.monitor {
+			return e.startAt
+		}
+	}
+	t.Fatal("no monitoring entry")
+	return time.Time{}
+}
+
+// TestOfferWhileTheStepApplies: while the monitoring step applies the
+// assignment it took, a sync that brings the same assignment is no change,
+// another one is; after the step published, the applied rule decides.
+func TestOfferWhileTheStepApplies(t *testing.T) {
+	var l syncLink
+	l.publish(&monitorState{rule: intervalRule(1, 1, 60), lastApply: &ApplyResult{Status: "ok", RuleID: 1, Version: 1}})
+	if differs, _ := l.offer(intervalRule(1, 2, 60), 0); !differs {
+		t.Fatal("version 2 differs from the applied version 1")
+	}
+	if r, known := l.take(); !known || r.Version != 2 {
+		t.Fatalf("the step takes version 2: %+v %v", r, known)
+	}
+	if differs, _ := l.offer(intervalRule(1, 2, 60), 0); differs {
+		t.Fatal("version 2 while the step applies it is no change")
+	}
+	if differs, _ := l.offer(intervalRule(1, 3, 60), 0); !differs {
+		t.Fatal("version 3 while the step applies version 2 is a change")
+	}
+	if differs, _ := l.offer(nil, 0); !differs {
+		t.Fatal("no rule while the step applies version 2 is a change")
+	}
+	l.publish(&monitorState{rule: intervalRule(1, 2, 60), lastApply: &ApplyResult{Status: "ok", RuleID: 1, Version: 2}})
+	if differs, _ := l.offer(intervalRule(1, 2, 60), 0); differs {
+		t.Fatal("the applied version 2 is no change")
+	}
+	if differs, _ := l.offer(intervalRule(1, 3, 60), 0); !differs {
+		t.Fatal("version 3 after the step is a change")
+	}
+}
