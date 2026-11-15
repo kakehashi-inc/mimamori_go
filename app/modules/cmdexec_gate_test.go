@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -182,22 +183,50 @@ func TestGateIsTransparent(t *testing.T) {
 	}
 }
 
+// TestGateDropsTheStartWarningsOfBash: a value of the agent's environment
+// bash warns about at its start (an unknown name in SHELLOPTS, a shell level
+// of 999 or more) is warned about by the gate's bash, whose own output goes
+// nowhere: the warning is not in the command's output, and the command sees
+// the same as without the gate otherwise.
+func TestGateDropsTheStartWarningsOfBash(t *testing.T) {
+	requireBash(t)
+	path := "PATH=" + os.Getenv("PATH")
+	for name, c := range map[string]struct {
+		env     []string
+		warning string
+	}{
+		"unknown shell option": {[]string{path, "SHELLOPTS=errexit:bogus"}, "bogus: invalid option name"},
+		"shell level 999":      {[]string{path, "SHLVL=999"}, "shell level (1000) too high, resetting to 1"},
+		"shell level 1500":     {[]string{path, "SHLVL=1500"}, "shell level (1501) too high, resetting to 1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			without := runWithoutGate(t, agentUserName(), "/", gateProbe, c.env)
+			with := runWithGate(t, agentUserName(), "/", gateProbe, c.env)
+			var rest []string
+			for _, line := range strings.SplitAfter(without, "\n") {
+				if !strings.Contains(line, c.warning) {
+					rest = append(rest, line)
+				}
+			}
+			if len(rest) == len(strings.SplitAfter(without, "\n")) {
+				t.Fatalf("without the gate there is no warning %q:\n%s", c.warning, without)
+			}
+			if strings.Contains(with, c.warning) {
+				t.Fatalf("through the gate the warning %q is in the output:\n%s", c.warning, with)
+			}
+			if a, b := normalized(strings.Join(rest, "")), normalized(with); a != b {
+				t.Fatalf("the command sees something else through the gate:\nwithout the gate (warning left out):\n%s\nwith the gate:\n%s", a, b)
+			}
+		})
+	}
+}
+
 // TestGateIsTransparentThroughSudo: the same for a command of another OS user
 // (started through sudo). It needs root, sudo and the user nobody.
 func TestGateIsTransparentThroughSudo(t *testing.T) {
 	requireBash(t)
-	if os.Geteuid() != 0 {
-		t.Skip("not running as root: no command of another OS user can be started without a password")
-	}
-	sudo, err := LookupCommand("sudo")
-	if err != nil {
-		t.Skip("sudo is not available")
-	}
-	if byName, _ := ReadPasswd(); func() bool { _, ok := byName["nobody"]; return !ok }() {
-		t.Skip("the user nobody does not exist")
-	}
-	if err := runCheck(sudo, "-n", "-u", "nobody", "--", "true"); err != nil {
-		t.Skipf("sudo cannot run a command as nobody here: %v", err)
+	if reason := noSudoToNobody(); reason != "" {
+		t.Skip(reason)
 	}
 	envs, reads := gateEnvironments(t)
 	for name, env := range envs {
@@ -226,6 +255,111 @@ func runCheck(path string, args ...string) error {
 		return &os.SyscallError{Syscall: st.String(), Err: syscall.EPERM}
 	}
 	return nil
+}
+
+// noSudoToNobody returns why a command of the user nobody cannot be started
+// through sudo here (root, sudo and the user nobody are needed), or "" when
+// it can.
+func noSudoToNobody() string {
+	if os.Geteuid() != 0 {
+		return "not running as root: no command of another OS user can be started without a password"
+	}
+	sudo, err := LookupCommand("sudo")
+	if err != nil {
+		return "sudo is not available"
+	}
+	if byName, _ := ReadPasswd(); func() bool { _, ok := byName["nobody"]; return !ok }() {
+		return "the user nobody does not exist"
+	}
+	if err := runCheck(sudo, "-n", "-u", "nobody", "--", "true"); err != nil {
+		return fmt.Sprintf("sudo cannot run a command as nobody here: %v", err)
+	}
+	return ""
+}
+
+// duplicateHelperEnv holds the OS users of the helper process of
+// TestDuplicateVariableReachesCommandOnce (separated by spaces).
+const duplicateHelperEnv = "MIMAMORI_TEST_DUPLICATE_HELPER_USERS"
+
+// duplicateProbe prints the two variables the helper's environment holds
+// twice: TERM, which sudo keeps for the other OS user, and one of the test.
+const duplicateProbe = `printf '%s|%s\n' "${TERM-unset}" "${MIMAMORI_TEST_DUPLICATE-unset}"`
+
+// TestDuplicateVariableHelper is the agent of
+// TestDuplicateVariableReachesCommandOnce: for every OS user the environment
+// names it runs the probe through the gate, with the environment of the
+// commands as the agent takes it, and without the gate, and prints the lines
+// "USER with: OUTPUT" and "USER without: OUTPUT".
+func TestDuplicateVariableHelper(t *testing.T) {
+	users := os.Getenv(duplicateHelperEnv)
+	if users == "" {
+		t.Skip("the helper process of TestDuplicateVariableReachesCommandOnce")
+	}
+	for _, user := range strings.Fields(users) {
+		r := ExecuteCommand(CommandExecInput{OSUser: user, WorkDir: "/", Command: testCommand(duplicateProbe)})
+		if r.Kind != ResultSuccess {
+			t.Fatalf("as %s through the gate: %+v %q", user, r, r.Output)
+		}
+		fmt.Printf("%s with: %s", user, r.Output)
+		fmt.Printf("%s without: %s", user, runWithoutGate(t, user, "/", duplicateProbe, commandEnviron()))
+	}
+}
+
+// TestDuplicateVariableReachesCommandOnce: of a variable that is twice in the
+// environment the agent was started with, a command gets the first value,
+// the same through the gate as without it, for the agent's own user and
+// through sudo for another OS user (that part needs root, sudo and the user
+// nobody and is left out with a message without them).
+func TestDuplicateVariableReachesCommandOnce(t *testing.T) {
+	requireBash(t)
+	users := map[string]string{agentUserName(): "first|first"}
+	if reason := noSudoToNobody(); reason != "" {
+		t.Logf("the command of another OS user is left out: %s", reason)
+	} else {
+		users["nobody"] = "first|unset"
+	}
+	names := make([]string, 0, len(users))
+	for user := range users {
+		names = append(names, user)
+	}
+	env := []string{"PATH=" + os.Getenv("PATH"), "TERM=first", "MIMAMORI_TEST_DUPLICATE=first", "TERM=second",
+		"MIMAMORI_TEST_DUPLICATE=second", duplicateHelperEnv + "=" + strings.Join(names, " ")}
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// os.StartProcess hands the list over as it is, duplicates included.
+	proc, err := os.StartProcess(os.Args[0], []string{os.Args[0], "-test.run=^TestDuplicateVariableHelper$"},
+		&os.ProcAttr{Env: env, Files: []*os.File{devnull, w, w}})
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := proc.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	if !st.Success() {
+		t.Fatalf("the helper failed (%s):\n%s", st, out)
+	}
+	for user, want := range users {
+		for _, how := range []string{"with", "without"} {
+			if line := user + " " + how + ": " + want + "\n"; !strings.Contains(out, line) {
+				t.Fatalf("as %s %s the gate the command does not see %q (TERM|MIMAMORI_TEST_DUPLICATE):\n%s", user, how, want, out)
+			}
+		}
+	}
 }
 
 // TestGateRunsNothingWithoutRelease: a command given up before its release

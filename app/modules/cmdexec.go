@@ -32,9 +32,12 @@ import (
 // the run and then releases the command (release): the gate replaces itself
 // with the program by exec, in the same process and process group, so the
 // program gets the argument list, environment, working directory, open
-// descriptors and signal state it gets without the gate. When the agent ends
-// or gives the command up before the release, the pipe closes and the gate
-// ends without running anything (cancel).
+// descriptors and signal state it gets without the gate. A warning bash gives
+// at its start (an unknown name in SHELLOPTS, a shell level of 999 or more)
+// is given by the gate's bash, whose own output goes to /dev/null, so it is
+// not in the command's output. When the agent ends or gives the command up
+// before the release, the pipe closes and the gate ends without running
+// anything (cancel).
 //
 // A command runs on the calling flow (the agent's worker that runs the set)
 // and nothing else runs there meanwhile: the main process is polled with
