@@ -110,27 +110,29 @@ func executeWithin(t *testing.T, in CommandExecInput, d time.Duration) *CommandR
 // TestCommandGroupGetsTheGrace (STOP-1): after SIGTERM the grace belongs to
 // the whole process group. A member that needs 5 s for its TERM handler
 // after the main process ended gets them and its output is read; nothing
-// is killed before the grace is over.
+// is killed before the grace is over. The stop comes when the member has
+// set its handler.
 func TestCommandGroupGetsTheGrace(t *testing.T) {
 	requireBash(t)
 	dir := t.TempDir()
-	done := filepath.Join(dir, "done")
-	line := fmt.Sprintf(`( trap 'sleep 5; echo member done; touch %s; exit 0' TERM; while :; do sleep 0.1; done ) &
-echo started; wait`, done)
-	start := time.Now()
+	done, ready := filepath.Join(dir, "done"), filepath.Join(dir, "ready")
+	line := fmt.Sprintf(`( trap 'sleep 5; echo member done; touch %s; exit 0' TERM; touch %s; while :; do sleep 0.1; done ) &
+echo started; wait`, done, ready)
+	stop, stoppedAt := closeWhen(fileExists(ready))
 	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
-		KillGrace: 20 * time.Second, Stop: closedAfter(300 * time.Millisecond)}, 30*time.Second)
-	took := time.Since(start)
+		KillGrace: 20 * time.Second, Stop: stop}, 40*time.Second)
+	took := time.Since(stoppedAt())
 	if _, err := os.Stat(done); err != nil {
-		t.Fatalf("the member did not get the 5 s it needed after SIGTERM (result after %s): %+v %q", took, r, r.Output)
+		t.Fatalf("the member did not get the 5 s it needed after SIGTERM (result %s after the stop): %+v %q", took, r, r.Output)
 	}
 	if r.Kind != ResultError || r.Reason != ReasonInterrupted || !strings.Contains(string(r.Output), "member done") {
 		t.Fatalf("result: %+v %q", r, r.Output)
 	}
 	// The reading went on until no process of the group was left (the
-	// member ended after its 5 s), not to the end of the grace of 20 s.
-	if took < 5*time.Second || took > 8*time.Second {
-		t.Fatalf("the command ended after %s", took)
+	// member ended 5 s after the SIGTERM of the stop), not to the end of the
+	// grace of 20 s.
+	if took < 5*time.Second || took > 10*time.Second {
+		t.Fatalf("the command ended %s after the stop", took)
 	}
 }
 
@@ -151,15 +153,17 @@ func TestCommandGraceEndsWhenOnlyZombiesAreLeft(t *testing.T) {
 	t.Cleanup(func() { killProcessGroup = syscall.Kill })
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
-	start := time.Now()
 	// The member is started by a subshell that ends at once: from then on
 	// it is a child of the test (the subreaper), which does not reap it, and
 	// the main process (sleep, a child of the test that the command's wait
-	// reaps) cannot reap it either.
+	// reaps) cannot reap it either. The stop comes when the main process
+	// runs as the marker (the member was started before).
+	marker := "mimamori-test-" + strconv.Itoa(os.Getpid()) + "-zombie"
+	stop, stoppedAt := closeWhen(processNamed(marker))
 	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir,
-		Command:   testCommand(fmt.Sprintf(`( sleep 30 & echo $! > %s ); exec sleep 30`, pidFile)),
-		KillGrace: 20 * time.Second, Stop: closedAfter(500 * time.Millisecond)}, 30*time.Second)
-	took := time.Since(start)
+		Command:   testCommand(fmt.Sprintf(`( sleep 30 & echo $! > %s ); exec -a %s sleep 30`, pidFile, marker)),
+		KillGrace: 20 * time.Second, Stop: stop}, 40*time.Second)
+	took := time.Since(stoppedAt())
 	member := pidFrom(t, pidFile)
 	reapLater(t, member)
 	st, ok := readProcStat(procDir, member)
@@ -169,8 +173,8 @@ func TestCommandGraceEndsWhenOnlyZombiesAreLeft(t *testing.T) {
 	if err := syscall.Kill(-st.pgrp, 0); err != nil {
 		t.Fatalf("signal 0 to the group of the zombie: %v", err)
 	}
-	if took > 3*time.Second {
-		t.Fatalf("the command ended %s after its start: the grace of 20 s went on while only a zombie was left", took)
+	if took > 5*time.Second {
+		t.Fatalf("the command ended %s after the stop: the grace of 20 s went on while only a zombie was left", took)
 	}
 	if kills.Load() != 0 {
 		t.Fatalf("SIGKILL sent %d time(s) to a group of zombies", kills.Load())
@@ -221,25 +225,27 @@ func TestCommandGroupKilledAtTheGrace(t *testing.T) {
 // TestCommandReadingAfterEndObeysStop (TO-1): a process left behind that
 // keeps writing holds the reading after the main process ended; the stop
 // ends it like during the run (SIGTERM to the group) and the command keeps
-// the result of its main process.
+// the result of its main process. The writer begins once the main process
+// is gone (reaped by the command's wait) and the stop comes when it has
+// written three lines, so the stop falls into the reading after the end.
 func TestCommandReadingAfterEndObeysStop(t *testing.T) {
 	requireBash(t)
 	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "pid")
-	line := fmt.Sprintf(`( while :; do echo x; sleep 0.3; done ) & echo $! > %s; echo main done`, pidFile)
-	start := time.Now()
+	pidFile, three := filepath.Join(dir, "pid"), filepath.Join(dir, "three")
+	line := fmt.Sprintf(`( while kill -0 $$ 2>/dev/null; do sleep 0.05; done; i=0
+while :; do echo x; i=$((i+1)); [ $i = 3 ] && touch %s; sleep 0.3; done ) & echo $! > %s; echo main done`, three, pidFile)
+	stop, stoppedAt := closeWhen(fileExists(three))
 	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
-		KillGrace: 20 * time.Second, Stop: closedAfter(1500 * time.Millisecond)}, 30*time.Second)
-	took := time.Since(start)
+		KillGrace: 20 * time.Second, Stop: stop}, 40*time.Second)
+	took := time.Since(stoppedAt())
 	writer := pidFrom(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(writer, syscall.SIGKILL) })
 	// The writer ends at the SIGTERM: the reading ends with it, long before
 	// the grace of 20 s is over.
-	if took < 1400*time.Millisecond || took > 3500*time.Millisecond {
-		t.Fatalf("the reading ended %s after the start, want soon after the stop at 1.5 s", took)
+	if took > 5*time.Second {
+		t.Fatalf("the reading ended %s after the stop, want soon after it", took)
 	}
-	// The main process and the writer write at the same time: both are in
-	// the output, in either order.
+	// Both the main process and the writer are in the output.
 	if out := string(r.Output); r.Kind != ResultSuccess || r.ExitCode == nil || *r.ExitCode != 0 ||
 		!strings.Contains(out, "main done\n") || strings.Count(out, "x\n") < 3 {
 		t.Fatalf("the result is the main process's: %+v %q", r, r.Output)

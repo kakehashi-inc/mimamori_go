@@ -284,13 +284,6 @@ func TestCommandWithoutTimeLimit(t *testing.T) {
 	}
 }
 
-// closedAfter returns a channel that is closed after d (a stop of the agent).
-func closedAfter(d time.Duration) <-chan struct{} {
-	ch := make(chan struct{})
-	time.AfterFunc(d, func() { close(ch) })
-	return ch
-}
-
 func TestExecuteCommandStop(t *testing.T) {
 	requireBash(t)
 	user := agentUserName()
