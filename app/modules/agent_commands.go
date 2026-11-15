@@ -389,7 +389,8 @@ func (rt *AgentRuntime) recordGroup(def *CommandSetDef, uid string, pos, pgid in
 // get the state error with the reason internal_error; the run is closed with
 // the results it has. When the run cannot be closed this way (another
 // panic, or its end cannot be stored before the stop), its execution stays
-// unfinished and the next start reports it as interrupted.
+// unfinished and the next start reports it as interrupted; a command whose
+// wait panicked again is let go (leaveCommand).
 func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 	if !run.started || run.closed {
 		return
@@ -405,6 +406,7 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 			run.cur.wait()
 			hit = run.cur.result(false)
 		}) {
+			rt.leaveCommand(run)
 			rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
 			return
 		}
@@ -427,6 +429,27 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 		rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
 	}
 	run.closed = true
+}
+
+// leaveCommand lets go of the command of a run whose wait could not be
+// completed after a panic (the wait panicked again). Nothing is sent to it.
+// Its set does not start again while its process group has a process that
+// has not ended (as at the next start of the agent, recoverInterruptedRuns),
+// and its output pipe, when its reading had not ended, goes to the held
+// pipes, whose reader drops what arrives (the command never blocks on its
+// output).
+func (rt *AgentRuntime) leaveCommand(run *commandRun) {
+	p := run.cur
+	if pgid := p.pgid(); pgid > 0 {
+		rt.sched.hold(run.job.def.ID, pgid)
+		rt.logf("command set %q: its command may still run as process group %d; the set does not start until that group is gone",
+			run.job.def.Name, pgid)
+	}
+	if p.r != nil && !p.done {
+		p.done = true
+		_ = p.r.SetReadDeadline(time.Time{})
+		rt.leftovers.add(p.r)
+	}
 }
 
 // storeRunRecord writes one record of a run (write is one transaction) and,

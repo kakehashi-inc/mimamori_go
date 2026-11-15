@@ -264,3 +264,85 @@ func TestPanicWhenRecordingTheGroup(t *testing.T) {
 		t.Fatalf("unfinished runs: %d", len(open))
 	}
 }
+
+// TestPanicTwiceInTheWaitForACommand: when the wait for a command panics and
+// the plain wait after it panics again, the run is left unfinished (the next
+// start reports it as interrupted) and its command is let go without a
+// signal: its output is still read and dropped (it writes more than the pipe
+// holds and is not blocked), and the set does not start again until the
+// command's process group has no process that has not ended (the second
+// request for the set runs after it).
+func TestPanicTwiceInTheWaitForACommand(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	var logged lockedLog
+	rt.Logger = logged.logger()
+	start := time.Now()
+	// Every wait for the first command that runs at 300 ms panics.
+	var target atomic.Int64
+	var panics atomic.Int32
+	wait4 = func(pid int, ws *syscall.WaitStatus, options int, ru *syscall.Rusage) (int, error) {
+		if time.Since(start) > 300*time.Millisecond {
+			target.CompareAndSwap(0, int64(pid))
+		}
+		if int64(pid) == target.Load() {
+			panics.Add(1)
+			panic("test panic in the wait for a command")
+		}
+		return syscall.Wait4(pid, ws, options, ru)
+	}
+	t.Cleanup(func() { wait4 = syscall.Wait4 })
+	t.Cleanup(func() {
+		if pid := target.Load(); pid > 0 {
+			_ = syscall.Kill(-int(pid), syscall.SIGKILL)
+		}
+	})
+	var signals atomic.Int32
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		if sig != 0 {
+			signals.Add(1)
+		}
+		return syscall.Kill(pid, sig)
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+	logPath := filepath.Join(t.TempDir(), "log")
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly,
+		fmt.Sprintf("echo start >> %[1]s; sleep 1; head -c 4194304 /dev/zero; sleep 1; echo end >> %[1]s", logPath)))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	tr.onSync = func(n int) {
+		if n == 1 {
+			tr.mu.Lock()
+			tr.resp.CommandRequests = manualRequests(1, 1, 1)
+			tr.mu.Unlock()
+		}
+	}
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	if n := panics.Load(); n < 2 {
+		t.Fatalf("panics: %d, want the wait and the wait after it", n)
+	}
+	logs := logged.String()
+	for _, want := range []string{"worker panic: test panic in the wait for a command", "is left unfinished",
+		"the set does not start until that group is gone"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("log lacks %q:\n%s", want, logs)
+		}
+	}
+	if n := signals.Load(); n != 0 {
+		t.Fatalf("%d signals were sent to commands", n)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); got != "start\nend\nstart\nend\n" {
+		t.Fatalf("log of the command: %q, want the first command to its end and then the second run", got)
+	}
+	open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read())
+	if len(open) != 1 || open[0].RequestID != 1 {
+		t.Fatalf("unfinished runs: %+v, want the first one", open)
+	}
+	if n := rt.leftovers.held(); n != 0 {
+		t.Fatalf("held pipes after Run: %d", n)
+	}
+}
