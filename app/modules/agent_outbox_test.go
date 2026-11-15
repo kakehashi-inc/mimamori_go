@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -456,5 +457,42 @@ func TestHostInfoSentFromItsRow(t *testing.T) {
 	}
 	if len(tr.reports) != 3 || !slices.Equal(hosts, []string{"new"}) {
 		t.Fatalf("%d reports, host information %v", len(tr.reports), hosts)
+	}
+}
+
+// TestKeptDetectionsBounded: the detections kept for the next periodic
+// report are bounded as the outbox is: beyond the limit the oldest normal
+// ones go first, then the oldest alerts, and they are counted as dropped for
+// the next report.
+func TestKeptDetectionsBounded(t *testing.T) {
+	rt := newCommandRuntime(t, &cmdTransport{})
+	keep := func(category string, n int, first int) {
+		ds := make([]DetectionReport, n)
+		for i := range ds {
+			ds[i] = DetectionReport{Type: TypeExec, Category: category, Target: strconv.Itoa(first + i)}
+		}
+		if err := rt.DB.Write(func(tx models.Writer) error { return keepDetections(tx, ds) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep(CategoryAlert, 10, 0)
+	keep(CategoryNormal, DefaultOutboxMaxDetection-15, 100)
+	keep(CategoryAlert, 20, 1_000_000)
+	var kept []DetectionReport
+	loadJSONState(rt.DB.Read(), statePendingDetections, &kept)
+	if len(kept) != DefaultOutboxMaxDetection || kept[0].Target != "0" || kept[10].Target != "115" {
+		t.Fatalf("kept %d, first %+v, eleventh %+v", len(kept), kept[0], kept[10])
+	}
+	if got := models.GetLocalState(rt.DB.Read(), stateDroppedPending); got != "15" {
+		t.Fatalf("dropped count %q", got)
+	}
+	if _, err := rt.out.queuePeriodic(&ReportRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := queuedReports(t, rt); len(r) != 1 || len(r[0].Detections) != DefaultOutboxMaxDetection || r[0].Dropped != 15 {
+		t.Fatalf("the periodic report: %d items", len(r))
+	}
+	if v := models.GetLocalState(rt.DB.Read(), statePendingDetections); v != "" {
+		t.Fatalf("still kept after the report took them: %d bytes", len(v))
 	}
 }

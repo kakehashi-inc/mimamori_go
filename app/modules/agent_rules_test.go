@@ -267,7 +267,7 @@ func TestSyncWithoutRuleRemovesAuditRules(t *testing.T) {
 	}
 	// The report carries the result, so the central shows nothing applied.
 	tr := rt.comm.transport.(*fakeTransport)
-	rt.report(nil)
+	rt.report()
 	rt.flushOutbox()
 	if len(tr.reports) != 1 || tr.reports[0].Apply == nil || tr.reports[0].Apply.Status != ApplyStatusNone {
 		t.Fatalf("report: %+v", tr.reports)

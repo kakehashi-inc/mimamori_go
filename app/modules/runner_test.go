@@ -222,7 +222,10 @@ func TestReportAfterStopWithoutHostInfo(t *testing.T) {
 	rt.comm.transport = tr
 	rt.stop = closedChan()
 	det := DetectionReport{Type: TypeExec, Category: CategoryAlert, Exe: "/usr/bin/x", Count: 1, FirstAt: 1, LastAt: 1}
-	rt.report([]DetectionReport{det})
+	if err := rt.DB.Write(func(tx models.Writer) error { return keepDetections(tx, []DetectionReport{det}) }); err != nil {
+		t.Fatal(err)
+	}
+	rt.report()
 	rt.flushOutbox()
 	if len(tr.reports) != 1 {
 		t.Fatalf("reports sent: %d", len(tr.reports))
@@ -244,7 +247,7 @@ func TestReportAfterStopWithoutHostInfo(t *testing.T) {
 
 	// Without the stop the host information is collected with auditctl.
 	rt.stop = nil
-	rt.report(nil)
+	rt.report()
 	rt.flushOutbox()
 	if len(tr.reports) != 2 || tr.reports[1].HostInfo == nil || !strings.Contains(readFile(t, calls), "-s") {
 		t.Fatalf("host information expected without the stop")

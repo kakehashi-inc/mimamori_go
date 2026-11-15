@@ -30,6 +30,10 @@ const (
 	stateScanPrevRoots  = "scan_prev_roots"
 	stateDroppedPending = "dropped_pending"
 	stateLastAuditEvent = "last_audit_event"
+	// The detections that monitoring steps made known (stored with the
+	// audit position or the fingerprints of a scan) and that no queued
+	// periodic report carries yet (a JSON list of DetectionReport).
+	statePendingDetections = "pending_detections"
 	// The check interval the last sync answer gave the agent, in seconds
 	// (SyncResponse.CheckInterval), used until the first sync after a start.
 	stateCheckInterval = "check_interval"
@@ -397,7 +401,10 @@ func (rt *AgentRuntime) process(u *agentUnit) {
 // applied (the first step applies the stored rule again), reads the audit
 // log, scans files, queues one periodic report (detections, host
 // information, application result, dropped count) for the next round and
-// prunes old run records. It does not talk to the central. A stop does not
+// prunes old run records. A detection is stored together with what makes it
+// known (the audit position, the fingerprints of a scan) and the periodic
+// report takes it, so that a report that cannot be queued loses nothing: the
+// next one carries its detections. It does not talk to the central. A stop does not
 // interrupt it: the step completes and saves its state, with these
 // exceptions. A tool the step waits for when the stop comes is ended
 // (RunTool) and its part fails as a failure of that tool does. After the stop
@@ -410,18 +417,19 @@ func (rt *AgentRuntime) monitorStep() {
 	if !isClosed(rt.stop) {
 		rt.applyAssignment()
 	}
-	var detections []DetectionReport
 	if rt.mon.rule != nil {
 		c := &rt.mon.rule.Content
 		res := ResolveRule(c)
+		// The detections are kept with what makes them known (see
+		// keepDetections) and the periodic report takes them.
 		if c.ExecEnabled() || c.DeniedEnabled() || c.ReadEnabled() || c.NetworkEnabled() {
-			detections = append(detections, rt.collectAudit(c, res.UserByID)...)
+			rt.collectAudit(c, res.UserByID)
 		}
 		if c.WritableEnabled() || c.ExecFilesEnabled() {
-			detections = append(detections, rt.scanFiles(c, res, cycleStart)...)
+			rt.scanFiles(c, res, cycleStart)
 		}
 	}
-	rt.report(detections)
+	rt.report()
 	rt.pruneCommandExecutions()
 }
 
@@ -687,11 +695,14 @@ func (rt *AgentRuntime) setApply(r *ApplyResult) {
 	}
 }
 
-// collectAudit reads the audit log from the stored position on. The position
-// is read on the read side and written after the audit tool has run: only
-// one monitoring step runs at a time, so nothing else moves it between.
-// After the stop the audit log is not read; a stop while the tool runs ends
-// it. In both cases the position stays where it is.
+// collectAudit reads the audit log from the stored position on and returns
+// the detections of the records read. The position is read on the read side
+// and written after the audit tool has run, in one transaction with these
+// detections (keepDetections): only one monitoring step runs at a time, so
+// nothing else moves it between. When that write fails, the position stays
+// and the next check reads the same records again. After the stop the audit
+// log is not read; a stop while the tool runs ends it. In both cases the
+// position stays where it is.
 func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []DetectionReport {
 	if isClosed(rt.stop) {
 		return nil
@@ -707,10 +718,21 @@ func (rt *AgentRuntime) collectAudit(c *RuleContent, users map[int]string) []Det
 		rt.logf("reading the audit log failed: %v", err)
 		return nil
 	}
-	if b, err := json.Marshal(next); err == nil {
-		_ = rt.DB.Write(func(tx models.Writer) error { return models.SetLocalState(tx, stateLastAuditEvent, string(b)) })
+	ds := AggregateAuditEvents(events, c, users)
+	b, err := json.Marshal(next)
+	if err == nil {
+		err = rt.DB.Write(func(tx models.Writer) error {
+			if err := models.SetLocalState(tx, stateLastAuditEvent, string(b)); err != nil {
+				return err
+			}
+			return keepDetections(tx, ds)
+		})
 	}
-	return AggregateAuditEvents(events, c, users)
+	if err != nil {
+		rt.logf("reading the audit log: storing the position and its detections failed (the next check reads the same records again): %v", err)
+		return nil
+	}
+	return ds
 }
 
 // noteScanConfig records the scan configuration (base directory and allowed
@@ -865,9 +887,10 @@ const ctimeMargin = 2
 //
 // The state is read on the read side before the walks: a walk lies between
 // the read and the write, and only one monitoring step runs at a time. The
-// findings of a walk and the state it leaves are written together in one
-// transaction after the walk, which also reads what decides them (whether a
-// finding is known, the roots known so far).
+// findings of a walk, its detections (keepDetections) and the state it
+// leaves are written together in one transaction after the walk, which also
+// reads what decides them (whether a finding is known, the roots known so
+// far). It returns the detections of the walks whose transaction committed.
 func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart time.Time) []DetectionReport {
 	var out []DetectionReport
 	now := cycleStart.Unix()
@@ -938,6 +961,9 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 				if c.WritableEnabled() {
 					var err error
 					if fresh, err = touchFindings(tx, wr.Findings); err != nil {
+						return err
+					}
+					if err := keepDetections(tx, fresh); err != nil {
 						return err
 					}
 				}
@@ -1078,6 +1104,9 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 					if fresh, err = touchFindings(tx, found); err != nil {
 						return err
 					}
+					if err := keepDetections(tx, fresh); err != nil {
+						return err
+					}
 					// Files of a first scan that are not reported are
 					// remembered, so the next scan (which also looks at the
 					// second of this one) does not report them either.
@@ -1130,9 +1159,9 @@ func (rt *AgentRuntime) scanFiles(c *RuleContent, res *ResolvedRule, cycleStart 
 	return out
 }
 
-// report queues the periodic report of a monitoring step; the next round
-// sends it.
-func (rt *AgentRuntime) report(detections []DetectionReport) {
+// report queues the periodic report of a monitoring step with the kept
+// detections (queuePeriodic); the next round sends it.
+func (rt *AgentRuntime) report() {
 	// The directory structure is reported only for the scan origin of the
 	// applied rule; there is no default origin.
 	in := HostInfoInput{LastApply: rt.mon.lastApply, Workers: rt.workers, TrustedCAPEMs: rt.link.trustedCAs()}
@@ -1153,11 +1182,11 @@ func (rt *AgentRuntime) report(detections []DetectionReport) {
 	// The dropped count is read, reported in the queued report and reset in
 	// the outbox's one transaction, so that a count is neither lost nor
 	// reported twice.
-	req := &ReportRequest{CreatedAt: time.Now().Unix(), Detections: detections, HostInfo: hi, Apply: rt.mon.lastApply}
+	req := &ReportRequest{CreatedAt: time.Now().Unix(), HostInfo: hi, Apply: rt.mon.lastApply}
 	dropped, err := rt.out.queuePeriodic(req)
 	switch {
 	case err != nil:
-		rt.logf("failed to queue the report: %v", err)
+		rt.logf("queuing the periodic report failed (the detections found are kept for the next report): %v", err)
 	case dropped > 0:
 		rt.logf("report storage limit reached: dropped %d detection(s)", dropped)
 	}

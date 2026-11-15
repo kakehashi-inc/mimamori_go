@@ -2,6 +2,7 @@ package modules
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 
 	"mimamori/app/models"
@@ -12,8 +13,8 @@ import (
 // state key outbox_batch. It is the only owner of both: every change goes
 // through its methods, each one Write. Reports about command sets are
 // queued by queue (from any flow), the report of a monitoring step by
-// queuePeriodic; only the monitoring step and the final send at the stop
-// call flush, never at the same time.
+// queuePeriodic; only the communication flow calls flush (its rounds and the
+// last report at the stop), never twice at the same time.
 //
 // flush sends one batch in one request (ReportBatch). The batch is formed in
 // one Write: the oldest queued items whose payloads together fit in
@@ -108,21 +109,58 @@ func (o *outbox) logLimit(err error, over bool, dropped int) {
 	}
 }
 
+// keepDetections keeps detections that a monitoring step made known, inside
+// the transaction tx that stores what makes them known, until the periodic
+// report takes them (queuePeriodic). Beyond DefaultOutboxMaxDetection kept
+// detections the oldest normal ones, then the oldest alerts, are dropped
+// and counted with the dropped count, as in the outbox.
+func keepDetections(tx models.Writer, ds []DetectionReport) error {
+	if len(ds) == 0 {
+		return nil
+	}
+	var kept []DetectionReport
+	loadJSONState(tx, statePendingDetections, &kept)
+	kept = append(kept, ds...)
+	dropped := 0
+	for _, alerts := range []bool{false, true} {
+		for i := 0; i < len(kept) && len(kept) > DefaultOutboxMaxDetection; {
+			if (kept[i].Category == CategoryAlert) == alerts {
+				kept = slices.Delete(kept, i, i+1)
+				dropped++
+				continue
+			}
+			i++
+		}
+	}
+	if dropped > 0 {
+		prev, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
+		if err := models.SetLocalState(tx, stateDroppedPending, strconv.Itoa(prev+dropped)); err != nil {
+			return err
+		}
+	}
+	return saveJSONState(tx, statePendingDetections, kept)
+}
+
 // queuePeriodic stores the report of a monitoring step, in one Write: the
-// detections dropped earlier and not yet reported are put into req.Dropped
-// (and the count reset), older rows with nothing else to deliver (no
-// detections, no dropped count, nothing about command sets and the same
+// kept detections (keepDetections) come before those of req and are no
+// longer kept, the detections dropped earlier and not yet reported are put into
+// req.Dropped (and the count reset), older rows with nothing else to deliver
+// (no detections, no dropped count, nothing about command sets and the same
 // application result as the new one) are deleted, the host information is
 // removed from the other rows (only the newest periodic report carries it),
 // the report is inserted, and the limit of queued detections is applied.
 // It returns how many detections the limit dropped (counted for the next
-// report).
+// report). When it fails, nothing changes: the detections stay kept.
 func (o *outbox) queuePeriodic(req *ReportRequest) (int, error) {
 	dropped := 0
+	given := req.Detections
 	err := o.db.Write(func(tx models.Writer) error {
 		dropped = 0
 		pending, _ := strconv.Atoi(models.GetLocalState(tx, stateDroppedPending))
 		req.Dropped = pending
+		var kept []DetectionReport
+		loadJSONState(tx, statePendingDetections, &kept)
+		req.Detections = append(kept, given...)
 		if err := pruneForPeriodic(tx, req); err != nil {
 			return err
 		}
@@ -130,6 +168,9 @@ func (o *outbox) queuePeriodic(req *ReportRequest) (int, error) {
 			return err
 		}
 		if err := models.SetLocalState(tx, stateDroppedPending, "0"); err != nil {
+			return err
+		}
+		if err := models.DeleteLocalState(tx, statePendingDetections); err != nil {
 			return err
 		}
 		var err error

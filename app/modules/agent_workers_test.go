@@ -415,7 +415,7 @@ func TestHostInfoWorkers(t *testing.T) {
 	tr := &fakeTransport{}
 	rt.comm.transport = tr
 	rt.SetWorkers(3)
-	rt.report(nil)
+	rt.report()
 	rt.flushOutbox()
 	if len(tr.reports) != 1 || tr.reports[0].HostInfo == nil || tr.reports[0].HostInfo.Workers != 3 {
 		t.Fatalf("reports: %+v", tr.reports)

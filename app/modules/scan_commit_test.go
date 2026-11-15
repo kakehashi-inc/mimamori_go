@@ -109,3 +109,82 @@ func TestExecScanRolledBackKeepsRootSince(t *testing.T) {
 	}
 	_ = os.Remove(evil)
 }
+
+// queuedDetections returns the targets of the detections in the queued
+// reports.
+func queuedDetections(t *testing.T, rt *AgentRuntime) []string {
+	t.Helper()
+	var out []string
+	for _, r := range queuedReports(t, rt) {
+		for _, d := range r.Detections {
+			out = append(out, d.Target)
+		}
+	}
+	return out
+}
+
+// TestDetectionsKeptWhenThePeriodicReportFails: what makes a detection known
+// (the fingerprint of a scan, the position in the audit log) is stored
+// together with the detection; when the periodic report of that step cannot
+// be queued, the detection is kept and goes with the report of the next
+// step, once.
+func TestDetectionsKeptWhenThePeriodicReportFails(t *testing.T) {
+	rt, done := openAgentDB(t)
+	defer done()
+	var logged bytes.Buffer
+	rt.Logger = log.New(&logged, "", 0)
+	// After the stop no tool runs: no rule application, no host information;
+	// the audit log is read by a fake ausearch below in its own step.
+	rt.stop = closedChan()
+	base := t.TempDir()
+	file := filepath.Join(base, "d1/f")
+	mkFile(t, file, 0o666)
+	rt.mon.rule = &RuleAssignment{ID: 1, Name: "r", Version: 1, Content: RuleContent{
+		Writable: WritableSpec{Base: base, AllowedPaths: []string{"allowed"}, Category: CategoryAlert}, ScanIntervalSec: 3600}}
+	if err := execWrite(rt.DB, `CREATE TRIGGER fail_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'test: outbox write fails'); END`); err != nil {
+		t.Fatal(err)
+	}
+	rt.monitorStep()
+	if !strings.Contains(logged.String(), "the detections found are kept for the next report") {
+		t.Fatalf("log of the failing step: %q", logged.String())
+	}
+	if err := execWrite(rt.DB, `DROP TRIGGER fail_outbox`); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		rt.monitorStep()
+	}
+	if got := queuedDetections(t, rt); len(got) != 1 || got[0] != file {
+		t.Fatalf("queued detections %v, want %s once", got, file)
+	}
+
+	// The audit log: the position moves with the detections of the records
+	// read, and the step's report fails.
+	fakeTool(t, "ausearch", `cat <<'X'
+type=SYSCALL msg=audit(1700000000.100:10): arch=c000003e syscall=59 success=yes exit=0 euid=0 comm="tool" exe="/usr/bin/tool" key="mimamori"
+type=EXECVE msg=audit(1700000000.100:10): argc=2 a0="tool" a1="-v"
+X
+`)
+	c := &RuleContent{Users: []Element{{Value: "root"}}, Exec: CategoryOnly{Category: CategoryAlert}}
+	rt.stop = nil
+	if ds := rt.collectAudit(c, map[int]string{0: "root"}); len(ds) != 1 {
+		t.Fatalf("detections of the audit log: %+v", ds)
+	}
+	rt.stop = closedChan()
+	if err := execWrite(rt.DB, `CREATE TRIGGER fail_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'test: outbox write fails'); END`); err != nil {
+		t.Fatal(err)
+	}
+	rt.report()
+	if err := execWrite(rt.DB, `DROP TRIGGER fail_outbox`); err != nil {
+		t.Fatal(err)
+	}
+	rt.stop = nil
+	if ds := rt.collectAudit(c, map[int]string{0: "root"}); len(ds) != 0 {
+		t.Fatalf("the records read before were read again: %+v", ds)
+	}
+	rt.stop = closedChan()
+	rt.report()
+	if got := queuedDetections(t, rt); len(got) != 2 || got[1] != "tool -v" {
+		t.Fatalf("queued detections %v, want the execution once more", got)
+	}
+}
