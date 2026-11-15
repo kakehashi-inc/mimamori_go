@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -311,21 +312,64 @@ func TestExecuteCommandHooks(t *testing.T) {
 // processNamed returns a condition for closeWhen: a process runs whose first
 // argument is name (a command that reached exec -a name).
 func processNamed(name string) func() bool {
-	return func() bool {
-		entries, err := os.ReadDir("/proc")
-		if err != nil {
-			return false
-		}
-		for _, e := range entries {
-			b, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-			if err == nil {
-				if arg0, _, _ := strings.Cut(string(b), "\x00"); arg0 == name {
-					return true
-				}
-			}
-		}
-		return false
+	return func() bool { return len(processesLeft(0, name)) > 0 }
+}
+
+// testProcess is a process of the machine as /proc shows it.
+type testProcess struct {
+	pid, pgid int
+	// state is the state letter of /proc/PID/stat (Z: ended, not reaped yet).
+	state string
+	argv  []string
+}
+
+func (p testProcess) String() string {
+	return fmt.Sprintf("%d (group %d, state %s) %q", p.pid, p.pgid, p.state, p.argv)
+}
+
+// processesLeft returns the processes of the machine that have not ended and
+// belong to process group pgid (when pgid > 0) or whose first argument is
+// exactly one of names. Names unique to the test binary (its pid) and the
+// group the product signalled identify the processes of this run only.
+func processesLeft(pgid int, names ...string) []testProcess {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
 	}
+	var left []testProcess
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		// A process that ends while it is read is left out.
+		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// "pid (comm) state ppid pgrp ...": comm may hold spaces and parentheses.
+		i := strings.LastIndexByte(string(stat), ')')
+		if i < 0 {
+			continue
+		}
+		f := strings.Fields(string(stat[i+1:]))
+		if len(f) < 3 {
+			continue
+		}
+		p := testProcess{pid: pid, state: f[0]}
+		if p.pgid, err = strconv.Atoi(f[2]); err != nil || p.state == "Z" || p.state == "X" {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		p.argv = strings.Split(strings.TrimSuffix(string(cmdline), "\x00"), "\x00")
+		if (pgid > 0 && p.pgid == pgid) || slices.Contains(names, p.argv[0]) {
+			left = append(left, p)
+		}
+	}
+	return left
 }
 
 func TestExecuteCommandValues(t *testing.T) {
@@ -441,25 +485,36 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	if byName, _ := ReadPasswd(); byName["nobody"].Name == "" {
 		t.Skip("user nobody does not exist")
 	}
-	refused := 0
+	// The product signals the command's process group (-pgid); the refusal
+	// records which group that is.
+	refused, pgid := 0, 0
 	killProcessGroup = func(pid int, sig syscall.Signal) error {
 		refused++
+		pgid = -pid
 		return syscall.EPERM
 	}
 	t.Cleanup(func() { killProcessGroup = syscall.Kill })
 
 	// A command that ignores SIGTERM and has a child: ended by the time limit
-	// through the helper (SIGTERM, then SIGKILL after the grace).
-	marker := "mimamori-test-" + strconv.Itoa(os.Getpid())
-	cmd := testCommand("trap '' TERM; sleep 31 & exec -a " + marker + " sleep 32")
+	// through the helper (SIGTERM, then SIGKILL after the grace). The names of
+	// its processes carry the pid of the test binary.
+	marker := "mimamori-test-" + strconv.Itoa(os.Getpid()) + "-limit"
+	child := marker + "-child"
+	cmd := testCommand("trap '' TERM; (exec -a " + child + " sleep 31) & exec -a " + marker + " sleep 32")
 	cmd.TimeoutSec = 1
 	start := time.Now()
 	r := runTestCommand(t, cmd, "nobody", "/", CommandExecHooks{})
-	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 10*time.Second || refused < 2 {
-		t.Fatalf("time limit through the helper: %+v after %s (%d refused)", r, time.Since(start), refused)
+	if r.Kind != ResultError || r.Reason != ReasonTimeout || time.Since(start) > 10*time.Second || refused < 2 || pgid <= 0 {
+		t.Fatalf("time limit through the helper: %+v after %s (%d refused, group %d)", r, time.Since(start), refused, pgid)
 	}
-	if left := processesOf(t, "sleep 31", marker); left != "" {
-		t.Fatalf("nothing of the command may be left: %s", left)
+	// The helper has sent SIGKILL to the group; the kernel ends the processes
+	// it reached a moment later (the command would run 31 s more).
+	left := processesLeft(pgid, marker, child)
+	for limit := time.Now().Add(5 * time.Second); len(left) > 0 && time.Now().Before(limit); left = processesLeft(pgid, marker, child) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(left) > 0 {
+		t.Fatalf("nothing of the command may be left: %v", left)
 	}
 
 	// The helper fails too: a stop ends the wait one grace after SIGKILL,
@@ -467,17 +522,20 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	signalGroupAsUser = func(string, int, syscall.Signal, func()) error { return syscall.EPERM }
 	t.Cleanup(func() { signalGroupAsUser = signalGroupAs })
 	var logged []string
+	marker = "mimamori-test-" + strconv.Itoa(os.Getpid()) + "-stop"
 	stop, stoppedAt := closeWhen(processNamed(marker))
 	hooks := CommandExecHooks{
 		Stop: stop,
 		Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) },
 	}
+	refused, pgid = 0, 0
 	cmd = testCommand("trap '' TERM; echo started; exec -a " + marker + " sleep 33")
 	r = runTestCommand(t, cmd, "nobody", "/", hooks)
 	took := time.Since(stoppedAt())
 	killProcessGroup = syscall.Kill
-	// Clean up what the simulated refusal left running.
-	if pgid := pgidOf(t, marker); pgid > 0 {
+	// Clean up what the simulated refusal left running: the group still has
+	// processes, so its id is not used by anything else.
+	if pgid > 0 && len(processesLeft(pgid)) > 0 {
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	}
 	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || took > 5*time.Second {
@@ -486,39 +544,4 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	if !strings.Contains(strings.Join(logged, "\n"), "could not be ended") {
 		t.Fatalf("the log must say that the command could not be ended: %q", logged)
 	}
-}
-
-// processesOf lists the processes whose arguments contain one of the words
-// (ps, empty when none).
-func processesOf(t *testing.T, words ...string) string {
-	t.Helper()
-	res, err := RunTool(nil, 1<<20, "ps", "-eo", "pid=,pgid=,user=,args=")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, l := range strings.Split(string(res.Stdout), "\n") {
-		for _, w := range words {
-			if strings.Contains(l, w) && !strings.Contains(l, "ps -eo") {
-				out = append(out, strings.TrimSpace(l))
-				break
-			}
-		}
-	}
-	return strings.Join(out, "; ")
-}
-
-// pgidOf returns the process group of the process whose arguments contain
-// word (0 when there is none).
-func pgidOf(t *testing.T, word string) int {
-	t.Helper()
-	for _, l := range strings.Split(processesOf(t, word), "; ") {
-		f := strings.Fields(l)
-		if len(f) > 1 {
-			if n, err := strconv.Atoi(f[1]); err == nil {
-				return n
-			}
-		}
-	}
-	return 0
 }
