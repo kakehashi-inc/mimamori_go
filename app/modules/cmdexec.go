@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -650,7 +651,12 @@ type leftoverPipes struct {
 	// at once.
 	closing bool
 	readers sync.WaitGroup
+	// logf writes to the agent's log (may be nil): a panic of a reader.
+	logf func(format string, a ...any)
 }
+
+// leftoverRead reads from a held pipe (replaced by tests).
+var leftoverRead = (*os.File).Read
 
 // add takes a pipe (CommandExecInput.Leftover) and starts its reader.
 func (l *leftoverPipes) add(f *os.File) {
@@ -670,35 +676,62 @@ func (l *leftoverPipes) add(f *os.File) {
 
 // read is the reader of one pipe: it reads and drops what arrives (a read
 // waits until something arrives) until the pipe reached its end or was
-// closed by closeAll, then closes it and lets it go.
+// closed by closeAll, then closes it and lets it go. A panic while it reads
+// is logged with its stack ('worker panic: ...'); after a second it reads on.
 func (l *leftoverPipes) read(f *os.File) {
 	defer l.readers.Done()
 	buf := make([]byte, 64<<10)
-	for {
-		if _, err := f.Read(buf); err != nil {
-			break
-		}
+	for !l.readToEnd(f, buf) {
+		time.Sleep(time.Second)
 	}
 	f.Close()
+	l.forget(f)
+}
+
+// readToEnd reads and drops what arrives on f until its end (or its close)
+// and reports true then; false when a panic ended the reading (logged).
+func (l *leftoverPipes) readToEnd(f *os.File, buf []byte) (ended bool) {
+	defer func() {
+		if v := recover(); v != nil {
+			if l.logf != nil {
+				l.logf("worker panic: %v\n%s", v, debug.Stack())
+			}
+			ended = false
+		}
+	}()
+	for {
+		if _, err := leftoverRead(f, buf); err != nil {
+			return true
+		}
+	}
+}
+
+// forget lets a pipe whose reader ended go.
+func (l *leftoverPipes) forget(f *os.File) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	delete(l.pipes, f)
-	l.mu.Unlock()
 }
 
 // closeAll closes every held pipe and returns once their readers ended (the
 // agent ends).
 func (l *leftoverPipes) closeAll() {
-	l.mu.Lock()
-	l.closing = true
-	for f := range l.pipes {
-		// The reader's read returns at once and the reader ends.
-		f.Close()
-	}
-	l.mu.Unlock()
+	l.setClosing(true)
 	l.readers.Wait()
+	l.setClosing(false)
+}
+
+// setClosing sets closing; when set, every held pipe is closed (its reader's
+// read returns at once and the reader ends).
+func (l *leftoverPipes) setClosing(on bool) {
 	l.mu.Lock()
-	l.closing = false
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	l.closing = on
+	if on {
+		for f := range l.pipes {
+			f.Close()
+		}
+	}
 }
 
 // held returns the number of held pipes (their readers have not ended).

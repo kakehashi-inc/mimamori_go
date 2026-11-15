@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -338,5 +339,150 @@ func TestPanicTwiceInTheWaitForACommand(t *testing.T) {
 	}
 	if n := rt.leftovers.held(); n != 0 {
 		t.Fatalf("held pipes after Run: %d", n)
+	}
+}
+
+// panicOnceFrom returns a function that panics with msg the first time it is
+// called from a function whose name contains caller (looked up on the
+// stack), and otherwise calls through.
+func panicOnceFrom[T any](caller, msg string, through func() T) (fn func() T, injected *atomic.Bool) {
+	injected = new(atomic.Bool)
+	return func() T {
+		if !injected.Load() && strings.Contains(string(debug.Stack()), caller) && injected.CompareAndSwap(false, true) {
+			panic(msg)
+		}
+		return through()
+	}, injected
+}
+
+// TestPanicWhenPickingAnEntry: a panic while a worker takes an entry from
+// the queue (the queue's lock is held) is logged with its stack; the lock is
+// released, the worker waits a second and goes on: the run of a request is
+// processed, the rounds go on and the stop ends the agent.
+func TestPanicWhenPickingAnEntry(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	var logged lockedLog
+	rt.Logger = logged.logger()
+	now, injected := panicOnceFrom("(*agentScheduler).next", "test panic while an entry is picked", time.Now)
+	rt.sched.now = now
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo done"))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 1))
+	if !injected.Load() {
+		t.Fatal("the panic was not injected")
+	}
+	panicLogHas(t, logged.String(), "worker panic: test panic while an entry is picked", "(*agentScheduler).next")
+	last, _ := lastRun(t, runReports(allReports(t, rt, tr)))
+	if last.State != ResultSuccess {
+		t.Fatalf("the run after the panic: %+v", last)
+	}
+}
+
+// TestPanicInTheBookkeepingAfterARun: a panic in the bookkeeping after a run
+// (here when the next entry of the scheduled set is computed) is logged;
+// the set is no longer marked as running (a manual request of it runs), and
+// after a second the worker does the bookkeeping again: the set gets the
+// entry of its next occurrence.
+func TestPanicInTheBookkeepingAfterARun(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	var logged lockedLog
+	rt.Logger = logged.logger()
+	set := testSet(1, PurposeRunOnly, "echo run")
+	set.RunMode = RunModeSchedule
+	set.Schedule = &CommandSchedule{Kind: ScheduleDaily, Time: "00:00"}
+	rt.storeCommandDefinitions(defsOf(set))
+	execOnDB(t, rt.DB, `UPDATE command_schedules SET armed_at = armed_at - 2*86400`)
+	rt = NewAgentRuntime(rt.DB, tr, logged.logger())
+	rt.link.syncInterval = 1
+	rt.cmdKillGrace = 300 * time.Millisecond
+	now, injected := panicOnceFrom("(*agentScheduler).doneRun", "test panic in the bookkeeping after a run", time.Now)
+	rt.sched.now = now
+	tr.resp.CommandSets = defsOf(set)
+	tr.onSync = func(n int) {
+		if injected.Load() {
+			tr.mu.Lock()
+			tr.resp.CommandRequests = manualRequests(1, 1)
+			tr.mu.Unlock()
+		}
+	}
+	rt.Run(stopWhenRunsFinished(t, rt.DB, 2))
+	if !injected.Load() {
+		t.Fatal("the panic was not injected")
+	}
+	panicLogHas(t, logged.String(), "worker panic: test panic in the bookkeeping after a run", "(*agentScheduler).doneRun")
+	tomorrow := time.Now().Add(24 * time.Hour)
+	midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, time.Local)
+	if e := entryOf(rt, 1); e == nil || e.scheduledFor != midnight.Unix() {
+		t.Fatalf("the entry of the next occurrence: %+v", e)
+	}
+	runs := map[string]bool{}
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished && r.State == ResultSuccess {
+			runs[r.Trigger] = true
+		}
+	}
+	if !runs[TriggerSchedule] || !runs[TriggerManual] {
+		t.Fatalf("runs: %v, want the scheduled run and the manual one after it", runs)
+	}
+}
+
+// TestPanicInAPipeReader: a panic in the reader of a held pipe is logged
+// with its stack; after a second the reader reads on, so that the process
+// left behind writes more than the pipe holds and is not blocked, and the
+// reader ends with the pipe.
+func TestPanicInAPipeReader(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	after := filepath.Join(dir, "after")
+	var logged lockedLog
+	held := leftoverPipes{logf: logged.logger().Printf}
+	var injected atomic.Bool
+	leftoverRead = func(f *os.File, b []byte) (int, error) {
+		if injected.CompareAndSwap(false, true) {
+			panic("test panic in a pipe reader")
+		}
+		return f.Read(b)
+	}
+	t.Cleanup(func() { leftoverRead = (*os.File).Read })
+	line := fmt.Sprintf(`( sleep 3; head -c 4194304 /dev/zero; touch %s ) & echo early`, after)
+	r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line), Leftover: held.add})
+	if r.Kind != ResultSuccess || held.held() != 1 {
+		t.Fatalf("result %+v, %d pipes held", r, held.held())
+	}
+	waitFile(t, after)
+	waitFor(t, "the reader to end with the pipe", func() bool { return held.held() == 0 })
+	if !injected.Load() {
+		t.Fatal("the panic was not injected")
+	}
+	panicLogHas(t, logged.String(), "worker panic: test panic in a pipe reader", "(*leftoverPipes).readToEnd")
+}
+
+// TestPanicInTheCommunicationLoop: a panic in the communication flow's own
+// loop (outside a round) is logged with its stack; the flow waits a second
+// and goes on: the rounds go on, and at the stop the last report says that
+// the agent stops.
+func TestPanicInTheCommunicationLoop(t *testing.T) {
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	var logged lockedLog
+	rt.Logger = logged.logger()
+	var turns atomic.Int32
+	roundsHook = func() {
+		if turns.Add(1) == 2 {
+			panic("test panic in the communication loop")
+		}
+	}
+	t.Cleanup(func() { roundsHook = nil })
+	stop, _ := stopWhen(t, func() bool { return len(tr.seen()) >= 3 })
+	rt.Run(stop)
+	panicLogHas(t, logged.String(), "communication panic: test panic in the communication loop", "(*AgentRuntime).communicateOnce")
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.batches) == 0 || !tr.batches[len(tr.batches)-1].Stopping {
+		t.Fatal("the last report must say that the agent stops")
 	}
 }

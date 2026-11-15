@@ -269,7 +269,13 @@ func (s *agentScheduler) blockedLocked(e *queueEntry) bool {
 // answer only after the stop.
 func (s *agentScheduler) next() (*agentUnit, []CommandRequestAck) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The lock is let go while the worker waits; a panic leaves it released.
+	locked := true
+	defer func() {
+		if locked {
+			s.mu.Unlock()
+		}
+	}()
 	for {
 		if isClosed(s.stop) {
 			return nil, nil
@@ -281,6 +287,7 @@ func (s *agentScheduler) next() (*agentUnit, []CommandRequestAck) {
 		}
 		wait := s.waitLocked(now)
 		ch := s.changed
+		locked = false
 		s.mu.Unlock()
 		t := time.NewTimer(wait)
 		select {
@@ -290,6 +297,7 @@ func (s *agentScheduler) next() (*agentUnit, []CommandRequestAck) {
 		}
 		t.Stop()
 		s.mu.Lock()
+		locked = true
 	}
 }
 
@@ -386,13 +394,18 @@ func (s *agentScheduler) waitLocked(now time.Time) time.Duration {
 func (s *agentScheduler) doneMonitor(interval time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Done again after a panic: the entry is queued once.
+	if slices.ContainsFunc(s.entries, func(e *queueEntry) bool { return e.monitor }) {
+		s.monitoring, s.monitorSoon = false, false
+		return
+	}
 	now := s.now()
 	e := &queueEntry{monitor: true, startAt: now.Add(interval)}
 	if s.monitorSoon {
 		e.startAt = time.Time{}
 	}
-	s.monitoring, s.monitorSoon = false, false
 	s.addLocked(e, now)
+	s.monitoring, s.monitorSoon = false, false
 }
 
 // monitorNow removes the time of the queued monitoring entry (a sync brought
@@ -414,14 +427,16 @@ func (s *agentScheduler) monitorNow() {
 }
 
 // doneRun ends the run of job: a scheduled set gets the entry of its next
-// occurrence, and a manual entry of the set that waited may start.
+// occurrence, and a manual entry of the set that waited may start. The set
+// is let go and the waiting workers are woken first, also when computing the
+// next entry panics; it can be done again.
 func (s *agentScheduler) doneRun(job *commandJob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.running, job.def.ID)
 	delete(s.taken, job.requestID)
+	defer s.changedLocked()
 	s.planLocked(job.def.ID, s.now())
-	s.changedLocked()
 }
 
 // acceptDefinitions takes stored definitions and their valid sets into use (a

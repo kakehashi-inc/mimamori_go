@@ -240,6 +240,7 @@ func NewAgentRuntime(db *DB, tr AgentTransport, logger *log.Logger) *AgentRuntim
 		rt.link.syncInterval = n
 	}
 	rt.out = newOutbox(db, rt.logf)
+	rt.leftovers.logf = rt.logf
 	if v := models.GetLocalState(db.Read(), stateRule); v != "" {
 		var r RuleAssignment
 		if json.Unmarshal([]byte(v), &r) == nil {
@@ -315,8 +316,12 @@ func (rt *AgentRuntime) ReapplyStored() {
 // running_workers holds the worker count in use (for agent status and agent
 // set-workers).
 //
-// A panic inside an entry or a round is recovered there (see process and
-// agentComm); the agent goes on and no command is signalled for it.
+// A panic inside an entry or a round is recovered there (see processEntry
+// and agentComm), and so is a panic in the worker's and the communication
+// flow's own loops and in a reader of a held pipe (work, communicate,
+// leftoverPipes): it is logged with its stack, the flow waits one second and
+// goes on. No flow ends for a panic, no command is signalled for it, and a
+// lock held when it came is released.
 func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	rt.stop = stop
 	rt.sched.stop = stop
@@ -330,7 +335,7 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	}()
 	var unstored []*interruptedRun
 	rt.recovered("panic", func() { unstored = rt.recoverInterruptedRuns() })
-	rt.sched.start()
+	rt.recovered("worker panic", rt.sched.start)
 	workersDone := make(chan struct{})
 	commDone := make(chan struct{})
 	recordsDone := make(chan struct{})
@@ -352,46 +357,93 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	}
 	rt.work()
 	wg.Wait()
-	rt.leftovers.closeAll()
+	rt.recovered("worker panic", rt.leftovers.closeAll)
 	close(workersDone)
 	<-commDone
 	<-recordsDone
 }
 
 // work is one worker: it processes the entries the queue gives it until the
-// stop.
+// stop. A panic outside an entry (while it takes an entry, or in the
+// bookkeeping after an entry) is logged with its stack; the worker waits one
+// second and goes on, and does the bookkeeping that did not complete again
+// before it takes the next entry (it may be done again: the set of a run is
+// no longer marked running and its next entry is computed, the monitoring
+// entry is queued once). The answers found while taking an entry are queued
+// apart, so that a panic there loses no entry.
 func (rt *AgentRuntime) work() {
+	var after func()
 	for {
-		u, acks := rt.sched.next()
-		rt.queueAcks(acks)
-		if u == nil {
-			if len(acks) == 0 {
+		ended := false
+		if !rt.recovered("worker panic", func() { ended = rt.workOnce(&after) }) {
+			if ended {
 				return
 			}
 			continue
 		}
-		rt.process(u)
+		if !rt.pause(time.Second) {
+			return
+		}
 	}
 }
 
-// process processes one entry. The monitoring step is queued again after it
-// ended (also after a panic, which ends it there). A run of a command set
-// recovers its own panics (runCommandJob); the end of a manually requested
-// run asks for the next round at once, so that its result reaches the
-// central soon.
+// workOnce does the bookkeeping left by a panic (after), then takes the next
+// entry and processes it. It reports true when the worker ends (the stop).
+func (rt *AgentRuntime) workOnce(after *func()) bool {
+	if *after != nil {
+		(*after)()
+		*after = nil
+	}
+	u, acks := rt.sched.next()
+	rt.recovered("worker panic", func() { rt.queueAcks(acks) })
+	if u == nil {
+		return len(acks) == 0
+	}
+	*after = rt.processEntry(u)
+	(*after)()
+	*after = nil
+	return false
+}
+
+// pause waits d, or until the stop; it reports false at the stop.
+func (rt *AgentRuntime) pause(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-rt.stop:
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// process processes one entry and does its bookkeeping (processEntry).
 func (rt *AgentRuntime) process(u *agentUnit) {
+	rt.processEntry(u)()
+}
+
+// processEntry processes one entry and returns its bookkeeping, which the
+// worker does next. The monitoring step is queued again after it ended (also
+// after a panic, which ends it there). A run of a command set recovers its
+// own panics (runCommandJob); after it the set is let go and, when it was
+// requested manually and started, the next round is asked for at once, so
+// that its result reaches the central soon.
+func (rt *AgentRuntime) processEntry(u *agentUnit) (bookkeeping func()) {
 	if u.monitor {
 		rt.recovered("worker panic", rt.monitorStep)
-		rt.link.publish(&rt.mon)
-		rt.sched.doneMonitor(rt.link.interval())
-		return
+		return func() {
+			rt.link.publish(&rt.mon)
+			rt.sched.doneMonitor(rt.link.interval())
+		}
 	}
 	started := rt.runCommandJob(u.job)
-	rt.sched.doneRun(u.job)
-	if started && u.job.trigger == TriggerManual {
-		select {
-		case rt.early <- struct{}{}:
-		default:
+	return func() {
+		rt.sched.doneRun(u.job)
+		if started && u.job.trigger == TriggerManual {
+			select {
+			case rt.early <- struct{}{}:
+			default:
+			}
 		}
 	}
 }

@@ -41,6 +41,10 @@ func (rt *AgentRuntime) useConfig(cfg *AgentConfig, onSaved func(cfg *AgentConfi
 	rt.link.setCAs(cfg.CAPEMs)
 }
 
+// roundsHook, when not nil, is called at the top of every turn of the
+// communication flow's loop (tests use it to make the loop panic).
+var roundsHook func()
+
 // communicate is the communication flow. The first round comes at once;
 // each further one a check interval after the start of the previous one, at
 // least roundGap after its end. When a manually requested run ended
@@ -48,21 +52,44 @@ func (rt *AgentRuntime) useConfig(cfg *AgentConfig, onSaved func(cfg *AgentConfi
 // end of the previous one allows. After the stop no round starts; when
 // workersDone is closed (every worker returned), the last report is sent
 // with stopping true. A panic of a round is logged; the next round comes at
-// its time.
+// its time. A panic in the loop itself is logged too; the flow waits one
+// second and goes on.
 func (rt *AgentRuntime) communicate(workersDone <-chan struct{}) {
 	var lastEnd time.Time
 	next := time.Now()
-	for rt.waitRound(&next, lastEnd) {
-		start := time.Now()
-		rt.recovered("communication panic", rt.round)
-		lastEnd = time.Now()
-		next = start.Add(rt.link.interval())
-		if gap := lastEnd.Add(roundGap); gap.After(next) {
-			next = gap
+	for {
+		more := false
+		if rt.recovered("communication panic", func() { more = rt.communicateOnce(&next, &lastEnd) }) {
+			if !rt.pause(time.Second) {
+				break
+			}
+			continue
+		}
+		if !more {
+			break
 		}
 	}
 	<-workersDone
 	rt.recovered("communication panic", rt.flushStopping)
+}
+
+// communicateOnce waits for the time of the next round and does it; it
+// reports false at the stop.
+func (rt *AgentRuntime) communicateOnce(next *time.Time, lastEnd *time.Time) bool {
+	if roundsHook != nil {
+		roundsHook()
+	}
+	if !rt.waitRound(next, *lastEnd) {
+		return false
+	}
+	start := time.Now()
+	rt.recovered("communication panic", rt.round)
+	*lastEnd = time.Now()
+	*next = start.Add(rt.link.interval())
+	if gap := lastEnd.Add(roundGap); gap.After(*next) {
+		*next = gap
+	}
+	return true
 }
 
 // waitRound waits until the time of the next round (moved forward by a
