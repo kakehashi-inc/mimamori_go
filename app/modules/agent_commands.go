@@ -261,6 +261,9 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	// from the schedule state read in the same transaction.
 	err = rt.storeRunStart(fmt.Sprintf("command set %q: the start of run %s", def.Name, uid), func() error {
 		return rt.out.queueBuilt(func(tx models.Writer) (*ReportRequest, error) {
+			if isClosed(rt.stop) {
+				return nil, errStoppedInWrite
+			}
 			base := run.base
 			if job.trigger == TriggerSchedule {
 				st, err := models.GetCommandSchedule(tx, def.ID)
@@ -415,6 +418,9 @@ func (rt *AgentRuntime) recordCommandStart(run *commandRun, pos int) bool {
 	}
 	err = rt.storeRunStart(fmt.Sprintf("command set %q: the start of command %d of run %s", def.Name, pos+1, run.uid), func() error {
 		return rt.DB.Write(func(tx models.Writer) error {
+			if isClosed(rt.stop) {
+				return errStoppedInWrite
+			}
 			// The start time is that of the attempt that stores it: the
 			// command is released right after.
 			return models.SetCommandExecutionRunning(tx, run.uid, pos, time.Now().Unix(), pgid, boot.String())
@@ -529,10 +535,16 @@ func (rt *AgentRuntime) storeRunRecord(what string, write func() error) error {
 // storeRunStart writes a record that starts something (the start of a run,
 // the command that starts) as storeRunRecord does, except that nothing is
 // written once the stop came, also not before the first attempt: it then
-// returns a *stoppedBeforeRecord.
+// returns a *stoppedBeforeRecord. An attempt that waited for the database
+// while the stop came writes nothing either: its transaction looks at the
+// stop first and returns errStoppedInWrite.
 func (rt *AgentRuntime) storeRunStart(what string, write func() error) error {
 	return rt.writeRunRecord(what, false, write)
 }
+
+// errStoppedInWrite is returned by the transaction of a starting record that
+// found the stop when it began (storeRunStart); nothing was written.
+var errStoppedInWrite = errors.New("the agent stops")
 
 // stoppedBeforeRecord is the error of a starting record that was not stored
 // because the stop came; last is the failure of the last attempt (nil when
@@ -562,6 +574,9 @@ func (rt *AgentRuntime) writeRunRecord(what string, afterStop bool, write func()
 			return &stoppedBeforeRecord{last: last}
 		}
 		err := write()
+		if errors.Is(err, errStoppedInWrite) {
+			return &stoppedBeforeRecord{last: last}
+		}
 		if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, models.ErrAlreadyExecuted) {
 			return err
 		}

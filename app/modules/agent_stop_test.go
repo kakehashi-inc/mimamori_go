@@ -129,6 +129,85 @@ func TestStopWhileStartRecordRetried(t *testing.T) {
 	}
 }
 
+// TestStopWhileStartRecordWaits: the start record of a run, or the record of
+// the command that starts, waits for the write connection (another write
+// holds it, as a write that waits for a lock of another process does) when
+// the stop comes. When it gets the connection after the stop, it is not
+// written: for the run nothing is recorded and nothing starts; the command
+// is not released and the run is closed as interrupted.
+func TestStopWhileStartRecordWaits(t *testing.T) {
+	for _, command := range []bool{false, true} {
+		t.Run(map[bool]string{false: "run", true: "command"}[command], func(t *testing.T) {
+			var logs lockedLog
+			ran := filepath.Join(t.TempDir(), "ran")
+			rt, stop, sig := stopRuntime(t, &logs, "touch "+ran+"; sleep 30")
+			execOnDB(t, rt.DB, `CREATE TABLE marks (pos INTEGER);
+				CREATE TRIGGER seen_mark AFTER UPDATE OF running_position ON command_executions WHEN NEW.running_position >= 0
+				BEGIN INSERT INTO marks VALUES (NEW.running_position); END`)
+			hold, held, free := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			holdWrite := func() {
+				go func() {
+					defer close(free)
+					_ = rt.DB.Write(func(models.Writer) error {
+						close(held)
+						<-hold
+						return nil
+					})
+				}()
+				<-held
+			}
+			if command {
+				// Right after the start of the run was stored, before its
+				// command is started and recorded.
+				var once sync.Once
+				rt.Logger = log.New(writerFunc(func(p []byte) (int, error) {
+					if strings.Contains(string(p), "started (manual") {
+						once.Do(holdWrite)
+					}
+					return logs.Write(p)
+				}), "", 0)
+			} else {
+				holdWrite()
+			}
+			job := nextCommandJob(rt)
+			done := runInBackground(rt, job)
+			<-held
+			// The worker's record waits for the write connection.
+			time.Sleep(300 * time.Millisecond)
+			close(stop)
+			close(hold)
+			<-free
+			if started := returned(t, done); started != command {
+				t.Fatalf("the run counts as started: %v", started)
+			}
+			if _, err := os.Stat(ran); err == nil || len(sig.list()) > 0 {
+				t.Fatalf("the command ran after the stop (signals %s)", sig)
+			}
+			var marks int
+			if err := rt.DB.Read().QueryRow(`SELECT count(*) FROM marks`).Scan(&marks); err != nil || marks != 0 {
+				t.Fatalf("the command was recorded as running after the stop (%d, %v)", marks, err)
+			}
+			all, _ := countRuns(rt.DB)
+			if !command {
+				if all != 0 || len(runReports(queuedReports(t, rt))) != 0 {
+					t.Fatalf("after the stop the run was recorded (%d)", all)
+				}
+				if !strings.Contains(logs.String(), `command set "setb" not started: the agent stops`) {
+					t.Fatalf("log: %q", logs.String())
+				}
+				return
+			}
+			last, executed := lastRun(t, runReports(queuedReports(t, rt)))
+			if all != 1 || executed != 0 || last.Reason != ReasonInterrupted {
+				t.Fatalf("runs %d; closing report %+v (%d results)", all, last, executed)
+			}
+			if !strings.Contains(logs.String(), `command 1 of run `+last.RunUID+` not started: the agent stops`) {
+				t.Fatalf("log: %q", logs.String())
+			}
+		})
+	}
+}
+
 // TestStopBeforeFirstCommand: the stop comes after the start of the run was
 // recorded and before its first command. The command does not start; the
 // run is closed as interrupted without results.
