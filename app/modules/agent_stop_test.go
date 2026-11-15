@@ -5,12 +5,16 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"mimamori/app/models"
 )
 
 // The stop of the agent at each point of its work: nothing starts after the
@@ -326,5 +330,238 @@ func TestStopCutsTheRoundInRequest(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "sync: cut by the agent's stop") {
 		t.Fatalf("log: %q", logs.String())
+	}
+}
+
+// runInFlow runs rt.Run on a flow of its own; wait waits at most d for it to
+// return and gives how long it waited.
+func runInFlow(t *testing.T, rt *AgentRuntime, stop <-chan struct{}) (wait func(d time.Duration) time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	return func(d time.Duration) time.Duration {
+		t.Helper()
+		start := time.Now()
+		select {
+		case <-done:
+		case <-time.After(d):
+			buf := make([]byte, 4<<20)
+			t.Fatalf("Run did not return within %s\n%s", d, buf[:runtime.Stack(buf, true)])
+		}
+		return time.Since(start)
+	}
+}
+
+// agentGoroutines returns the goroutines that run code of the agent, once
+// none is left or after a second.
+func agentGoroutines() []string {
+	var out []string
+	for range 100 {
+		buf := make([]byte, 8<<20)
+		n := runtime.Stack(buf, true)
+		out = nil
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			for _, m := range []string{"modules.(*AgentRuntime)", "modules.(*leftoverPipes)", "modules.(*agentScheduler)",
+				"modules.(*commandProcess)", "modules.(*outbox)", "modules.RunTool"} {
+				if strings.Contains(g, m) {
+					out = append(out, g)
+					break
+				}
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return out
+}
+
+// TestStopWhileEndRecordRetried: the result of a command cannot be stored
+// (written again every 2 s); the stop comes. Run returns soon, nothing of
+// the agent is left, the run stays unfinished, and the next start reports
+// it as interrupted.
+func TestStopWhileEndRecordRetried(t *testing.T) {
+	requireBash(t)
+	var logs lockedLog
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	rt.Logger = logs.logger()
+	rt.recordRetry = 2 * time.Second
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "sleep 0.6; echo hi"))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	stop := make(chan struct{})
+	wait := runInFlow(t, rt, stop)
+	waitFor(t, "the run to start", func() bool { all, _ := countRuns(rt.DB); return all == 1 })
+	execOnDB(t, rt.DB, `CREATE TRIGGER fail_out BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	waitFor(t, "the failed attempt to store the result", func() bool {
+		return strings.Contains(logs.String(), "the result of command 1") && strings.Contains(logs.String(), "storing it failed")
+	})
+	close(stop)
+	if took := wait(20 * time.Second); took > 3*time.Second {
+		t.Errorf("Run returned %s after the stop", took)
+	}
+	if left := agentGoroutines(); len(left) != 0 {
+		t.Errorf("goroutines of the agent left:\n%s", strings.Join(left, "\n\n"))
+	}
+	open, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
+	if err != nil || len(open) != 1 {
+		t.Fatalf("the run whose end could not be stored must stay unfinished: %d %v", len(open), err)
+	}
+	execOnDB(t, rt.DB, `DROP TRIGGER fail_out`)
+	rt2 := NewAgentRuntime(rt.DB, tr, nil)
+	rt2.recoverInterruptedRuns()
+	if last, _ := lastRun(t, runReports(queuedReports(t, rt2))); last.RunUID != open[0].RunUID || last.Reason != ReasonInterrupted {
+		t.Errorf("the next start must report run %s as interrupted: %+v", open[0].RunUID, last)
+	}
+}
+
+// TestStopWhileWaitingForHeldSet: the workers wait for a set kept by a
+// surviving process group; the stop comes. Run returns at once, nothing
+// starts and the surviving group is not signalled.
+func TestStopWhileWaitingForHeldSet(t *testing.T) {
+	requireBash(t)
+	survivor := startSurvivor(t)
+	sig := recordSignals(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	rt.sched.hold(1, survivor.Pid)
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo again"))
+	tr.resp.CommandRequests = manualRequests(1, 1)
+	stop := make(chan struct{})
+	wait := runInFlow(t, rt, stop)
+	waitFor(t, "the manual entry of the held set", func() bool { return len(manualEntries(rt)) == 1 })
+	time.Sleep(1500 * time.Millisecond)
+	close(stop)
+	if took := wait(20 * time.Second); took > 2*time.Second {
+		t.Errorf("Run returned %s after the stop while its workers only waited", took)
+	}
+	if all, _ := countRuns(rt.DB); all != 0 || len(sig.list()) != 0 || !processAlive(survivor.Pid) {
+		t.Errorf("runs %d, signals %s, survivor alive %v", all, sig, processAlive(survivor.Pid))
+	}
+	if left := agentGoroutines(); len(left) != 0 {
+		t.Errorf("goroutines of the agent left: %d", len(left))
+	}
+}
+
+// TestStopEveryCommandAtOnce: four workers run four commands; the stop sends
+// SIGTERM to every group at once, the grace (here 3 s) belongs to each group
+// as a whole, and only what is left then gets SIGKILL:
+//
+//	set 1, 2: end at SIGTERM
+//	set 3:    ignores SIGTERM: SIGKILL when the grace is over
+//	set 4:    its main process ends at SIGTERM, a member of the group ignores
+//	          it and ends by itself one second later: no SIGKILL
+func TestStopEveryCommandAtOnce(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	f := func(name string) string { return filepath.Join(dir, name) }
+	onTerm := func(n int) string {
+		return fmt.Sprintf(`trap 'exit 0' TERM; echo $$ > %s; sleep 30 & wait`, f(fmt.Sprintf("pid%d", n)))
+	}
+	ignore := fmt.Sprintf(`trap '' TERM; echo $$ > %s; sleep 30`, f("pid3"))
+	member := fmt.Sprintf(`( trap '' TERM; sleep 1; echo $EPOCHREALTIME > %s ) & trap 'exit 0' TERM; echo $$ > %s; sleep 30 & wait`,
+		f("member4"), f("pid4"))
+	sig := recordSignals(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 4)
+	rt.cmdKillGrace = 3 * time.Second
+	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, onTerm(1)), testSet(2, PurposeRunOnly, onTerm(2)),
+		testSet(3, PurposeRunOnly, ignore), testSet(4, PurposeRunOnly, member))
+	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3, 4)
+	stop := make(chan struct{})
+	wait := runInFlow(t, rt, stop)
+	pids := map[int]int{}
+	for n := 1; n <= 4; n++ {
+		pids[n] = pidFrom(t, f(fmt.Sprintf("pid%d", n)))
+	}
+	time.Sleep(300 * time.Millisecond)
+	stopAt := time.Now()
+	close(stop)
+	took := wait(30 * time.Second)
+	terms, kills := map[int]time.Time{}, map[int]time.Time{}
+	for _, s := range sig.list() {
+		switch s.sig {
+		case syscall.SIGTERM:
+			terms[s.pgid] = s.at
+		case syscall.SIGKILL:
+			kills[s.pgid] = s.at
+		}
+	}
+	for n := 1; n <= 4; n++ {
+		if at, ok := terms[pids[n]]; !ok || at.Sub(stopAt) > 500*time.Millisecond {
+			t.Errorf("set %d: SIGTERM %v, %s after the stop (want every running command at the stop)", n, ok, at.Sub(stopAt))
+		}
+	}
+	if at, ok := kills[pids[3]]; !ok || at.Sub(stopAt) < 3*time.Second || at.Sub(stopAt) > 4*time.Second {
+		t.Errorf("set 3 (ignores SIGTERM): SIGKILL %v, %s after the stop, want at the end of the grace of 3 s", ok, at.Sub(stopAt))
+	}
+	for _, n := range []int{1, 2, 4} {
+		if _, ok := kills[pids[n]]; ok {
+			t.Errorf("set %d: SIGKILL although its group was gone before the grace was over", n)
+		}
+	}
+	if _, err := os.Stat(f("member4")); err != nil {
+		t.Errorf("set 4: the member of the group did not get the rest of the grace: %v", err)
+	}
+	if took < 3*time.Second || took > 5*time.Second {
+		t.Errorf("Run returned %s after the stop, want just after the grace of 3 s", took)
+	}
+	closed := map[int64]string{}
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished {
+			closed[r.SetID] = r.Reason
+		}
+	}
+	for id := int64(1); id <= 4; id++ {
+		if closed[id] != ReasonInterrupted {
+			t.Errorf("set %d: run reason %q, want interrupted", id, closed[id])
+		}
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.batches) == 0 || !tr.batches[len(tr.batches)-1].Stopping {
+		t.Errorf("the last report must say that the agent stops")
+	}
+}
+
+// TestStopWhileMonitoringToolRuns: the stop comes while the monitoring step
+// waits for an audit tool (a script that takes 30 s). The tool is ended, no
+// other tool starts, Run returns and the last report says that the agent
+// stops.
+func TestStopWhileMonitoringToolRuns(t *testing.T) {
+	requireBash(t)
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := fmt.Sprintf("echo \"$(date +%%s.%%N) $0\" >> %s\nsleep 30\n", calls)
+	for _, name := range []string{"auditctl", "ausearch"} {
+		fakeTool(t, name, script)
+	}
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	stop := make(chan struct{})
+	wait := runInFlow(t, rt, stop)
+	started := func() int { b, _ := os.ReadFile(calls); return strings.Count(string(b), "\n") }
+	waitFor(t, "the monitoring step's tool", func() bool { return started() == 1 })
+	time.Sleep(300 * time.Millisecond)
+	stopAt := time.Now()
+	close(stop)
+	if took := wait(30 * time.Second); took > 3*time.Second {
+		t.Errorf("Run returned %s after the stop while its monitoring step waited for a tool", took)
+	}
+	b, _ := os.ReadFile(calls)
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		ts, err := strconv.ParseFloat(strings.Fields(l)[0], 64)
+		if err != nil || ts > float64(stopAt.UnixNano())/1e9 {
+			t.Errorf("a tool was started after the stop: %q", l)
+		}
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.batches) == 0 || !tr.batches[len(tr.batches)-1].Stopping {
+		t.Errorf("the last report must say that the agent stops (reports %d)", len(tr.batches))
 	}
 }

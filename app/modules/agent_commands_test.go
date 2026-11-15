@@ -1380,3 +1380,109 @@ func TestSurvivingGroupHeldAfterClockStep(t *testing.T) {
 		t.Fatalf("the set starts again (request 2) while the command of the killed agent (pid %d) still runs", pid)
 	}
 }
+
+// TestOccurrenceDuringOwnRun: for daily and weekly an occurrence that passed
+// during the set's own run is not executed yet and starts at once when the
+// run ended (nothing skipped); for hourly_at and the interval kinds the
+// entry is the next occurrence after the end, hourly_at records the passed
+// one as skipped with its next run, the interval kinds record nothing.
+func TestOccurrenceDuringOwnRun(t *testing.T) {
+	requireBash(t)
+	base := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC) // a Monday
+	minute := 0
+	for _, c := range []struct {
+		name    string
+		sched   CommandSchedule
+		runEnd  time.Time // the clock when the first run ended
+		wantDue time.Time
+		atOnce  bool
+		skipped int
+	}{
+		{"daily", CommandSchedule{Kind: ScheduleDaily, Time: "09:00"}, base.Add(24*time.Hour + 30*time.Minute), base.Add(24 * time.Hour), true, 0},
+		{"weekly", CommandSchedule{Kind: ScheduleWeekly, Weekdays: []string{"mon", "tue"}, Time: "09:00"}, base.Add(25 * time.Hour),
+			base.Add(24 * time.Hour), true, 0},
+		{"hourly_at", CommandSchedule{Kind: ScheduleHourlyAt, Minute: &minute}, base.Add(80 * time.Minute), base.Add(2 * time.Hour), false, 1},
+		{"every_minutes", CommandSchedule{Kind: ScheduleEveryMinutes, Every: 5}, base.Add(12 * time.Minute), base.Add(15 * time.Minute), false, 0},
+		{"every_hours", CommandSchedule{Kind: ScheduleEveryHours, Every: 1}, base.Add(150 * time.Minute), base.Add(3 * time.Hour), false, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := newCommandRuntime(t, &cmdTransport{})
+			rt.loc = time.UTC
+			now := base.Add(-time.Minute)
+			rt.clock = func() time.Time { return now }
+			d := testSet(1, PurposeRunOnly, "true")
+			s := c.sched
+			d.Schedule, d.RunMode = &s, RunModeSchedule
+			rt.storeCommandDefinitions(defsOf(d))
+			now = base.Add(30 * time.Second)
+			job := nextCommandJob(rt)
+			if job == nil || job.scheduledFor != base.Unix() {
+				t.Fatalf("the first run: %+v; queue %+v", job, queuedEntries(rt))
+			}
+			rt.runCommandJob(job)
+			now = c.runEnd
+			rt.sched.doneRun(job)
+			if e := entryOf(rt, 1); e == nil || e.scheduledFor != c.wantDue.Unix() || e.startAt.IsZero() != c.atOnce {
+				t.Fatalf("the entry after the run: %+v, want %s (at once %v)", e, c.wantDue, c.atOnce)
+			}
+			if !c.atOnce {
+				now = c.wantDue.Add(time.Second)
+			}
+			if !runNext(rt) {
+				t.Fatal("no second run")
+			}
+			var second *CommandRunReport
+			for _, r := range runReports(queuedReports(t, rt)) {
+				if r.ScheduledFor == c.wantDue.Unix() && !r.Finished {
+					second = &r
+				}
+			}
+			if second == nil || second.SkippedCount != c.skipped {
+				t.Fatalf("the start of the second run: %+v, want %d skipped", second, c.skipped)
+			}
+		})
+	}
+}
+
+// TestSkippedWithManualRunBetween: the record of the skipped occurrences
+// goes with the next scheduled run; a manual run in between carries none and
+// does not take it.
+func TestSkippedWithManualRunBetween(t *testing.T) {
+	requireBash(t)
+	base := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	rt := newCommandRuntime(t, &cmdTransport{})
+	rt.loc = time.UTC
+	now := base.Add(-time.Minute)
+	rt.clock = func() time.Time { return now }
+	minute := 0
+	d := testSet(1, PurposeRunOnly, "true")
+	d.Schedule, d.RunMode = &CommandSchedule{Kind: ScheduleHourlyAt, Minute: &minute}, RunModeSchedule
+	rt.storeCommandDefinitions(defsOf(d))
+	now = base.Add(10 * time.Second)
+	if !runNext(rt) {
+		t.Fatal("the run of 09:00")
+	}
+	// 10:00 and 11:00 pass without a run; at 11:30 a manual request runs.
+	now = base.Add(150 * time.Minute)
+	receiveRequests(rt, []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now.Unix(), ExpiresAt: now.Unix() + 600}})
+	if !runNext(rt) {
+		t.Fatal("the manual run")
+	}
+	now = base.Add(3*time.Hour + time.Second)
+	if !runNext(rt) {
+		t.Fatal("the run of 12:00")
+	}
+	var starts []CommandRunReport
+	for _, r := range runReports(queuedReports(t, rt)) {
+		if !r.Finished {
+			starts = append(starts, r)
+		}
+	}
+	if len(starts) != 3 || starts[1].Trigger != TriggerManual || starts[1].SkippedCount != 0 {
+		t.Fatalf("starts: %+v", starts)
+	}
+	if s := starts[2]; s.ScheduledFor != base.Add(3*time.Hour).Unix() || s.SkippedCount != 2 ||
+		s.SkippedFrom != base.Add(time.Hour).Unix() || s.SkippedTo != base.Add(2*time.Hour).Unix() {
+		t.Fatalf("the scheduled run after the manual one: %+v", s)
+	}
+}

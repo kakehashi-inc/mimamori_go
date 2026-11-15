@@ -3,6 +3,7 @@ package modules
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -484,5 +485,49 @@ func TestPanicInTheCommunicationLoop(t *testing.T) {
 	defer tr.mu.Unlock()
 	if len(tr.batches) == 0 || !tr.batches[len(tr.batches)-1].Stopping {
 		t.Fatal("the last report must say that the agent stops")
+	}
+}
+
+// panicWriter is a log writer that panics once when a line holds on.
+type panicWriter struct {
+	on   string
+	done atomic.Bool
+}
+
+func (w *panicWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.on) && w.done.CompareAndSwap(false, true) {
+		panic("test panic: " + w.on)
+	}
+	return len(p), nil
+}
+
+// TestPanicInScheduledRunBetweenCommands: a panic in a scheduled run while no
+// command runs (right after its start) closes the run with internal_error,
+// leaves nothing unfinished, and the set gets the entry of its next
+// occurrence.
+func TestPanicInScheduledRunBetweenCommands(t *testing.T) {
+	requireBash(t)
+	base := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	rt := newCommandRuntime(t, &cmdTransport{})
+	rt.loc = time.UTC
+	now := base.Add(-time.Minute)
+	rt.clock = func() time.Time { return now }
+	rt.Logger = log.New(&panicWriter{on: "started (schedule"}, "", 0)
+	d := testSet(1, PurposeRunOnly, "echo one", "echo two")
+	d.Schedule, d.RunMode = &CommandSchedule{Kind: ScheduleEveryMinutes, Every: 5}, RunModeSchedule
+	rt.storeCommandDefinitions(defsOf(d))
+	now = base.Add(10 * time.Second)
+	if !runNext(rt) {
+		t.Fatal("no run")
+	}
+	last, executed := lastRun(t, runReports(queuedReports(t, rt)))
+	if last.Reason != ReasonInternalError || last.State != ResultError || executed != 0 {
+		t.Fatalf("the closing report: %+v (%d results)", last, executed)
+	}
+	if open, _ := models.ListUnfinishedCommandExecutions(rt.DB.Read()); len(open) != 0 {
+		t.Fatalf("unfinished runs: %d", len(open))
+	}
+	if e := entryOf(rt, 1); e == nil || e.scheduledFor != base.Add(5*time.Minute).Unix() {
+		t.Fatalf("the next entry: %+v", e)
 	}
 }
