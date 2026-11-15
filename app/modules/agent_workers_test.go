@@ -187,8 +187,8 @@ func setLocalStateAt(t *testing.T, path, key, value string) {
 }
 
 // agent set-workers --builtin needs a central in the data directory, creates
-// builtin-agent.db when missing and leaves the central's settings (its own
-// item workers included) as they are.
+// builtin-agent.db when missing and leaves the central's settings as they
+// are.
 func TestAgentSetWorkersBuiltin(t *testing.T) {
 	MigrationsFS = os.DirFS("../..")
 	dir := t.TempDir()
