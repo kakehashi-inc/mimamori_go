@@ -80,7 +80,7 @@ type AgentRuntime struct {
 	// out is the outbox, the only owner of the queued reports.
 	out *outbox
 	// leftovers holds the output pipes that processes left behind by
-	// commands still hold open.
+	// commands still hold open, each read by its own reader.
 	leftovers leftoverPipes
 	// early asks the communication flow for the next round at once (a
 	// manually requested run ended); it holds at most one request.
@@ -285,7 +285,9 @@ func (rt *AgentRuntime) ReapplyStored() {
 // (see monitorStep), and a running command is ended (SIGTERM to its process
 // group, SIGKILL to what is left after the grace) and its run is recorded.
 // The communication flow does no round after the stop; when every worker has
-// returned it sends one last report that says that the agent stops
+// returned, the output pipes that processes left behind by commands still
+// hold are closed (their readers end before Run returns), and the
+// communication flow sends one last report that says that the agent stops
 // (stopping true) and carries what is queued (one attempt; what fails stays
 // queued for the next start). Then Run returns. While it runs, the state key
 // running_workers holds the worker count in use (for agent status and agent
@@ -328,8 +330,7 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 }
 
 // work is one worker: it processes the entries the queue gives it until the
-// stop. Before each entry it reads away what processes left behind by
-// earlier commands wrote (leftoverPipes).
+// stop.
 func (rt *AgentRuntime) work() {
 	for {
 		u, acks := rt.sched.next()
@@ -340,7 +341,6 @@ func (rt *AgentRuntime) work() {
 			}
 			continue
 		}
-		rt.leftovers.tend()
 		rt.process(u)
 	}
 }

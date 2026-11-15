@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -888,6 +889,65 @@ func TestAgentStopEndsLeftoverReading(t *testing.T) {
 	if processAlive(writer) {
 		t.Fatal("the writer left behind did not get SIGTERM at the stop")
 	}
+}
+
+// TestLeftoverWriterNotBlockedWhileWorkerBusy (TO-2): a process left behind
+// by a command writes more than the pipe holds while the only worker runs a
+// long command of another set: what it writes is read and dropped as it
+// arrives, so it goes on while that command still runs. A pipe still held
+// when the agent ends is closed and its reader ends with Run.
+func TestLeftoverWriterNotBlockedWhileWorkerBusy(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	dir := t.TempDir()
+	after, pidFile := filepath.Join(dir, "after"), filepath.Join(dir, "pid")
+	tr.resp.CommandSets = defsOf(
+		testSet(1, PurposeRunOnly, fmt.Sprintf("( sleep 4; head -c 4194304 /dev/zero; touch %s; exec sleep 60 ) & echo $! > %s; echo main", after, pidFile)),
+		testSet(2, PurposeRunOnly, "sleep 15"))
+	tr.resp.CommandRequests = manualRequests(1, 1, 2)
+	readersBefore := pipeReaders()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			close(stop)
+			<-done
+		}
+	})
+	holder := pidFrom(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(holder, syscall.SIGKILL) })
+	waitFor(t, "the long command of set 2", func() bool { all, _ := countRuns(rt.DB); return all == 2 })
+	if n, r := rt.leftovers.held(), pipeReaders(); n != 1 || r != readersBefore+1 {
+		t.Fatalf("pipes held when set 2 started: %d, readers %d (%d before)", n, r, readersBefore)
+	}
+	waitFile(t, after)
+	if _, finished := countRuns(rt.DB); finished != 1 {
+		t.Fatalf("the process left behind went on only after the long command ended (%d runs finished)", finished)
+	}
+	if !processAlive(holder) {
+		t.Fatal("the process left behind ended")
+	}
+	stopped = true
+	close(stop)
+	<-done
+	if n := rt.leftovers.held(); n != 0 {
+		t.Fatalf("pipes held after Run returned: %d", n)
+	}
+	waitFor(t, "the reader goroutines to be gone", func() bool { return pipeReaders() <= readersBefore })
+}
+
+// pipeReaders returns the number of goroutines that read a pipe kept for
+// processes left behind (leftoverPipes).
+func pipeReaders() int {
+	buf := make([]byte, 8<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Count(string(buf[:n]), "(*leftoverPipes).read(")
 }
 
 // TestScheduledRunsCarrySkipped: the run of a scheduled set carries how many

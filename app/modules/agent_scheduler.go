@@ -56,7 +56,9 @@ import (
 //   - Each run (agent_commands.go): its definition, run UID, results, its own
 //     rows of command_executions and last_due of its set in
 //     command_schedules (written with the start of the run).
-//   - The held output pipes (leftoverPipes, its own mutex).
+//   - The held output pipes (leftoverPipes, its own mutex): each has its own
+//     reader, which reads and drops what arrives and closes the pipe at its
+//     end; Run closes the pipes left after the workers ended.
 //
 // The queue never calls Write while it holds its mutex: the answers to run
 // requests it finds are returned to the caller, which queues them in the

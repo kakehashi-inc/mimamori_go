@@ -517,60 +517,76 @@ func agentHomeDir() string {
 
 // leftoverPipes holds the output pipes of commands whose reading ended while
 // processes they left behind still held the pipe open. Closing such a pipe
-// would end those processes at their next write (SIGPIPE); instead what they
-// write is read and dropped by tend, and a pipe is closed when it reached
-// its end (every process that held it ended). It is safe for use by several
+// would end those processes at their next write (SIGPIPE), and a pipe that
+// nobody reads stops them once it is full. So every pipe has its own reader,
+// which reads and drops what arrives as it arrives, whatever the workers and
+// the communication flow do, and closes the pipe at its end (every process
+// that held it ended). closeAll (the agent ends) closes the pipes that are
+// left and returns once their readers ended. It is safe for use by several
 // flows (its own mutex); the zero value holds nothing.
 type leftoverPipes struct {
 	mu    sync.Mutex
-	pipes []*os.File
+	pipes map[*os.File]bool
+	// closing is set while closeAll runs: a pipe handed over then is closed
+	// at once.
+	closing bool
+	readers sync.WaitGroup
 }
 
-// add takes a pipe (CommandExecInput.Leftover).
+// add takes a pipe (CommandExecInput.Leftover) and starts its reader.
 func (l *leftoverPipes) add(f *os.File) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.pipes = append(l.pipes, f)
-}
-
-// tend reads and drops what is in the held pipes now, without waiting, and
-// closes those that reached their end.
-func (l *leftoverPipes) tend() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	kept := l.pipes[:0]
-	for _, f := range l.pipes {
-		if discardAvailable(f) {
-			f.Close()
-			continue
-		}
-		kept = append(kept, f)
+	if l.closing {
+		f.Close()
+		return
 	}
-	clear(l.pipes[len(kept):])
-	l.pipes = kept
+	if l.pipes == nil {
+		l.pipes = map[*os.File]bool{}
+	}
+	l.pipes[f] = true
+	l.readers.Add(1)
+	go l.read(f)
 }
 
-// closeAll closes every held pipe (the agent ends).
+// read is the reader of one pipe: it reads and drops what arrives (a read
+// waits until something arrives) until the pipe reached its end or was
+// closed by closeAll, then closes it and lets it go.
+func (l *leftoverPipes) read(f *os.File) {
+	defer l.readers.Done()
+	buf := make([]byte, 64<<10)
+	for {
+		if _, err := f.Read(buf); err != nil {
+			break
+		}
+	}
+	f.Close()
+	l.mu.Lock()
+	delete(l.pipes, f)
+	l.mu.Unlock()
+}
+
+// closeAll closes every held pipe and returns once their readers ended (the
+// agent ends).
 func (l *leftoverPipes) closeAll() {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, f := range l.pipes {
+	l.closing = true
+	for f := range l.pipes {
+		// The reader's read returns at once and the reader ends.
 		f.Close()
 	}
-	l.pipes = nil
+	l.mu.Unlock()
+	l.readers.Wait()
+	l.mu.Lock()
+	l.closing = false
+	l.mu.Unlock()
 }
 
-// held returns the number of held pipes.
+// held returns the number of held pipes (their readers have not ended).
 func (l *leftoverPipes) held() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.pipes)
-}
-
-// discardAvailable reads and drops what is in the pipe now, at most the
-// pipe's buffer, and reports whether it reached its end.
-func discardAvailable(f *os.File) bool {
-	return drainAvailable(f, &limitedBuffer{}, pipeSizeCommand)
 }
 
 // isClosed reports whether the channel is closed (a nil channel never is).

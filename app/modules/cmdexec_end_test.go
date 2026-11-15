@@ -283,17 +283,20 @@ func TestCommandReadingAfterEndWithoutLimit(t *testing.T) {
 	}
 }
 
-// TestCommandLeftoverKeepsThePipe (TO-2): a process left behind that is
-// silent for more than 2 s ends the reading, but it is not ended by it: the
-// pipe is handed over instead of closed, so its later write does not get
-// SIGPIPE; tend reads and drops what it wrote and closes the pipe once it
-// ended.
-func TestCommandLeftoverKeepsThePipe(t *testing.T) {
+// TestCommandLeftoverPipeReadAsItArrives (TO-2): a process left behind that
+// is silent for more than 2 s ends the reading, but it is not ended by it:
+// the pipe is handed over to its own reader, which reads and drops what
+// arrives as it arrives (here 4 MiB, more than the pipe holds, while nothing
+// else reads it), so the process is neither blocked on the full pipe nor
+// ended by SIGPIPE; the reader closes the pipe and ends when the process
+// ended. closeAll closes a pipe that a process still holds and returns once
+// its reader ended.
+func TestCommandLeftoverPipeReadAsItArrives(t *testing.T) {
 	requireBash(t)
 	dir := t.TempDir()
 	after := filepath.Join(dir, "after")
 	var held leftoverPipes
-	line := fmt.Sprintf(`( sleep 3; echo late; touch %s ) & echo early`, after)
+	line := fmt.Sprintf(`( sleep 3; head -c 4194304 /dev/zero; echo late; touch %s ) & echo early`, after)
 	r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line), Leftover: held.add})
 	if r.Kind != ResultSuccess || string(r.Output) != "early\n" {
 		t.Fatalf("result: %+v %q", r, r.Output)
@@ -302,17 +305,31 @@ func TestCommandLeftoverKeepsThePipe(t *testing.T) {
 		t.Fatalf("pipes held: %d, want the one the process left behind holds", held.held())
 	}
 	waitFile(t, after)
-	// The process ended after its write: the pipe reaches its end.
-	deadline := time.Now().Add(5 * time.Second)
-	for held.held() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the pipe was not closed after the process left behind ended")
-		}
-		held.tend()
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFor(t, "the reader to end after the process ended", func() bool { return held.held() == 0 })
 	// A command whose output ended with it leaves nothing.
 	if r := ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand("echo x"), Leftover: held.add}); r.Kind != ResultSuccess || held.held() != 0 {
 		t.Fatalf("a command without processes left behind: %+v, %d held", r, held.held())
+	}
+	// The end of the agent closes a pipe still held open and ends its
+	// reader.
+	pidFile := filepath.Join(dir, "pid")
+	r = ExecuteCommand(CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(fmt.Sprintf(`sleep 30 & echo $! > %s; echo x`, pidFile)), Leftover: held.add})
+	holder := pidFrom(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(holder, syscall.SIGKILL) })
+	if r.Kind != ResultSuccess || held.held() != 1 {
+		t.Fatalf("a process left behind that holds the pipe: %+v, %d held", r, held.held())
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		held.closeAll()
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closeAll did not return while a process holds the pipe")
+	}
+	if held.held() != 0 || !processAlive(holder) {
+		t.Fatalf("after closeAll: %d held, the holder alive %v", held.held(), processAlive(holder))
 	}
 }
