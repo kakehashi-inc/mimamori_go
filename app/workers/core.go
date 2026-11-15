@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -657,6 +658,19 @@ func queryInt(r *http.Request, name string, def, min, max int) (int, error) {
 		return max, nil
 	}
 	return v, nil
+}
+
+// queryOneOf reads an optional query parameter that filters a list by one of
+// the values the program defines (accepted). An empty or absent value means
+// "not given" and gives ""; any other value outside accepted is an error that
+// names the parameter and lists the accepted values (a list parameter, so
+// that each language joins it its own way).
+func queryOneOf(r *http.Request, name string, accepted []string) (string, error) {
+	s := r.URL.Query().Get(name)
+	if s == "" || slices.Contains(accepted, s) {
+		return s, nil
+	}
+	return "", modules.M("common.query_not_one_of", "name", name, "value", strconv.Quote(s), "accepted", slices.Clone(accepted))
 }
 
 func isUniqueErr(err error) bool {

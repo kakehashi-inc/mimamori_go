@@ -14,6 +14,11 @@ const (
 	HistCommand     = "command"
 )
 
+// HistoryCategories lists every history category (the values the history
+// list can be filtered by).
+var HistoryCategories = []string{HistAccount, HistRule, HistToken, HistCertificate, HistRejected, HistTemplate, HistSuppression,
+	HistDetection, HistConfig, HistCommand}
+
 // HistoryItem is a row of the history table: an operation with the account
 // that performed it, or a system event such as a rejected connection.
 type HistoryItem struct {

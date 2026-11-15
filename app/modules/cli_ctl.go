@@ -888,8 +888,8 @@ type CtlDetectionsCmd struct {
 }
 type CtlDetectionsListCmd struct {
 	Agent        int64  `help:"Agent id"`
-	Category     string `help:"alert or normal" enum:",alert,normal" default:""`
-	Type         string `help:"exec, denied, read, network, writable or exec_file"`
+	Category     string `help:"${detection_categories_help}" enum:"${detection_categories}" default:""`
+	Type         string `help:"${detection_types_help}" enum:"${detection_types}" default:""`
 	From         string `help:"From, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
 	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
 	Acknowledged string `help:"true or false" enum:",true,false" default:""`
@@ -1165,7 +1165,7 @@ type CtlCertsStatusCmd struct{}
 func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/certificates", nil) }
 
 type CtlHistoryCmd struct {
-	Category string `help:"account, rule, token, certificate, rejected, template, suppression, detection, config or command"`
+	Category string `help:"${history_categories_help}" enum:"${history_categories}" default:""`
 	Limit    int    `help:"Maximum rows (1 to 500)" default:"50"`
 	Offset   int    `help:"Rows to skip (0 to 10000000)" default:"0"`
 }

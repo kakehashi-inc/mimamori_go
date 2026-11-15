@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+
+	"mimamori/app/models"
+	"mimamori/app/modules"
 )
 
 // runMainEnv makes the test binary run main() instead of the tests (set by
@@ -667,6 +670,47 @@ func TestListFlagsHelpStatesDefaultAndRange(t *testing.T) {
 			if !strings.Contains(help, w) {
 				t.Errorf("help of %q lacks %q:\n%s", tc.path, w, out.String())
 			}
+		}
+	}
+}
+
+// The filters of ctl history and ctl detections list take only the values
+// the program defines (the lists of the models and of the rule content):
+// another value ends the program with exit code 2 and kong's message, which
+// lists the accepted values; --help lists them.
+func TestFilterFlagsTakeDefinedValues(t *testing.T) {
+	for _, tc := range []struct {
+		cmd      []string
+		flag     string
+		accepted []string
+		got      func(c *CLI) string
+	}{
+		{[]string{"ctl", "history"}, "category", models.HistoryCategories, func(c *CLI) string { return c.Ctl.History.Category }},
+		{[]string{"ctl", "detections", "list"}, "category", modules.DetectionCategories, func(c *CLI) string { return c.Ctl.Detections.List.Category }},
+		{[]string{"ctl", "detections", "list"}, "type", modules.DetectionTypes, func(c *CLI) string { return c.Ctl.Detections.List.Type }},
+	} {
+		for _, v := range tc.accepted {
+			var cli CLI
+			if _, err := parseArgs(testParser(t, &cli, io.Discard), append(append([]string{}, tc.cmd...), "--"+tc.flag, v)); err != nil || tc.got(&cli) != v {
+				t.Errorf("%q --%s %s: %v, got %q", tc.cmd, tc.flag, v, err, tc.got(&cli))
+			}
+		}
+		quoted := []string{`""`}
+		for _, v := range tc.accepted {
+			quoted = append(quoted, fmt.Sprintf("%q", v))
+		}
+		for _, v := range []string{"bogus", strings.ToUpper(tc.accepted[0]), " " + tc.accepted[0], tc.accepted[0] + ","} {
+			_, errOut, code := runMain(t, append(append([]string{"--data-dir", t.TempDir()}, tc.cmd...), "--"+tc.flag, v)...)
+			want := fmt.Sprintf("mimamori: error: --%s must be one of %s but got %q\n", tc.flag, strings.Join(quoted, ","), v)
+			if code != 2 || errOut != want {
+				t.Errorf("%q --%s %q: exit %d %q, want %q", tc.cmd, tc.flag, v, code, errOut, want)
+			}
+		}
+		help, _, code := runMain(t, append(append([]string{}, tc.cmd...), "--help")...)
+		n := len(tc.accepted)
+		want := "--" + tc.flag + `="" ` + strings.Join(tc.accepted[:n-1], ", ") + " or " + tc.accepted[n-1]
+		if code != 0 || !strings.Contains(strings.Join(strings.Fields(help), " "), want) {
+			t.Errorf("help of %q lacks %q:\n%s", tc.cmd, want, help)
 		}
 	}
 }

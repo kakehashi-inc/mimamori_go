@@ -669,7 +669,8 @@
             "query_agent_id": "invalid agent_id {{value}}: not an integer",
             "query_bad_time": "invalid {{name}} {{value}}: use RFC3339 or YYYY-MM-DD[THH:MM[:SS]]",
             "query_not_bool": "invalid {{name}} {{value}}: use true or false",
-            "query_not_integer": "invalid {{name}} {{value}}: not an integer"
+            "query_not_integer": "invalid {{name}} {{value}}: not an integer",
+            "query_not_one_of": "invalid {{name}} {{value}}: use one of {{accepted}}"
         },
         "detection": {
             "not_found": "detection not found"

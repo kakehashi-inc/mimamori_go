@@ -209,7 +209,7 @@ func parserOptions() []kong.Option {
 		kong.Description("mimamori: detects and reports operations performed by selected OS users on each host."),
 		kong.UsageOnError(),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
-		kong.Vars{"default_agent_port": strconv.Itoa(modules.DefaultAgentPort)},
+		kong.Vars(modules.CLIVars()),
 	}
 }
 

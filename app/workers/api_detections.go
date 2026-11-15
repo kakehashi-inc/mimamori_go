@@ -86,8 +86,8 @@ func boolQuery(r *http.Request, name string) (*bool, error) {
 // handleListDetections merges detections from the per-target databases.
 func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := models.DetectionFilter{Category: q.Get("category"), Type: q.Get("type")}
-	var errs [7]error
+	var f models.DetectionFilter
+	var errs [9]error
 	f.From, errs[0] = parseTime("from", q.Get("from"))
 	f.To, errs[1] = parseTime("to", q.Get("to"))
 	f.Acknowledged, errs[2] = boolQuery(r, "acknowledged")
@@ -101,6 +101,8 @@ func (c *core) handleListDetections(w http.ResponseWriter, r *http.Request) {
 			errs[6] = modules.M("common.query_agent_id", "value", strconv.Quote(v))
 		}
 	}
+	f.Category, errs[7] = queryOneOf(r, "category", modules.DetectionCategories)
+	f.Type, errs[8] = queryOneOf(r, "type", modules.DetectionTypes)
 	for _, err := range errs {
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
@@ -619,6 +621,11 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	category, err := queryOneOf(r, "category", models.HistoryCategories)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	// Viewers do not receive the history of accounts, of the system
 	// settings and of command sets (it lists every account, the configured
 	// values and changes of definitions that viewers do not see).
@@ -626,7 +633,7 @@ func (c *core) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if p := principalFrom(r); !p.isAdmin() {
 		exclude = viewerHiddenHistory
 	}
-	items, total, err := models.ListHistory(c.db.Read(), r.URL.Query().Get("category"), "", exclude, limit, offset)
+	items, total, err := models.ListHistory(c.db.Read(), category, "", exclude, limit, offset)
 	if err != nil {
 		c.internalError(w, r, err)
 		return

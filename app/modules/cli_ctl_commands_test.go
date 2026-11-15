@@ -16,7 +16,7 @@ func TestCtlCommandSetsArguments(t *testing.T) {
 	var cli struct {
 		Ctl CtlCmd `cmd:""`
 	}
-	parser, err := kong.New(&cli)
+	parser, err := kong.New(&cli, kong.Vars(CLIVars()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCtlCommandSetsArguments(t *testing.T) {
 		var fresh struct {
 			Ctl CtlCmd `cmd:""`
 		}
-		p, err := kong.New(&fresh)
+		p, err := kong.New(&fresh, kong.Vars(CLIVars()))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -142,6 +142,7 @@ var msgCatalog = map[string]msgDef{
 	"common.query_bad_time":                         {en: "invalid {{name}} {{value}}: use RFC3339 or YYYY-MM-DD[THH:MM[:SS]]"},
 	"common.query_not_bool":                         {en: "invalid {{name}} {{value}}: use true or false"},
 	"common.query_not_integer":                      {en: "invalid {{name}} {{value}}: not an integer"},
+	"common.query_not_one_of":                       {en: "invalid {{name}} {{value}}: use one of {{accepted}}"},
 	"config.control_chars":                          {en: "{{name}} must not contain control characters", admin: true},
 	"config.int_max":                                {en: "{{name}} must be {{max}} or less", admin: true},
 	"config.int_min":                                {en: "{{name}} must be {{min}} or more", admin: true},

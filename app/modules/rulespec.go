@@ -7,6 +7,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -17,6 +18,9 @@ const (
 	CategoryAlert  = "alert"
 	CategoryNormal = "normal"
 )
+
+// DetectionCategories lists every category of a detection.
+var DetectionCategories = []string{CategoryAlert, CategoryNormal}
 
 // IfMissing markers of a rule element.
 const (
@@ -301,7 +305,7 @@ func ValidateRelPath(p string) error {
 }
 
 func validCategory(c string, allowEmpty bool) bool {
-	return c == CategoryAlert || c == CategoryNormal || (allowEmpty && c == "")
+	return slices.Contains(DetectionCategories, c) || (allowEmpty && c == "")
 }
 
 // Validate returns every problem found in the content (empty when valid),

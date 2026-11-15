@@ -505,9 +505,9 @@ interface TemplateDetail extends TemplateSummary { content: RuleContent }
 | GET | `/detections/{agent_id}/{id}` | V | - | `Detection` |
 | POST | `/detections/ack` | A | `{"items":[{"agent_id","id"}]}` | `{"acknowledged":N}` |
 
-クエリ: `agent_id`、`category`（alert/normal）、`type`、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`（0 以上、最大 1000000）。
+クエリ: `agent_id`、`category`（alert/normal）、`type`（`DetectionType` の値）、`from`、`to`（最後の発生時刻で絞り込み）、`acknowledged`（true/false）、`suppressed`（true/false）、`limit`（既定 100、最大 500）、`offset`（0 以上、最大 1000000）。
 
-`from` と `to` は RFC3339、または `YYYY-MM-DD`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DDTHH:MM:SS`（ローカル時間）です。`acknowledged` と `suppressed` は `true` / `false`（`1` / `0` も可）です。`agent_id`、`limit`、`offset` は整数で、`limit` と `offset` は範囲外なら範囲内に丸めます。`YYYY-MM-DDTHH:MM[:SS]` と `YYYY-MM-DD` のようにタイムゾーンを持たない値は、セントラルのローカル時間として解釈します。空の値は指定なしとして扱います。解釈できない値は、その項目名を示すメッセージとともに 400 を返します。
+`from` と `to` は RFC3339、または `YYYY-MM-DD`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DDTHH:MM:SS`（ローカル時間）です。`acknowledged` と `suppressed` は `true` / `false`（`1` / `0` も可）です。`agent_id`、`limit`、`offset` は整数で、`limit` と `offset` は範囲外なら範囲内に丸めます。`YYYY-MM-DDTHH:MM[:SS]` と `YYYY-MM-DD` のようにタイムゾーンを持たない値は、セントラルのローカル時間として解釈します。空の値は指定なしとして扱います。解釈できない値は、その項目名を示すメッセージとともに 400 を返します。`category` と `type` は上の値だけを受け付け、それ以外の値（大文字にした値、前後に空白のある値を含む）は 400 で、`error` は `invalid <項目名> "<値>": use one of <受け付ける値>` です（コード `common.query_not_one_of`。`params` の `accepted` は受け付ける値の一覧で、例 `invalid type "bogus": use one of exec, denied, read, network, writable, exec_file`）。
 
 ```ts
 type DetectionType = 'exec' | 'denied' | 'read' | 'network' | 'writable' | 'exec_file';
@@ -567,7 +567,7 @@ interface CertStatus {
 | GET | `/history?category=&limit=&offset=` | V | - | `{"items":HistoryItem[],"total":N}` |
 | --- | --- | --- | --- | --- |
 
-`limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。
+`limit`（既定 100、最大 500）と `offset`（既定 0、最大 10000000）は整数で、範囲外は範囲内に丸めます。整数として解釈できない値は 400 を返します。`category` は `HistoryCategory` の値だけを受け付け、空の値は指定なしです。それ以外の値は 400 で、`error` は `invalid category "<値>": use one of account, rule, token, certificate, rejected, template, suppression, detection, config, command` です（コード `common.query_not_one_of`。8 章）。
 
 閲覧者には、分類が `account`（アカウント）、`config`（システム設定）、`command`（コマンドセットの変更と実行指示）の行を返しません（`total` にも数えません）。`category` にこれらを指定した場合は、空の一覧を返します。
 

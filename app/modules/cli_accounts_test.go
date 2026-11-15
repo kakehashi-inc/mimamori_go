@@ -12,7 +12,7 @@ func TestAccountCommandArguments(t *testing.T) {
 		Ctl     CtlCmd     `cmd:""`
 		Central CentralCmd `cmd:""`
 	}
-	parser, err := kong.New(&cli)
+	parser, err := kong.New(&cli, kong.Vars(CLIVars()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestAccountCommandArguments(t *testing.T) {
 			Ctl     CtlCmd     `cmd:""`
 			Central CentralCmd `cmd:""`
 		}
-		p, err := kong.New(&fresh)
+		p, err := kong.New(&fresh, kong.Vars(CLIVars()))
 		if err != nil {
 			t.Fatal(err)
 		}

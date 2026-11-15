@@ -81,11 +81,14 @@ func TestErrorAnswersCarryMessage(t *testing.T) {
 		{"core readJSON trailing data", e.rawRequest(e.agent, "POST", "/admin/v1/tokens", `{"name":"t"} {}`, cliHdr, "127.0.0.1:1"), 400, "common.invalid_body_trailing"},
 		{"core readJSON syntax", e.rawRequest(e.agent, "POST", "/admin/v1/tokens", `{"name":`, cliHdr, "127.0.0.1:1"), 400, "common.invalid_body"},
 		{"core queryInt", e.cli("GET", "/history?limit=x", nil), 400, "common.query_not_integer"},
+		{"core queryOneOf", e.cli("GET", "/history?category=x", nil), 400, "common.query_not_one_of"},
 		// api_routes.go
 		{"api_routes parseTime", e.cli("GET", "/detections?from=garbage", nil), 400, "common.query_bad_time"},
 		// api_detections.go
 		{"api_detections boolQuery", e.cli("GET", "/detections?acknowledged=yes", nil), 400, "common.query_not_bool"},
 		{"api_detections agent_id", e.cli("GET", "/detections?agent_id=abc", nil), 400, "common.query_agent_id"},
+		{"api_detections category", e.cli("GET", "/detections?category=x", nil), 400, "common.query_not_one_of"},
+		{"api_detections type filter", e.cli("GET", "/detections?type=x", nil), 400, "common.query_not_one_of"},
 		{"api_detections type", e.cli("POST", "/suppressions", map[string]any{"type": "nope", "exe": "/bin/x"}), 400, "suppression.type_invalid"},
 		{"api_detections control", e.cli("POST", "/suppressions", map[string]any{"exe": "/bin/a\x00b"}), 400, "suppression.field_control"},
 		{"api_detections too long", e.cli("POST", "/suppressions", map[string]any{"exe": "/" + strings.Repeat("x", 4096)}), 400, "suppression.field_too_long_bytes"},

@@ -669,7 +669,8 @@
             "query_agent_id": "agent_id の値 {{value}} が整数ではありません。",
             "query_bad_time": "{{name}} の値 {{value}} が正しくありません。RFC3339 か YYYY-MM-DD[THH:MM[:SS]] の形式で指定してください。",
             "query_not_bool": "{{name}} の値 {{value}} が正しくありません。true か false を指定してください。",
-            "query_not_integer": "{{name}} の値 {{value}} が整数ではありません。"
+            "query_not_integer": "{{name}} の値 {{value}} が整数ではありません。",
+            "query_not_one_of": "{{name}} の値 {{value}} が正しくありません。{{accepted}} のいずれかを指定してください。"
         },
         "detection": {
             "not_found": "検知が見つかりません。"
