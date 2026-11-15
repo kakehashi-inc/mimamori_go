@@ -20,7 +20,8 @@ import (
 // The command set definitions of one agent together larger than the largest
 // request body (32 MiB) reach the agent over HTTPS: the agent reads the
 // whole sync answer, stores the definitions and runs a request delivered
-// with them; ctl command-sets list reads the whole list.
+// with them; ctl command-sets list reads the whole list. What the last report
+// of the stop leaves queued goes with the round of the agent's next start.
 func TestDefinitionsLargerThanRequestBody(t *testing.T) {
 	s := startServe(t, serveOpts{idle: 30 * time.Second})
 	e := s.e
@@ -47,14 +48,17 @@ func TestDefinitionsLargerThanRequestBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	portNum, _ := strconv.Atoi(port)
-	tr, err := modules.NewRemoteTransport(&modules.AgentConfig{AgentID: "m-big", CentralHost: host, CentralPort: portNum,
-		Token: tok, CAPEMs: e.c.currentCAPEMs()})
-	if err != nil {
-		t.Fatal(err)
+	transport := func() *modules.RemoteTransport {
+		tr, err := modules.NewRemoteTransport(&modules.AgentConfig{AgentID: "m-big", CentralHost: host, CentralPort: portNum,
+			Token: tok, CAPEMs: e.c.currentCAPEMs()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr
 	}
 	db := agentLocalDB(t)
 	var logs lockedBuffer
-	rt := modules.NewAgentRuntime(db, tr, log.New(&logs, "", 0))
+	rt := modules.NewAgentRuntime(db, transport(), log.New(&logs, "", 0))
 	stop, quit := make(chan struct{}), make(chan struct{})
 	defer close(quit)
 	go func() {
@@ -74,7 +78,9 @@ func TestDefinitionsLargerThanRequestBody(t *testing.T) {
 		close(stop)
 	}()
 	rt.Run(stop)
-	rt.Round()
+	// The stop cuts the requests of the transport Run used: the round of
+	// the next start sends what is left.
+	modules.NewAgentRuntime(db, transport(), log.New(&logs, "", 0)).Round()
 	if stored := models.GetLocalState(db.Read(), modules.StateCommandDefinitions); len(stored) <= modules.MaxRequestBody {
 		t.Fatalf("stored definitions: %d bytes; log: %s", len(stored), logs.String())
 	}

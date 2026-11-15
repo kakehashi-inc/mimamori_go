@@ -588,7 +588,7 @@ func TestDialIdleEveryAddressGetsTheWholeTime(t *testing.T) {
 		}
 	}()
 	start := time.Now()
-	c, err := dialIdle(net.JoinHostPort("two.test", strconv.Itoa(port)), idle, fakeDNS(t, "two.test", 0, false, "127.0.0.2", "127.0.0.3"))
+	c, err := dialIdle(context.Background(), net.JoinHostPort("two.test", strconv.Itoa(port)), idle, fakeDNS(t, "two.test", 0, false, "127.0.0.2", "127.0.0.3"))
 	took := time.Since(start)
 	if err != nil {
 		t.Fatalf("dial after %v: %v", took, err)
@@ -610,12 +610,12 @@ func TestDialIdleNoAddressConnects(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	dns := fakeDNS(t, "two.test", 0, false, "127.0.0.2", "127.0.0.3")
-	_, err = dialIdle(net.JoinHostPort("two.test", strconv.Itoa(port)), time.Second, dns)
+	_, err = dialIdle(context.Background(), net.JoinHostPort("two.test", strconv.Itoa(port)), time.Second, dns)
 	var oe *net.OpError
 	if !errors.Is(err, syscall.ECONNREFUSED) || !errors.As(err, &oe) || oe.Addr == nil || oe.Addr.String() != net.JoinHostPort("127.0.0.2", strconv.Itoa(port)) {
 		t.Fatalf("both addresses refuse: %v, want the refusal of the first one", err)
 	}
-	_, err = dialIdle(net.JoinHostPort("other.test", "1"), time.Second, dns)
+	_, err = dialIdle(context.Background(), net.JoinHostPort("other.test", "1"), time.Second, dns)
 	var de *net.DNSError
 	if !errors.As(err, &de) || !de.IsNotFound || !strings.HasPrefix(err.Error(), "dial tcp: lookup other.test") {
 		t.Fatalf("unknown name: %v", err)
@@ -630,7 +630,7 @@ func TestDialIdleResolutionBounded(t *testing.T) {
 	t.Parallel()
 	const idle = 700 * time.Millisecond
 	start := time.Now()
-	_, err := dialIdle("slow.test:25", idle, fakeDNS(t, "slow.test", 0, true, "127.0.0.1"))
+	_, err := dialIdle(context.Background(), "slow.test:25", idle, fakeDNS(t, "slow.test", 0, true, "127.0.0.1"))
 	took := time.Since(start)
 	var de *net.DNSError
 	if !errors.As(err, &de) || !de.IsTimeout || !strings.Contains(err.Error(), "slow.test") {
@@ -644,7 +644,7 @@ func TestDialIdleResolutionBounded(t *testing.T) {
 	}
 	defer ln.Close()
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	c, err := dialIdle(net.JoinHostPort("late.test", port), idle, fakeDNS(t, "late.test", 100*time.Millisecond, false, "127.0.0.1"))
+	c, err := dialIdle(context.Background(), net.JoinHostPort("late.test", port), idle, fakeDNS(t, "late.test", 100*time.Millisecond, false, "127.0.0.1"))
 	if err != nil {
 		t.Fatalf("an answer within the idle time: %v", err)
 	}

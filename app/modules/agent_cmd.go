@@ -62,9 +62,22 @@ func (t *RemoteTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 	return &resp, nil
 }
 
-// Report implements AgentTransport.
+// Report implements AgentTransport. The last report, which says that the
+// agent stops, is not cut by the stop.
 func (t *RemoteTransport) Report(batch *ReportBatch) error {
-	return t.client.JSON("POST", "/agent/v1/report", batch, nil)
+	c := t.client
+	if batch.Stopping {
+		uncut := *t.client
+		uncut.cut = nil
+		c = &uncut
+	}
+	return c.JSON("POST", "/agent/v1/report", batch, nil)
+}
+
+// cutRequests implements requestCutter: the agent's stop cuts the sync or
+// report in progress, and no request but the last report starts after it.
+func (t *RemoteTransport) cutRequests(stop <-chan struct{}) {
+	t.client.cut = stop
 }
 
 // AgentInitOptions are the arguments of "agent init".

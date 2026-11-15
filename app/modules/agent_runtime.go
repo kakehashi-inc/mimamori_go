@@ -307,12 +307,13 @@ func (rt *AgentRuntime) ReapplyStored() {
 // After the stop no entry starts; a monitoring step in progress completes
 // (see monitorStep), and a running command is ended (SIGTERM to its process
 // group, SIGKILL to what is left after the grace) and its run is recorded.
-// The communication flow does no round after the stop; when every worker has
-// returned, the output pipes that processes left behind by commands still
-// hold are closed (their readers end before Run returns), and the
-// communication flow sends one last report that says that the agent stops
-// (stopping true) and carries what is queued (one attempt; what fails stays
-// queued for the next start). Then Run returns. While it runs, the state key
+// The communication flow does no round after the stop: a sync or report in
+// progress is cut (requestCutter) and the rest of the round is not sent.
+// When every worker has returned, the output pipes that processes left
+// behind by commands still hold are closed (their readers end before Run
+// returns), and the communication flow sends one last report that says that
+// the agent stops (stopping true) and carries what is queued (one attempt;
+// what fails stays queued for the next start). Then Run returns. While it runs, the state key
 // running_workers holds the worker count in use (for agent status and agent
 // set-workers).
 //
@@ -325,6 +326,9 @@ func (rt *AgentRuntime) ReapplyStored() {
 func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	rt.stop = stop
 	rt.sched.stop = stop
+	if c, ok := rt.comm.transport.(requestCutter); ok {
+		c.cutRequests(stop)
+	}
 	if err := recordRunningWorkers(rt.DB, rt.workers); err != nil {
 		rt.logf("failed to record the worker count in use: %v", err)
 	}

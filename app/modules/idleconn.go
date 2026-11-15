@@ -90,21 +90,22 @@ func NewIdleConn(c *net.TCPConn, idle time.Duration, onClose func()) (*IdleConn,
 // own. The first address that connects is used; when none does, the error
 // of the first attempt is returned.
 func DialIdle(addr string, idle time.Duration) (*IdleConn, error) {
-	return dialIdle(addr, idle, net.DefaultResolver)
+	return dialIdle(context.Background(), addr, idle, net.DefaultResolver)
 }
 
 // dialIdle is DialIdle with the resolver r (tests give one that asks a DNS
-// server of the test).
-func dialIdle(addr string, idle time.Duration, r *net.Resolver) (*IdleConn, error) {
+// server of the test); when ctx ends, the resolution and the attempt in
+// progress end with it (the agent's stop cuts its requests).
+func dialIdle(ctx context.Context, addr string, idle time.Duration, r *net.Resolver) (*IdleConn, error) {
 	host, service, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: err}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), idle)
-	ips, err := r.LookupIPAddr(ctx, host)
+	lookup, cancel := context.WithTimeout(ctx, idle)
+	ips, err := r.LookupIPAddr(lookup, host)
 	port := 0
 	if err == nil {
-		port, err = r.LookupPort(ctx, "tcp", service)
+		port, err = r.LookupPort(lookup, "tcp", service)
 	}
 	cancel()
 	if err != nil {
@@ -112,8 +113,11 @@ func dialIdle(addr string, idle time.Duration, r *net.Resolver) (*IdleConn, erro
 	}
 	var first error
 	for _, ip := range ips {
+		if ctx.Err() != nil {
+			break
+		}
 		d := net.Dialer{Timeout: idle}
-		c, err := d.Dial("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+		c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 		if err != nil {
 			if first == nil {
 				first = err

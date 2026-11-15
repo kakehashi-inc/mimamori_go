@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -32,6 +33,9 @@ type parTransport struct {
 	// reportFlows holds the flow (goroutine number) of each report attempt.
 	reportFlows []uint64
 	attempts    []time.Time
+	// order is the sequence of the requests received: "sync" at the end of
+	// a sync, "report" at every report attempt.
+	order       []string
 	failReports bool
 	onSync      func(n int)
 	// db, when set, is read at each sync for the running sets.
@@ -65,6 +69,7 @@ func (f *parTransport) Sync(req *SyncRequest) (*SyncResponse, error) {
 	time.Sleep(20 * time.Millisecond)
 	f.mu.Lock()
 	f.syncs = append(f.syncs, seen)
+	f.order = append(f.order, "sync")
 	count := len(f.syncs)
 	r := f.resp
 	onSync := f.onSync
@@ -82,6 +87,7 @@ func (f *parTransport) Report(b *ReportBatch) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attempts = append(f.attempts, time.Now())
+	f.order = append(f.order, "report")
 	f.reportFlows = append(f.reportFlows, goroutineNumber())
 	if f.failReports {
 		return os.ErrDeadlineExceeded
@@ -91,6 +97,25 @@ func (f *parTransport) Report(b *ReportBatch) error {
 		f.reports = append(f.reports, &b.Reports[i])
 	}
 	return nil
+}
+
+// roundsOrder matches the requests of a run of the agent: one sync and then
+// one report per round, except the round whose sync the stop came after (the
+// rest of a round is not sent after the stop), and the last report.
+var roundsOrder = regexp.MustCompile(`^(sync report )*(sync )?report$`)
+
+// checkRounds checks, with f.mu held, the order of the requests (roundsOrder)
+// and that only the last batch says that the agent stops.
+func (f *parTransport) checkRounds(t *testing.T) {
+	t.Helper()
+	if seq := strings.Join(f.order, " "); !roundsOrder.MatchString(seq) {
+		t.Fatalf("requests %q: want one sync and one report per round and the last report", seq)
+	}
+	for i, b := range f.batches {
+		if b.Stopping != (i == len(f.batches)-1) {
+			t.Fatalf("batch %d of %d: stopping %v", i+1, len(f.batches), b.Stopping)
+		}
+	}
 }
 
 func (f *parTransport) seen() []syncSeen {
@@ -478,9 +503,10 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 
 // TestOutboxOrderWithWorkers: with four workers running many short sets next
 // to the monitoring steps, the central receives every batch once and one
-// batch per round (and the last one at the stop), every run's reports in the
-// order start, commands, close, and the host information only in the
-// reports of the monitoring steps.
+// batch per round (none for the round whose sync the stop came after, and
+// the last one at the stop), every run's reports in the order start,
+// commands, close, and the host information only in the reports of the
+// monitoring steps.
 func TestOutboxOrderWithWorkers(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -510,9 +536,10 @@ func TestOutboxOrderWithWorkers(t *testing.T) {
 		}
 		seenIDs[b.ReportID] = true
 	}
-	if len(tr.batches) != len(tr.attempts) || len(tr.batches) != len(tr.syncs)+1 {
-		t.Fatalf("%d batches for %d report requests and %d rounds and the stop", len(tr.batches), len(tr.attempts), len(tr.syncs))
+	if len(tr.batches) != len(tr.attempts) {
+		t.Fatalf("%d batches for %d report requests", len(tr.batches), len(tr.attempts))
 	}
+	tr.checkRounds(t)
 	periodic, hostInfos := 0, 0
 	next := map[string]int{} // run UID: the next result position expected (-1: the start)
 	closedRuns := 0
@@ -633,8 +660,9 @@ func TestOutboxRewriteShrinksOnly(t *testing.T) {
 // TestReportOneRequestPerStep: while the central takes no reports, two sets
 // run to their end and many items are queued; every round, before and after
 // the central takes reports again, makes exactly one sync and one report
-// request, the stop one more report (the last one, stopping true), and the
-// queued items reach the central.
+// request (the round whose sync the stop came after sends no report), the
+// stop one more report (the last one, stopping true), and the queued items
+// reach the central.
 func TestReportOneRequestPerStep(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -678,14 +706,7 @@ func TestReportOneRequestPerStep(t *testing.T) {
 	<-done
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	if len(tr.attempts) != len(tr.syncs)+1 {
-		t.Fatalf("%d report requests for %d rounds and the stop, want one each", len(tr.attempts), len(tr.syncs))
-	}
-	for i, b := range tr.batches {
-		if b.Stopping != (i == len(tr.batches)-1) {
-			t.Fatalf("batch %d of %d: stopping %v", i+1, len(tr.batches), b.Stopping)
-		}
-	}
+	tr.checkRounds(t)
 	runs := 0
 	for _, r := range tr.reports {
 		for _, run := range r.CommandRuns {

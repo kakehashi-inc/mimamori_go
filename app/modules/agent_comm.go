@@ -2,6 +2,7 @@ package modules
 
 import (
 	"errors"
+	"net"
 	"strconv"
 	"time"
 
@@ -21,6 +22,16 @@ import (
 // roundGap is the least time between the end of a round and the start of
 // the next one.
 const roundGap = time.Second
+
+// requestCutter is a transport whose requests the agent's stop cuts: when
+// the channel given to cutRequests is closed, a sync or report in progress
+// ends at once with errRequestCut and none starts afterwards, except the
+// last report, which says that the agent stops (RemoteTransport; the
+// built-in agent hands its requests over in process and waits for nothing
+// outside).
+type requestCutter interface {
+	cutRequests(stop <-chan struct{})
+}
 
 // commState is what only the communication flow uses: the transport and the
 // agent's configuration.
@@ -116,15 +127,23 @@ func (rt *AgentRuntime) waitRound(next *time.Time, lastEnd time.Time) bool {
 	}
 }
 
-// Round performs one round as the communication flow does: a sync, then the
-// report of what is queued.
+// Round performs one round, a sync and then the report of what is queued,
+// also after the agent stopped (tests send what is left after Run with it;
+// a transport whose requests the stop cut, requestCutter, sends nothing
+// after the stop, so they give a new runtime a new transport for that).
 func (rt *AgentRuntime) Round() {
-	rt.round()
+	rt.sync()
+	rt.flushOutbox()
 }
 
-// round is one round: a sync, then the report of what is queued.
+// round is one round: a sync, then the report of what is queued. After the
+// stop the report of the round is not sent (the last report carries what is
+// queued).
 func (rt *AgentRuntime) round() {
 	rt.sync()
+	if isClosed(rt.stop) {
+		return
+	}
 	rt.flushOutbox()
 }
 
@@ -244,7 +263,13 @@ func (rt *AgentRuntime) saveConfigUpdates(resp *SyncResponse) {
 
 func (rt *AgentRuntime) logConnectionError(op string, err error) {
 	var he *HTTPError
+	var ne net.Error
 	switch {
+	case errors.Is(err, errRequestCut):
+		// A cut report keeps its batch (the last report sends it again); the
+		// requests a cut sync was handed are given back by the last report.
+		rt.logf("%s: cut by the agent's stop", op)
+		return
 	case errors.As(err, &he) && he.Status == 401:
 		rt.logf("%s: the central rejected the token (expired, revoked, reissued or bound to another agent instance). Re-initialize the agent with a valid token", op)
 	case IsSilenceCut(err):
@@ -255,11 +280,13 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
 	case errors.As(err, &he):
 		rt.logf("%s: the central answered %v", op, err)
+	case errors.As(err, &ne):
+		rt.logf("%s: cannot reach the central: %v", op, err)
 	case rt.comm.config == nil:
 		// The built-in agent hands its requests to the central in process.
 		rt.logf("%s: the central could not take it: %v", op, err)
 	default:
-		rt.logf("%s: cannot reach the central: %v", op, err)
+		rt.logf("%s failed: %v", op, err)
 	}
 	if rt.comm.config != nil && rt.comm.config.TokenExpiresAt > 0 {
 		left := time.Until(time.Unix(rt.comm.config.TokenExpiresAt, 0))

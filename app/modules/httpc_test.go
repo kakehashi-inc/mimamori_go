@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -262,5 +263,79 @@ func TestSilenceMessages(t *testing.T) {
 		"sync: the central sent nothing for 60 seconds: read tcp: i/o timeout\n"+
 		"sync: cannot reach the central: dial tcp: i/o timeout\n" {
 		t.Fatalf("log: %q", logged.String())
+	}
+}
+
+// TestClientCutByTheStop: the agent's stop cuts a request at once, while it
+// waits for the answer and during the TLS handshake (the idle time of these
+// requests is a minute), and no request starts after it. The last report of
+// the agent (stopping true) is not cut.
+func TestClientCutByTheStop(t *testing.T) {
+	sc, cc := clientTestTLS(t)
+	cutAfter := func(c *HTTPSClient, started <-chan struct{}) (time.Duration, error) {
+		t.Helper()
+		cut := make(chan struct{})
+		c.cut, c.idle = cut, time.Minute
+		go func() {
+			<-started
+			time.Sleep(200 * time.Millisecond)
+			close(cut)
+		}()
+		start := time.Now()
+		_, _, err := c.Do("POST", "/agent/v1/sync", []byte(`{}`))
+		return time.Since(start), err
+	}
+
+	// Waiting for the answer.
+	ln := clientTestListener(t, 0)
+	got := make(chan struct{})
+	serveOne(t, ln, sc, func(c *tls.Conn, req *http.Request) {
+		_, _ = io.Copy(io.Discard, req.Body)
+		close(got)
+		time.Sleep(5 * time.Second)
+	})
+	if took, err := cutAfter(testClient(ln, cc), got); !errors.Is(err, errRequestCut) || took > 2*time.Second {
+		t.Fatalf("waiting for the answer: %v after %s", err, took)
+	}
+
+	// The TLS handshake: the server accepts and says nothing.
+	ln = clientTestListener(t, 0)
+	accepted := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		close(accepted)
+		time.Sleep(5 * time.Second)
+	}()
+	if took, err := cutAfter(testClient(ln, cc), accepted); !errors.Is(err, errRequestCut) || took > 2*time.Second {
+		t.Fatalf("in the handshake: %v after %s", err, took)
+	}
+
+	// After the stop nothing starts; the last report goes.
+	ln = clientTestListener(t, 0)
+	var conns atomic.Int32
+	serveOne(t, ln, sc, func(c *tls.Conn, req *http.Request) {
+		conns.Add(1)
+		_, _ = io.Copy(io.Discard, req.Body)
+		_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"))
+	})
+	tr := &RemoteTransport{client: testClient(ln, cc)}
+	stop := make(chan struct{})
+	close(stop)
+	tr.cutRequests(stop)
+	if _, err := tr.Sync(&SyncRequest{}); !errors.Is(err, errRequestCut) {
+		t.Fatalf("a sync after the stop: %v", err)
+	}
+	if err := tr.Report(&ReportBatch{ReportID: strings.Repeat("a", 32), Reports: []ReportRequest{}}); !errors.Is(err, errRequestCut) {
+		t.Fatalf("a report of a round after the stop: %v", err)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("connections after the stop: %d", n)
+	}
+	if err := tr.Report(&ReportBatch{ReportID: strings.Repeat("a", 32), Stopping: true, Reports: []ReportRequest{}}); err != nil {
+		t.Fatalf("the last report: %v", err)
 	}
 }

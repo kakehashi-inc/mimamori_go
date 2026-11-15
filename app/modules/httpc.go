@@ -3,6 +3,7 @@ package modules
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,15 @@ type HTTPSClient struct {
 	// idle is the longest silence waited for: IdleTimeout (zero), less in
 	// tests.
 	idle time.Duration
+	// cut, when not nil, ends the requests when it is closed (the agent's
+	// stop): none starts after it, and one in progress (connecting, in the
+	// TLS handshake, sending or waiting for the answer) ends at once, its
+	// connection closed, with errRequestCut.
+	cut <-chan struct{}
 }
+
+// errRequestCut is the error of a request that the agent's stop cut.
+var errRequestCut = errors.New("the request was cut by the agent's stop")
 
 // HTTPError is returned for a non-2xx response.
 type HTTPError struct {
@@ -84,15 +93,41 @@ func IsSilenceCut(err error) bool {
 
 // Do sends one request and returns the status and body.
 func (c *HTTPSClient) Do(method, path string, body []byte) (int, []byte, error) {
+	status, data, err := c.do(method, path, body)
+	if err != nil && isClosed(c.cut) {
+		return 0, nil, errRequestCut
+	}
+	return status, data, err
+}
+
+// do is Do; an error after the cut closed is replaced by errRequestCut.
+func (c *HTTPSClient) do(method, path string, body []byte) (int, []byte, error) {
+	if isClosed(c.cut) {
+		return 0, nil, errRequestCut
+	}
 	idle := c.idle
 	if idle <= 0 {
 		idle = IdleTimeout
 	}
-	raw, err := DialIdle(c.Address, idle)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if c.cut != nil {
+		go func() {
+			select {
+			case <-c.cut:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	raw, err := dialIdle(ctx, c.Address, idle, net.DefaultResolver)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer func() { _ = raw.Close() }()
+	// The connection is closed when the cut comes while the request runs.
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
 	cfg := c.TLS.Clone()
 	if cfg.ServerName == "" {
 		cfg.ServerName, _, _ = net.SplitHostPort(c.Address)

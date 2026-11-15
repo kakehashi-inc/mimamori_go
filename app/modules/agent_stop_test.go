@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -215,4 +216,115 @@ func childrenOf(pid int) string {
 		}
 	}
 	return strings.Join(all, " ")
+}
+
+// blockingCentral answers the first sync at once; a later sync waits until
+// the agent's stop cuts it (cutRequests), or release is closed.
+type blockingCentral struct {
+	mu      sync.Mutex
+	first   SyncResponse
+	syncs   int
+	inSync  chan struct{}
+	release chan struct{}
+	cut     <-chan struct{}
+	calls   []string
+}
+
+func (c *blockingCentral) cutRequests(stop <-chan struct{}) { c.cut = stop }
+
+func (c *blockingCentral) note(s string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, s)
+}
+
+func (c *blockingCentral) Sync(req *SyncRequest) (*SyncResponse, error) {
+	c.mu.Lock()
+	c.syncs++
+	n := c.syncs
+	c.mu.Unlock()
+	if isClosed(c.cut) {
+		return nil, errRequestCut
+	}
+	c.note(fmt.Sprintf("sync %d", n))
+	if n == 1 {
+		r := c.first
+		return &r, nil
+	}
+	if n == 2 {
+		close(c.inSync)
+	}
+	select {
+	case <-c.cut:
+		c.note(fmt.Sprintf("sync %d cut", n))
+		return nil, errRequestCut
+	case <-c.release:
+		return &SyncResponse{DefaultIntervalSec: 1}, nil
+	}
+}
+
+func (c *blockingCentral) Report(b *ReportBatch) error {
+	if isClosed(c.cut) && !b.Stopping {
+		return errRequestCut
+	}
+	c.note(fmt.Sprintf("report stopping=%v", b.Stopping))
+	return nil
+}
+
+func (c *blockingCentral) seen() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.calls...)
+}
+
+// TestStopCutsTheRoundInRequest: the stop comes while the communication
+// flow waits for the answer to a sync and a worker runs a command. The
+// command is ended at once, the sync is cut and the rest of the round is not
+// sent; after the workers ended, the last request is the report with
+// stopping true, and Run returns without waiting for the central.
+func TestStopCutsTheRoundInRequest(t *testing.T) {
+	requireBash(t)
+	c := &blockingCentral{inSync: make(chan struct{}), release: make(chan struct{})}
+	c.first = SyncResponse{DefaultIntervalSec: 1, CommandSets: defsOf(testSet(1, PurposeRunOnly, "sleep 30")),
+		CommandRequests: manualRequests(1, 1)}
+	rt := newCommandRuntime(t, c)
+	rt.SetWorkers(2)
+	rt.link.syncInterval = 1
+	var logs lockedLog
+	rt.Logger = logs.logger()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	defer close(c.release)
+	waitFor(t, "the run to start", func() bool { all, _ := countRuns(rt.DB); return all == 1 })
+	select {
+	case <-c.inSync:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no second sync")
+	}
+	before := len(c.seen())
+	stopAt := time.Now()
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run waits for the sync the stop should have cut")
+	}
+	took := time.Since(stopAt)
+	calls := c.seen()[before:]
+	if want := []string{"sync 2 cut", "report stopping=true"}; !slices.Equal(calls, want) {
+		t.Fatalf("requests from the stop on: %v, want %v", calls, want)
+	}
+	if took > 3*time.Second {
+		t.Fatalf("Run returned %s after the stop", took)
+	}
+	if _, finished := countRuns(rt.DB); finished != 1 {
+		t.Fatalf("the run cut by the stop was not closed")
+	}
+	if !strings.Contains(logs.String(), "sync: cut by the agent's stop") {
+		t.Fatalf("log: %q", logs.String())
+	}
 }

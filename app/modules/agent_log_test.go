@@ -3,7 +3,9 @@ package modules
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -30,8 +32,10 @@ func TestLogNamesTheCentralsAnswer(t *testing.T) {
 		{"status 500", &HTTPError{Status: 500, Body: `{"error":"internal error"}`}, true,
 			"report: the central answered HTTP 500: internal error"},
 		{"status 503", &HTTPError{Status: 503}, true, "report: the central answered HTTP 503: Service Unavailable"},
-		{"no connection", errors.New("dial tcp 127.0.0.1:1: connect: connection refused"), true,
-			"report: cannot reach the central: dial tcp 127.0.0.1:1: connect: connection refused"},
+		{"no connection", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}, true,
+			"report: cannot reach the central: dial tcp: connection refused"},
+		{"cut by the stop", errRequestCut, true, "report: cut by the agent's stop"},
+		{"answer not understood", errors.New("unexpected EOF"), true, "report failed: unexpected EOF"},
 		{"built-in agent", errors.New("database is locked (5) (SQLITE_BUSY)"), false,
 			"report: the central could not take it: database is locked (5) (SQLITE_BUSY)"},
 	} {
