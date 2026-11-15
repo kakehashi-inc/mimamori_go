@@ -394,13 +394,13 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 }
 
 // recordGroup records the process group of the command that started and the
-// boot time of the host with the run, so that after a forced end of the
-// agent the set does not start again while the group still exists (one
+// boot of the host (hostBoot) with the run, so that after a forced end of
+// the agent the set does not start again while the group still exists (one
 // attempt: the command runs already; a failure is logged).
 func (rt *AgentRuntime) recordGroup(def *CommandSetDef, uid string, pos, pgid int) {
-	boot, err := bootTime()
+	boot, err := currentBoot()
 	if err == nil {
-		err = rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionGroup(tx, uid, pgid, boot) })
+		err = rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionGroup(tx, uid, pgid, boot.String()) })
 	}
 	if err != nil {
 		rt.logf("command set %q: recording the process group of command %d of run %s failed: %v", def.Name, pos+1, uid, err)
@@ -562,9 +562,9 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 		return
 	}
 	now := rt.now().Unix()
-	boot, bootErr := bootTime()
+	boot, bootErr := currentBoot()
 	for _, e := range runs {
-		if e.RunningPgid > 0 && bootErr == nil && sameBoot(e.RunningBoot, boot) && groupExists(e.RunningPgid) {
+		if e.RunningPgid > 0 && bootErr == nil && sameBoot(parseHostBoot(e.RunningBoot), boot) && groupExists(e.RunningPgid) {
 			rt.sched.hold(e.SetID, e.RunningPgid)
 			rt.logf("command set run %s: its command still runs as process group %d; the set does not start until that group is gone",
 				e.RunUID, e.RunningPgid)

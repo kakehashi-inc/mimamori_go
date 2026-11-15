@@ -48,7 +48,7 @@ CREATE TABLE command_executions (
     running_position   INTEGER NOT NULL DEFAULT -1,
     running_started_at INTEGER NOT NULL DEFAULT 0,
     running_pgid       INTEGER NOT NULL DEFAULT 0,
-    running_boot       INTEGER NOT NULL DEFAULT 0
+    running_boot       TEXT    NOT NULL DEFAULT ''
 );
 -- +goose StatementEnd
 

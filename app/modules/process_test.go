@@ -225,3 +225,54 @@ func TestGroupProbeRealZombie(t *testing.T) {
 		t.Fatal("a group that is gone counts as existing")
 	}
 }
+
+// TestHostBoot: the boot of the host is the kernel's boot id when it can be
+// read, else the boot time; the stored form reads back to the same boot.
+// Two boots are the same by their boot ids when both have one (a step of the
+// clock does not matter), else by their boot times within BootTimeSlack.
+func TestHostBoot(t *testing.T) {
+	dir := t.TempDir()
+	idFile := filepath.Join(dir, "boot_id")
+	if err := os.WriteFile(idFile, []byte("4a00dcb9-ac2b-4353-be44-9968c34afdcb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bootIDFile = idFile
+	bootTime = func() (int64, error) { return 1_800_000_000, nil }
+	t.Cleanup(func() { bootIDFile, bootTime = "/proc/sys/kernel/random/boot_id", sysBootTime })
+	b, err := currentBoot()
+	if err != nil || b.id != "4a00dcb9-ac2b-4353-be44-9968c34afdcb" || b.time != 1_800_000_000 {
+		t.Fatalf("current boot %+v %v", b, err)
+	}
+	if s := b.String(); s != "1800000000 4a00dcb9-ac2b-4353-be44-9968c34afdcb" || parseHostBoot(s) != b {
+		t.Fatalf("stored form %q reads back as %+v", s, parseHostBoot(s))
+	}
+	bootIDFile = filepath.Join(dir, "missing")
+	if b, err := currentBoot(); err != nil || b.id != "" || b.String() != "1800000000" || parseHostBoot(b.String()) != b {
+		t.Fatalf("without a boot id: %+v %v", b, err)
+	}
+	bootTime = func() (int64, error) { return 0, syscall.ENOSYS }
+	if _, err := currentBoot(); err == nil {
+		t.Fatal("a boot without id and time")
+	}
+	id, other := "4a00dcb9-ac2b-4353-be44-9968c34afdcb", "5b11edca-bd3c-5464-cf55-0a79d45bfedc"
+	slack := int64(BootTimeSlack / time.Second)
+	for _, c := range []struct {
+		a, b hostBoot
+		same bool
+	}{
+		{hostBoot{id, 1000}, hostBoot{id, 1000}, true},
+		{hostBoot{id, 1000}, hostBoot{id, 1000 + 7200}, true},
+		{hostBoot{id, 1000}, hostBoot{other, 1000}, false},
+		{hostBoot{id, 1000}, hostBoot{"", 1000 + slack}, true},
+		{hostBoot{"", 1000}, hostBoot{other, 1000 - slack - 1}, false},
+		{hostBoot{"", 1000}, hostBoot{"", 1000 + slack}, true},
+		{hostBoot{"", 1000}, hostBoot{"", 1000 + slack + 1}, false},
+		{hostBoot{}, hostBoot{}, false},
+		{parseHostBoot(""), hostBoot{"", 1000}, false},
+		{parseHostBoot("x y"), hostBoot{"y", 5}, true},
+	} {
+		if got := sameBoot(c.a, c.b); got != c.same {
+			t.Errorf("sameBoot(%+v, %+v) = %v", c.a, c.b, got)
+		}
+	}
+}

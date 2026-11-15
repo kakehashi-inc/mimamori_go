@@ -1200,14 +1200,20 @@ func startSurvivor(t *testing.T) *os.Process {
 // start whose recorded process group still exists in the same boot is
 // reported interrupted, and its set does not start (also not for a manual
 // request) until the group has no process left that has not ended: a zombie
-// nobody reaped yet does not keep it; the group is never signalled. A record
-// of another boot, or of a group that is gone, keeps nothing.
+// nobody reaped yet does not keep it; the group is never signalled. The
+// boot is the same when the boot ids are (also after the clock was set),
+// else when the boot times are close. A record of another boot, or of a
+// group that is gone, keeps nothing.
 func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	requireBash(t)
-	boot, err := bootTime()
+	boot, err := currentBoot()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if boot.id == "" {
+		t.Skip("the kernel's boot id cannot be read")
+	}
+	shifted := func(id string, d int64) string { return hostBoot{id: id, time: boot.time + d}.String() }
 	survivor := startSurvivor(t)
 	// A process group that is gone: a process that ended and was reaped.
 	gone, err := os.StartProcess("/bin/sh", []string{"sh", "-c", "exit 0"}, &os.ProcAttr{Sys: &syscall.SysProcAttr{Setsid: true}})
@@ -1219,16 +1225,28 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	}
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 2)
-	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
-		testSet(3, PurposeRunOnly, "echo third")))
+	sets := defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
+		testSet(3, PurposeRunOnly, "echo third"), testSet(4, PurposeRunOnly, "echo clock"), testSet(5, PurposeRunOnly, "echo time"),
+		testSet(6, PurposeRunOnly, "echo old time"))
+	rt.storeCommandDefinitions(sets)
 	for _, e := range []struct {
 		uid  string
 		set  int64
 		pgid int
-		boot int64
-	}{{"alive", 1, survivor.Pid, boot}, {"other-boot", 2, survivor.Pid, boot - 3600}, {"gone", 3, gone.Pid, boot}} {
+		boot string
+	}{
+		{"alive", 1, survivor.Pid, boot.String()},
+		// Another boot id with the same boot time: another boot.
+		{"other-boot", 2, survivor.Pid, shifted("00000000-0000-0000-0000-000000000000", 0)},
+		{"gone", 3, gone.Pid, boot.String()},
+		// The same boot id after the clock was set an hour back.
+		{"clock-set", 4, survivor.Pid, shifted(boot.id, -3600)},
+		// Recorded without a boot id: the boot times decide.
+		{"time-only", 5, survivor.Pid, shifted("", 20)},
+		{"time-only-other", 6, survivor.Pid, shifted("", -3600)},
+	} {
 		insertExecution(t, rt.DB, e.uid, 0, 0)
-		execOnDB(t, rt.DB, fmt.Sprintf(`UPDATE command_executions SET set_id = %d, running_position = 0, running_pgid = %d, running_boot = %d
+		execOnDB(t, rt.DB, fmt.Sprintf(`UPDATE command_executions SET set_id = %d, running_position = 0, running_pgid = %d, running_boot = '%s'
 			WHERE run_uid = '%s'`, e.set, e.pgid, e.boot, e.uid))
 	}
 	var signalled atomic.Int32
@@ -1242,9 +1260,8 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	rt = NewAgentRuntime(rt.DB, tr, nil)
 	rt.SetWorkers(2)
 	rt.link.syncInterval = 1
-	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "echo again"), testSet(2, PurposeRunOnly, "echo other"),
-		testSet(3, PurposeRunOnly, "echo third"))
-	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3)
+	tr.resp.CommandSets = sets
+	tr.resp.CommandRequests = manualRequests(1, 1, 2, 3, 4, 5, 6)
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -1256,10 +1273,12 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 		_ = rt.DB.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE set_id = ? AND request_id > 0 AND finished_at > 0`, set).Scan(&n)
 		return n
 	}
-	waitFor(t, "the sets of the void records", func() bool { return newRuns(2) == 1 && newRuns(3) == 1 })
+	waitFor(t, "the sets of the void records", func() bool { return newRuns(2) == 1 && newRuns(3) == 1 && newRuns(6) == 1 })
 	time.Sleep(2 * time.Second)
-	if n := newRuns(1); n != 0 {
-		t.Fatalf("the set of the surviving group started %d time(s) while the group exists", n)
+	for _, set := range []int64{1, 4, 5} {
+		if n := newRuns(set); n != 0 {
+			t.Fatalf("set %d of the surviving group started %d time(s) while the group exists", set, n)
+		}
 	}
 	if !processAlive(survivor.Pid) || signalled.Load() != 0 {
 		t.Fatalf("the surviving group was signalled (alive %v, %d signals)", processAlive(survivor.Pid), signalled.Load())
@@ -1273,7 +1292,7 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 		st, ok := readProcStat(procDir, survivor.Pid)
 		return ok && st.ended()
 	})
-	waitFor(t, "the set after the group's only process ended", func() bool { return newRuns(1) == 1 })
+	waitFor(t, "the sets after the group's only process ended", func() bool { return newRuns(1) == 1 && newRuns(4) == 1 && newRuns(5) == 1 })
 	if st, ok := readProcStat(procDir, survivor.Pid); !ok || !st.ended() || syscall.Kill(-survivor.Pid, 0) != nil {
 		t.Fatalf("the set did not start with a zombie left in the group: %+v %v", st, ok)
 	}
@@ -1285,13 +1304,14 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 			interrupted[r.RunUID] = true
 		}
 	}
-	if !interrupted["alive"] || !interrupted["other-boot"] || !interrupted["gone"] {
+	if len(interrupted) != 6 {
 		t.Fatalf("runs found unfinished must be reported interrupted: %v", interrupted)
 	}
 }
 
 // TestRunRecordsItsProcessGroup: while a command runs, its process group and
-// the boot time are recorded with the run; after its report nothing is.
+// the boot of the host (boot time and boot id) are recorded with the run;
+// after its report nothing is.
 func TestRunRecordsItsProcessGroup(t *testing.T) {
 	requireBash(t)
 	rt := newCommandRuntime(t, &cmdTransport{})
@@ -1299,17 +1319,64 @@ func TestRunRecordsItsProcessGroup(t *testing.T) {
 	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "echo $$ > "+pidFile+"; sleep 1")))
 	done := runInBackground(rt, &commandJob{def: rt.sched.valid[1], trigger: TriggerManual, requestID: 3})
 	pid := pidFrom(t, pidFile)
-	boot, _ := bootTime()
+	boot, _ := currentBoot()
 	var e *models.CommandExecution
 	waitFor(t, "the recorded group", func() bool {
 		e, _ = models.CommandExecutionByRequest(rt.DB.Read(), 3)
 		return e != nil && e.RunningPgid != 0
 	})
-	if e.RunningPgid != pid || !sameBoot(e.RunningBoot, boot) {
-		t.Fatalf("recorded group %d boot %d, want %d and about %d", e.RunningPgid, e.RunningBoot, pid, boot)
+	recorded := parseHostBoot(e.RunningBoot)
+	if e.RunningPgid != pid || recorded.id != boot.id || recorded.time-boot.time > 1 || boot.time-recorded.time > 1 {
+		t.Fatalf("recorded group %d boot %q, want %d and %q", e.RunningPgid, e.RunningBoot, pid, boot)
 	}
 	returned(t, done)
-	if e, _ = models.CommandExecutionByRequest(rt.DB.Read(), 3); e.RunningPgid != 0 || e.RunningBoot != 0 {
+	if e, _ = models.CommandExecutionByRequest(rt.DB.Read(), 3); e.RunningPgid != 0 || e.RunningBoot != "" {
 		t.Fatalf("after the run: %+v", e)
+	}
+}
+
+// TestSurvivingGroupHeldAfterClockStep: the agent is killed while a command
+// runs and starts again after the clock was set two hours forward (the boot
+// time computed from the clock and the uptime moves with it). The boot id of
+// the kernel is the same, so the record counts for this boot: the set does
+// not start while the command lives.
+func TestSurvivingGroupHeldAfterClockStep(t *testing.T) {
+	requireBash(t)
+	if _, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err != nil {
+		t.Skip("the kernel's boot id cannot be read")
+	}
+	tr := &cmdTransport{}
+	rt1 := newCommandRuntime(t, tr)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	rt1.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, fmt.Sprintf("echo $$ > %s; exec sleep 30", pidFile))))
+	stop1 := make(chan struct{})
+	rt1.stop, rt1.sched.stop = stop1, stop1
+	receiveRequests(rt1, manualRequests(1, 1))
+	done1 := runInBackground(rt1, nextCommandJob(rt1))
+	pid := pidFrom(t, pidFile)
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		close(stop1)
+		<-done1
+	})
+	waitFor(t, "the recorded group", func() bool {
+		e, _ := models.CommandExecutionByRequest(rt1.DB.Read(), 1)
+		return e != nil && e.RunningPgid == pid
+	})
+	// The agent was killed; the clock moved two hours forward before it
+	// starts again on the same database.
+	bootTime = func() (int64, error) {
+		b, err := sysBootTime()
+		return b + 7200, err
+	}
+	t.Cleanup(func() { bootTime = sysBootTime })
+	rt2 := NewAgentRuntime(rt1.DB, tr, nil)
+	stop2 := make(chan struct{})
+	rt2.stop, rt2.sched.stop = stop2, stop2
+	rt2.recoverInterruptedRuns()
+	rt2.sched.start()
+	receiveRequests(rt2, manualRequests(2, 1))
+	if job := nextCommandJob(rt2); job != nil {
+		t.Fatalf("the set starts again (request 2) while the command of the killed agent (pid %d) still runs", pid)
 	}
 }

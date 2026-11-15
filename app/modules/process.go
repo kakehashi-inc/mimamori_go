@@ -223,9 +223,13 @@ func parseProcStat(b []byte) (procStat, bool) {
 // by tests).
 var bootTime = sysBootTime
 
+// bootIDFile holds the kernel's identity of the current boot (replaced by
+// tests).
+var bootIDFile = "/proc/sys/kernel/random/boot_id"
+
 // sysBootTime returns when the host booted (Unix seconds): the current time
-// less the uptime of the kernel (sysinfo; nothing is read from /proc).
-// Successive calls may differ by a second.
+// less the uptime of the kernel (sysinfo). Successive calls may differ by a
+// second, and a step of the clock moves it.
 func sysBootTime() (int64, error) {
 	var info syscall.Sysinfo_t
 	if err := syscall.Sysinfo(&info); err != nil {
@@ -234,14 +238,72 @@ func sysBootTime() (int64, error) {
 	return time.Now().Unix() - int64(info.Uptime), nil
 }
 
-// sameBoot reports whether two boot times are those of the same boot of the
-// host: they differ by at most BootTimeSlack (the clock may have been set
-// in between; a new boot lies at least the whole uptime of the previous one
-// later).
-func sameBoot(a, b int64) bool {
-	d := a - b
+// hostBoot names one boot of the host: the boot id of the kernel (a new
+// random value at every boot, which setting the clock does not change; empty
+// when it cannot be read) and the boot time (bootTime; 0 when it cannot be
+// found).
+type hostBoot struct {
+	id   string
+	time int64
+}
+
+// currentBoot returns the current boot of the host. It fails only when
+// neither the boot id nor the boot time can be found.
+func currentBoot() (hostBoot, error) {
+	var b hostBoot
+	if raw, err := os.ReadFile(bootIDFile); err == nil {
+		if f := strings.Fields(string(raw)); len(f) > 0 {
+			b.id = f[0]
+		}
+	}
+	t, err := bootTime()
+	if err == nil {
+		b.time = t
+	}
+	if b.id == "" && b.time <= 0 {
+		return hostBoot{}, fmt.Errorf("the boot of the host cannot be found: %w", err)
+	}
+	return b, nil
+}
+
+// String is the stored form of the boot (command_executions.running_boot):
+// the boot time in decimal, then a space and the boot id when it is known.
+func (b hostBoot) String() string {
+	s := strconv.FormatInt(b.time, 10)
+	if b.id != "" {
+		s += " " + b.id
+	}
+	return s
+}
+
+// parseHostBoot reads the stored form of a boot (the zero hostBoot for an
+// empty or unreadable value).
+func parseHostBoot(s string) hostBoot {
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return hostBoot{}
+	}
+	var b hostBoot
+	if t, err := strconv.ParseInt(f[0], 10, 64); err == nil && t > 0 {
+		b.time = t
+	}
+	if len(f) > 1 {
+		b.id = f[1]
+	}
+	return b
+}
+
+// sameBoot reports whether two boots are the same boot of the host: by the
+// boot id when both have one, else by the boot time, which may differ by at
+// most BootTimeSlack (the clock may have been set in between; a new boot
+// lies at least the whole uptime of the previous one later).
+func sameBoot(a, b hostBoot) bool {
+	if a.id != "" && b.id != "" {
+		return a.id == b.id
+	}
+	d := a.time - b.time
 	if d < 0 {
 		d = -d
 	}
-	return a > 0 && b > 0 && time.Duration(d)*time.Second <= BootTimeSlack
+	return a.time > 0 && b.time > 0 && time.Duration(d)*time.Second <= BootTimeSlack
 }
