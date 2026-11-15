@@ -30,15 +30,19 @@ func effectNote(f *ConfigField) string {
 	return fmt.Sprintf("A running central applies the change at its next periodic check (every %s).", PeriodicTick)
 }
 
-// configChangeFailed is the error of a refused or failed change: the
-// failure of its history row keeps its code; a refused value, as before,
-// is an argument error.
+// configChangeFailed is the error of a refused or failed change: a refused
+// item or value (a Msg or Problems error of ApplyCentralConfigChanges) is an
+// argument error, the failure of its history row keeps its code, and any
+// other error is a failure of the database (exit code 3).
 func configChangeFailed(err error) error {
 	var exitErr *ExitError
-	if errors.As(err, &exitErr) {
+	switch {
+	case errors.As(err, &exitErr):
 		return err
+	case errors.As(err, new(Msg)), errors.As(err, new(Problems)):
+		return NewExitError(ExitArgument, err.Error())
 	}
-	return NewExitError(ExitArgument, err.Error())
+	return NewExitError(ExitConfig, err.Error())
 }
 
 // CentralConfigListCmd lists the configuration.
