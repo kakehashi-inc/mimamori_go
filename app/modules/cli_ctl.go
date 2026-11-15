@@ -1025,7 +1025,7 @@ type CtlSuppressionsCmd struct {
 }
 type CtlSuppressionsListCmd struct{}
 type CtlSuppressionsCreateCmd struct {
-	Agent   int64  `help:"Only this agent id (default: all agents)"`
+	Agent   *int64 `help:"Only this agent id (omitted: all agents)"`
 	Type    string `help:"Detection type"`
 	User    string `help:"OS user"`
 	Exe     string `help:"Executable (glob with *)"`
@@ -1040,11 +1040,17 @@ func (c *CtlSuppressionsListCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "GET", "/suppressions", nil, "id", "agent_name", "type", "os_user", "exe", "target", "comment", "created_by")
 }
 func (c *CtlSuppressionsCreateCmd) Run(p *CtlCmd) error {
+	return runCtl(p, "POST", "/suppressions", c.body())
+}
+
+// body is the request of the command: agent_id only when --agent is given
+// (the central refuses a value that is no agent's id).
+func (c *CtlSuppressionsCreateCmd) body() map[string]any {
 	in := map[string]any{"type": c.Type, "os_user": c.User, "exe": c.Exe, "target": c.Target, "comment": c.Comment}
-	if c.Agent > 0 {
-		in["agent_id"] = c.Agent
+	if c.Agent != nil {
+		in["agent_id"] = *c.Agent
 	}
-	return runCtl(p, "POST", "/suppressions", in)
+	return in
 }
 func (c *CtlSuppressionsDeleteCmd) Run(p *CtlCmd) error {
 	return runCtl(p, "DELETE", fmt.Sprintf("/suppressions/%d", c.ID), nil)

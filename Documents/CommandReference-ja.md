@@ -130,7 +130,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl suppressions list` | 抑止条件の一覧 |
-| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | 抑止条件を作成する（空の項目はすべてに一致し、`--exe` と `--target` は `*` を使える）。`--type`、`--user`、`--exe`、`--target` のうち少なくとも 1 つが必要で、`--agent` だけの指定は引数エラー（`--agent` を省略するとすべてのエージェントが対象） |
+| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | 抑止条件を作成する（空の項目はすべてに一致し、`--exe` と `--target` は `*` を使える）。`--type`、`--user`、`--exe`、`--target` のうち少なくとも 1 つが必要で、`--agent` だけの指定は引数エラー（`--agent` を省略するとすべてのエージェントが対象。エージェントの ID ではない `--agent` の値は、0 と負の値も含めて引数エラー） |
 | `ctl suppressions delete ID` | 抑止条件を削除する |
 
 ### command-sets

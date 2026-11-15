@@ -303,3 +303,33 @@ func TestCommandSetReferenceExample(t *testing.T) {
 		t.Errorf("defaults: %+v", spec)
 	}
 }
+
+// ctl suppressions create sends agent_id exactly when --agent is given, also
+// 0 and negative values (the central refuses an id that is no agent's);
+// without --agent the condition is for all agents.
+func TestCtlSuppressionsCreateAgent(t *testing.T) {
+	body := func(args ...string) map[string]any {
+		t.Helper()
+		var cli struct {
+			Ctl CtlCmd `cmd:""`
+		}
+		parser, err := kong.New(&cli, kong.Vars(CLIVars()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parser.Parse(append([]string{"ctl", "suppressions", "create", "--type", "exec"}, args...)); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return cli.Ctl.Suppressions.Create.body()
+	}
+	if b := body(); b["type"] != "exec" {
+		t.Fatalf("body: %v", b)
+	} else if _, ok := b["agent_id"]; ok {
+		t.Fatalf("without --agent: %v", b)
+	}
+	for args, want := range map[string]int64{"--agent=3": 3, "--agent=0": 0, "--agent=-5": -5} {
+		if got, ok := body(args)["agent_id"].(int64); !ok || got != want {
+			t.Errorf("%s: agent_id %v", args, body(args)["agent_id"])
+		}
+	}
+}

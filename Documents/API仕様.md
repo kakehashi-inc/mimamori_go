@@ -536,7 +536,7 @@ interface Detection {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/suppressions` | V | - | `Suppression[]` |
-| POST | `/suppressions` | A | `{"agent_id"?,"type"?,"os_user"?,"exe"?,"target"?,"comment"?}` | `Suppression`（作成時に、条件に一致する未確認の検知すべてへ抑止を即時に反映する） |
+| POST | `/suppressions` | A | `{"agent_id"?,"type"?,"os_user"?,"exe"?,"target"?,"comment"?}` | `Suppression`（作成時に、条件に一致する未確認の検知すべてへ抑止を即時に反映する。`agent_id` が無いか null なら全エージェント、エージェントの ID ではない値は 0 と負の値も含めて 400（`agent.not_found`）） |
 | DELETE | `/suppressions/{id}` | A | - | `{}` |
 
 ```ts

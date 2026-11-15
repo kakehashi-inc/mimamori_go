@@ -130,7 +130,7 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 | Command | Description |
 | --- | --- |
 | `ctl suppressions list` | List suppression conditions |
-| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`). At least one of `--type`, `--user`, `--exe` and `--target` is required; `--agent` alone is an argument error (without `--agent` the condition applies to all agents) |
+| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`). At least one of `--type`, `--user`, `--exe` and `--target` is required; `--agent` alone is an argument error (without `--agent` the condition applies to all agents; an `--agent` value that is no agent id, 0 and negative values included, is an argument error) |
 | `ctl suppressions delete ID` | Delete a suppression condition |
 
 ### command-sets

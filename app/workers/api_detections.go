@@ -294,8 +294,10 @@ func (c *core) handleCreateSuppression(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// Without agent_id (absent or null) the condition is for all agents;
+	// a value that is no agent's id (0 and negative ones too) is refused.
 	var agentName = "all agents"
-	if in.AgentID != nil && *in.AgentID > 0 {
+	if in.AgentID != nil {
 		a, err := models.GetAgent(c.db.Read(), *in.AgentID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, modules.M("agent.not_found"))
