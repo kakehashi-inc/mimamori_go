@@ -329,6 +329,13 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 		}
 		run.cur.release()
 		run.cur.wait()
+		if run.cur.leftRunning() {
+			// Processes of the command could not be ended: the set does not
+			// start again while they run (as after a panic, leaveCommand).
+			rt.sched.hold(def.ID, run.cur.pgid())
+			rt.logf("command set %q: command %d of run %s could not be ended; the set does not start until its process group %d is gone",
+				def.Name, i+1, uid, run.cur.pgid())
+		}
 		res := run.cur.result(run.collect)
 		run.res = res
 		run.kinds = append(run.kinds, res.Kind)

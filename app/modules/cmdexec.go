@@ -45,7 +45,9 @@ import (
 // process ended, the pipe is read on while the processes it left behind
 // write. The time limit and the stop end the whole process group: SIGTERM,
 // then, when something of the group is still there after the grace,
-// SIGKILL to what is left.
+// SIGKILL to what is left. A group that still has a process one grace after
+// the SIGKILL is not waited for any longer; the result says that the command
+// could not be ended.
 
 // commandWrapper is the script bash runs with the arguments marker ($1),
 // working directory ($2, empty for the home directory) and command line ($3).
@@ -172,11 +174,14 @@ type commandProcess struct {
 	// reaped: the main process was waited for. terminating: SIGTERM went to
 	// the group (at killAt the rest gets SIGKILL; killed when that time
 	// came). done: the reading ended and the pipe was handed over or closed.
+	// notEnded: the group still had a process that had not ended one grace
+	// after the SIGKILL, when the wait for it was given up.
 	reaped      bool
 	terminating bool
 	killAt      time.Time
 	killed      bool
 	done        bool
+	notEnded    bool
 }
 
 // startCommand starts the gate of a command (see the file comment): the
@@ -256,7 +261,7 @@ func startCommand(in CommandExecInput) *commandProcess {
 	// The main process leads the group: it is the member looked at first.
 	p.group = &groupProbe{pgid: p.pid, member: p.pid}
 	if viaSudo {
-		p.sig.osUser = in.OSUser
+		p.sig.osUser, p.sig.asUser = in.OSUser, !agentIsRoot()
 	}
 	return p
 }
@@ -388,13 +393,33 @@ func (p *commandProcess) killRest() {
 
 func (p *commandProcess) drainPipe() { drain(p.r, p.buf) }
 
+// giveUp ends the wait for a process group that still has a process that
+// has not ended one grace after the SIGKILL: the command could not be ended.
+// The log and the command's output say so (result); the set of the command
+// does not start again while the group exists (AgentRuntime.executeRun).
+func (p *commandProcess) giveUp() {
+	p.notEnded = true
+	if p.sig.osUser != "" {
+		p.sig.logfSafe("a command run as OS user %q could not be ended: its process group %d still has processes after SIGKILL; no longer waiting for it",
+			p.sig.osUser, p.pid)
+		return
+	}
+	p.sig.logfSafe("a command could not be ended: its process group %d still has processes after SIGKILL; no longer waiting for it", p.pid)
+}
+
+// leftRunning reports whether the wait for the command was given up while
+// its process group still had a process that had not ended (giveUp).
+func (p *commandProcess) leftRunning() bool {
+	return p.notEnded
+}
+
 // waitMain polls the main process until it ends, draining the pipe. A stop,
 // or the time limit (a zero deadline never passes), ends the process group:
 // SIGTERM, and SIGKILL to what is left of the group when the grace is over.
-// When the group could not be signalled (a command of another OS user that
-// the helper could not end either) and the agent is stopping, it stops
-// waiting one grace after the SIGKILL, so that the agent's stop never hangs
-// on such a command; the reading of the output ends with it.
+// When the main process has not ended one grace after the SIGKILL (a
+// command of another OS user that the helper could not end), it stops
+// waiting (giveUp), so that neither the worker nor the agent's stop waits for
+// ever on such a command; the reading of the output ends with it.
 func (p *commandProcess) waitMain() {
 	pid := p.pid
 	sleep := 2 * time.Millisecond
@@ -437,8 +462,8 @@ func (p *commandProcess) waitMain() {
 		if p.terminating && !p.killed && now.After(p.killAt) {
 			p.killRest()
 		}
-		if p.killed && p.stopping() && p.sig.refused && now.After(p.killAt.Add(p.grace)) {
-			p.sig.logfSafe("a command run as OS user %q could not be ended; no longer waiting for it", p.sig.osUser)
+		if p.killed && now.After(p.killAt.Add(p.grace)) {
+			p.giveUp()
 			_ = p.proc.Release()
 			p.reaped = true
 			p.finish(false)
@@ -459,9 +484,10 @@ func (p *commandProcess) waitMain() {
 // after every read that returned data, so output that keeps arriving is
 // read whatever it takes. The stop and the time limit apply as during the
 // run: SIGTERM to the process group (when the main process did not get it
-// already), and the reading ends when the group is gone or, after the grace,
-// when what is left got SIGKILL. The result of the command stays the one of
-// its main process.
+// already), and the reading ends when the group is gone. What is left after
+// the grace gets SIGKILL; when the group still has a process that has not
+// ended one grace after the SIGKILL, the wait is given up (giveUp). The
+// result of the command stays the one of its main process.
 func (p *commandProcess) readAfterEnd() {
 	buf := make([]byte, 64<<10)
 	lastData := time.Now()
@@ -475,10 +501,12 @@ func (p *commandProcess) readAfterEnd() {
 			if !p.group.exists() {
 				break
 			}
-			if now.After(p.killAt) {
-				if !p.killed {
-					p.killRest()
-				}
+			if now.After(p.killAt) && !p.killed {
+				p.killRest()
+				continue
+			}
+			if p.killed && now.After(p.killAt.Add(p.grace)) {
+				p.giveUp()
 				break
 			}
 		} else {
@@ -573,6 +601,17 @@ func (p *commandProcess) result(collect bool) *CommandResultReport {
 	if collect && out.entered {
 		v := ExtractCommandValues(c.Patterns, res.Output, c.LineLimit)
 		res.Values = &v
+	}
+	if p.notEnded {
+		// The agent's own line after the command's output (the values come
+		// from the command's output only); the output stays within its
+		// limit.
+		note := fmt.Sprintf("%s: the command could not be ended: its process group %d still had processes after SIGKILL\n", AppName, p.pid)
+		if keep := MaxCommandOutputBytes - len(note); len(res.Output) > keep {
+			res.Output, res.Truncated = res.Output[:keep], true
+		}
+		res.Output = append(append([]byte{}, res.Output...), note...)
+		res.OutputBytes += int64(len(note))
 	}
 	return res
 }
@@ -755,19 +794,22 @@ func isClosed(ch <-chan struct{}) bool {
 }
 
 // groupSignaler sends signals to the process group of a command. A command
-// started through sudo belongs to another OS user; an agent that does not run
-// as root may not signal it (sudo itself runs as root and the command's
-// processes belong to that user: EPERM). The signal is then sent through the
-// switch program as that user, with the same sudoers rule that started the
-// command.
+// started through sudo runs as another OS user, in the group that sudo leads.
+// sudo keeps the agent's user as its real user, so a signal of an agent that
+// does not run as root reaches sudo and none of the processes of that user,
+// and does not fail: sudo passes SIGTERM on to the command, SIGKILL ends sudo
+// alone. Such an agent therefore sends every signal to the group also through
+// the switch program as that user (signalGroupAs, with the same sudoers rule
+// that started the command), after its own signal, which reaches sudo. An
+// agent that runs as root reaches every process with its own signal and uses
+// the helper only when that signal is refused (EPERM).
 type groupSignaler struct {
 	pgid int
-	// osUser is set when the command was started through sudo.
+	// osUser is set when the command was started through sudo; asUser when,
+	// in addition, the agent does not run as root.
 	osUser string
+	asUser bool
 	logf   func(format string, a ...any)
-	// refused records that a signal to the group was refused and could not
-	// be sent through the helper either.
-	refused bool
 }
 
 func (g *groupSignaler) logfSafe(format string, a ...any) {
@@ -776,15 +818,16 @@ func (g *groupSignaler) logfSafe(format string, a ...any) {
 	}
 }
 
-// send sends sig to the process group. drainPipe is called while the helper
-// is waited for.
+// send sends sig to the process group, and through the helper when the
+// command runs as another OS user and either the agent does not run as root
+// or its own signal was refused; not when the group has no process at all
+// (ESRCH). drainPipe is called while the helper is waited for.
 func (g *groupSignaler) send(sig syscall.Signal, drainPipe func()) {
 	err := killProcessGroup(-g.pgid, sig)
-	if err == nil || !errors.Is(err, syscall.EPERM) || g.osUser == "" {
+	if g.osUser == "" || errors.Is(err, syscall.ESRCH) || (!g.asUser && !errors.Is(err, syscall.EPERM)) {
 		return
 	}
 	if err := signalGroupAsUser(g.osUser, g.pgid, sig, drainPipe); err != nil {
-		g.refused = true
 		g.logfSafe("ending a command run as OS user %q failed: %v", g.osUser, err)
 	}
 }
@@ -795,6 +838,7 @@ var (
 	killProcessGroup  = syscall.Kill
 	signalGroupAsUser = signalGroupAs
 	wait4             = syscall.Wait4
+	agentIsRoot       = func() bool { return os.Geteuid() == 0 }
 )
 
 // signalGroupAs runs "sudo -n -u USER -- BASH -c 'kill -s SIG -- -PGID'" and

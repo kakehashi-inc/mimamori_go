@@ -125,10 +125,11 @@ type agentScheduler struct {
 	monitorSoon bool
 	// running are the sets whose run a worker processes; taken the manual
 	// requests a worker took (until its run ended); held the sets kept from
-	// starting by the process group of a run that survived the agent.
+	// starting by process groups of their runs that are still there (a run
+	// that survived the agent, a command that could not be ended).
 	running map[int64]bool
 	taken   map[int64]bool
-	held    map[int64]*groupProbe
+	held    map[int64][]*groupProbe
 	// unrecorded counts per set the runs found unfinished at the start whose
 	// interrupted record is not stored yet; the set does not start
 	// meanwhile.
@@ -145,7 +146,7 @@ type agentScheduler struct {
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location) *agentScheduler {
 	return &agentScheduler{db: db, now: now, loc: loc, workers: 1, changed: make(chan struct{}),
-		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, unrecorded: map[int64]int{}, replan: map[int64]bool{},
+		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64][]*groupProbe{}, unrecorded: map[int64]int{}, replan: map[int64]bool{},
 		valid: map[int64]*CommandSetDef{}}
 }
 
@@ -241,19 +242,17 @@ func (s *agentScheduler) planLocked(id int64, now time.Time) {
 	}
 }
 
-// heldLocked reports whether a set is kept from starting by the process
-// group of a run that survived the agent; a group without a process that
-// has not ended (groupProbe) lets it go.
+// heldLocked reports whether a set is kept from starting by a process group
+// of one of its runs (hold); a group without a process that has not ended
+// (groupProbe) lets it go.
 func (s *agentScheduler) heldLocked(id int64) bool {
-	g, ok := s.held[id]
-	if !ok {
+	groups := slices.DeleteFunc(s.held[id], func(g *groupProbe) bool { return !g.exists() })
+	if len(groups) == 0 {
+		delete(s.held, id)
 		return false
 	}
-	if g.exists() {
-		return true
-	}
-	delete(s.held, id)
-	return false
+	s.held[id] = groups
+	return true
 }
 
 // blockedLocked reports whether an entry may not start now for its set: the
@@ -381,7 +380,7 @@ func (s *agentScheduler) waitLocked(now time.Time) time.Duration {
 		switch {
 		case e.startAt.After(now):
 			wait = min(wait, max(e.startAt.Sub(now), time.Millisecond))
-		case !e.monitor && !s.running[e.setID] && s.held[e.setID] != nil:
+		case !e.monitor && !s.running[e.setID] && len(s.held[e.setID]) > 0:
 			wait = min(wait, heldSetPoll)
 		}
 	}
@@ -520,12 +519,13 @@ func (s *agentScheduler) receive(reqs []CommandRunRequest) []CommandRequestAck {
 	return acks
 }
 
-// hold keeps a set from starting while the process group pgid exists (a run
-// of it that survived the agent).
+// hold keeps a set from starting while the process group pgid has a process
+// that has not ended (a run of it that survived the agent, a command of it
+// that could not be ended).
 func (s *agentScheduler) hold(setID int64, pgid int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.held[setID] = &groupProbe{pgid: pgid}
+	s.held[setID] = append(s.held[setID], &groupProbe{pgid: pgid})
 }
 
 // awaitRecord keeps a set from starting until recordDone: the record of a

@@ -3,10 +3,12 @@ package modules
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -1484,5 +1486,82 @@ func TestSkippedWithManualRunBetween(t *testing.T) {
 	if s := starts[2]; s.ScheduledFor != base.Add(3*time.Hour).Unix() || s.SkippedCount != 2 ||
 		s.SkippedFrom != base.Add(time.Hour).Unix() || s.SkippedTo != base.Add(2*time.Hour).Unix() {
 		t.Fatalf("the scheduled run after the manual one: %+v", s)
+	}
+}
+
+// TestCommandNotEndedHoldsSet: a command whose process group still has a
+// process one grace after the SIGKILL (here SIGKILL to the group is lost) is
+// recorded with the note that it could not be ended, and its set does not
+// start again while that process runs: a second request of the set waits
+// until the process is gone. Nothing is sent to the process for it.
+func TestCommandNotEndedHoldsSet(t *testing.T) {
+	requireBash(t)
+	marker := "mimamori-test-" + fmt.Sprint(os.Getpid()) + "-held"
+	var kills atomic.Int32
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		if pid < 0 && sig == syscall.SIGKILL {
+			kills.Add(1)
+			return nil
+		}
+		return syscall.Kill(pid, sig)
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+	t.Cleanup(func() {
+		for _, p := range processesLeft(0, marker) {
+			_ = syscall.Kill(p.pid, syscall.SIGKILL)
+		}
+	})
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	set := testSet(1, PurposeRunOnly, "echo begin; (trap '' TERM; exec -a "+marker+" sleep 60) & sleep 30")
+	set.Commands[0].TimeoutSec = 1
+	sets := defsOf(set)
+	tr.resp.CommandSets = sets
+	tr.resp.CommandRequests = manualRequests(1, 1, 1)
+	var logged []string
+	var logMu sync.Mutex
+	rt.Logger = log.New(writerFunc(func(b []byte) (int, error) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logged = append(logged, string(b))
+		return len(b), nil
+	}), "", 0)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	runsOf := func(request int64) int {
+		var n int
+		_ = rt.DB.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE request_id = ? AND finished_at > 0`, request).Scan(&n)
+		return n
+	}
+	waitFor(t, "the first run to end", func() bool { return runsOf(1)+runsOf(2) == 1 })
+	time.Sleep(2 * time.Second)
+	if n := runsOf(1) + runsOf(2); n != 1 || len(processesLeft(0, marker)) != 1 || kills.Load() != 1 {
+		t.Fatalf("the set must not start again while its command runs: %d runs, left %v, %d SIGKILL", n, processesLeft(0, marker), kills.Load())
+	}
+	// The process ends (a zombie nobody reaps counts as ended): the set starts.
+	for _, p := range processesLeft(0, marker) {
+		_ = syscall.Kill(p.pid, syscall.SIGKILL)
+	}
+	waitFor(t, "the second run", func() bool { return runsOf(1)+runsOf(2) == 2 })
+	close(stop)
+	<-done
+	var first *CommandResultReport
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished && first == nil && len(r.Results) == 1 {
+			first = &r.Results[0]
+		}
+	}
+	if first == nil || first.Reason != ReasonTimeout || !strings.HasPrefix(string(first.Output), "begin\n") ||
+		!strings.Contains(string(first.Output), "the command could not be ended") {
+		t.Fatalf("the first result must say that the command could not be ended: %+v", first)
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	if all := strings.Join(logged, ""); !strings.Contains(all, "the set does not start until its process group") {
+		t.Fatalf("the log must say that the set waits for the group: %s", all)
 	}
 }

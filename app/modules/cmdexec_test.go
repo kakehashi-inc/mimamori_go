@@ -505,7 +505,7 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	}
 
 	// The helper fails too: a stop ends the wait one grace after SIGKILL,
-	// with the result interrupted, and says so in the log.
+	// with the result interrupted, and says so in the log and the output.
 	signalGroupAsUser = func(string, int, syscall.Signal, func()) error { return syscall.EPERM }
 	t.Cleanup(func() { signalGroupAsUser = signalGroupAs })
 	var logged []string
@@ -522,7 +522,8 @@ func TestExecuteCommandSignalAsUser(t *testing.T) {
 	if pgid > 0 && len(processesLeft(pgid)) > 0 {
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	}
-	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n" || took > 5*time.Second {
+	note := fmt.Sprintf("%s: the command could not be ended: its process group %d still had processes after SIGKILL\n", AppName, pgid)
+	if r.Kind != ResultError || r.Reason != ReasonInterrupted || string(r.Output) != "started\n"+note || took > 5*time.Second {
 		t.Fatalf("stop with a command that cannot be ended: %+v %q after %s", r, r.Output, took)
 	}
 	if !strings.Contains(strings.Join(logged, "\n"), "could not be ended") {
