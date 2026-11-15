@@ -127,6 +127,8 @@ type commandProcess struct {
 	deadline time.Time
 	grace    time.Duration
 	sig      *groupSignaler
+	// group tells whether the process group still has a process.
+	group *groupProbe
 
 	raw rawExit
 	// reaped: the main process was waited for. terminating: SIGTERM went to
@@ -194,6 +196,8 @@ func startCommand(in CommandExecInput) *commandProcess {
 		p.grace = CommandKillGrace
 	}
 	p.sig = &groupSignaler{pgid: proc.Pid, logf: in.Logf}
+	// The main process leads the group: it is the member looked at first.
+	p.group = &groupProbe{pgid: proc.Pid, member: proc.Pid}
 	if viaSudo {
 		p.sig.osUser = in.OSUser
 	}
@@ -251,10 +255,11 @@ func (p *commandProcess) terminate(now time.Time) {
 }
 
 // killRest sends SIGKILL to what is left of the group when the grace is
-// over: nothing is sent when the group is gone.
+// over: nothing is sent when the group has no process that has not ended
+// (groupProbe).
 func (p *commandProcess) killRest() {
 	p.killed = true
-	if groupExists(p.sig.pgid) {
+	if p.group.exists() {
 		p.sig.send(syscall.SIGKILL, p.drainPipe)
 	}
 }
@@ -343,8 +348,9 @@ func (p *commandProcess) readAfterEnd() {
 		now := time.Now()
 		if p.terminating {
 			// The rest of the grace belongs to the whole group, also when
-			// nothing of it holds the pipe any more.
-			if !groupExists(p.sig.pgid) {
+			// nothing of it holds the pipe any more; it ends when no process
+			// of the group is left that has not ended.
+			if !p.group.exists() {
 				break
 			}
 			if now.After(p.killAt) {
@@ -619,14 +625,6 @@ var (
 	signalGroupAsUser = signalGroupAs
 	wait4             = syscall.Wait4
 )
-
-// groupExists reports whether the process group still has a process:
-// signal 0 to the group is answered (EPERM: it exists, but belongs to
-// another OS user).
-func groupExists(pgid int) bool {
-	err := killProcessGroup(-pgid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
 
 // signalGroupAs runs "sudo -n -u USER -- BASH -c 'kill -s SIG -- -PGID'" and
 // waits in the calling flow until it ends, without a time limit (it is an

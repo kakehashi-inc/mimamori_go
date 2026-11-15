@@ -123,7 +123,7 @@ type agentScheduler struct {
 	// starting by the process group of a run that survived the agent.
 	running map[int64]bool
 	taken   map[int64]bool
-	held    map[int64]int
+	held    map[int64]*groupProbe
 	// defs are the stored definitions (valid or not), valid the sets that
 	// passed validation on the agent.
 	defs  *CommandDefinitions
@@ -132,7 +132,7 @@ type agentScheduler struct {
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location) *agentScheduler {
 	return &agentScheduler{db: db, now: now, loc: loc, workers: 1, changed: make(chan struct{}),
-		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]int{}, valid: map[int64]*CommandSetDef{}}
+		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, valid: map[int64]*CommandSetDef{}}
 }
 
 // changedLocked wakes the waiting workers.
@@ -217,13 +217,14 @@ func (s *agentScheduler) planLocked(id int64, now time.Time) {
 }
 
 // heldLocked reports whether a set is kept from starting by the process
-// group of a run that survived the agent; a group that is gone lets it go.
+// group of a run that survived the agent; a group without a process that
+// has not ended (groupProbe) lets it go.
 func (s *agentScheduler) heldLocked(id int64) bool {
-	pgid, ok := s.held[id]
+	g, ok := s.held[id]
 	if !ok {
 		return false
 	}
-	if groupExists(pgid) {
+	if g.exists() {
 		return true
 	}
 	delete(s.held, id)
@@ -336,7 +337,7 @@ func (s *agentScheduler) waitLocked(now time.Time) time.Duration {
 		switch {
 		case e.startAt.After(now):
 			wait = min(wait, max(e.startAt.Sub(now), time.Millisecond))
-		case !e.monitor && !s.running[e.setID] && s.held[e.setID] != 0:
+		case !e.monitor && !s.running[e.setID] && s.held[e.setID] != nil:
 			wait = min(wait, heldSetPoll)
 		}
 	}
@@ -470,7 +471,7 @@ func (s *agentScheduler) receive(reqs []CommandRunRequest) []CommandRequestAck {
 func (s *agentScheduler) hold(setID int64, pgid int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.held[setID] = pgid
+	s.held[setID] = &groupProbe{pgid: pgid}
 }
 
 // setWorkers sets the agent's worker count.

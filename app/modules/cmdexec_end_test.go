@@ -12,17 +12,34 @@ import (
 	"time"
 )
 
-// processAlive reports whether the process exists and is not a zombie (the
-// tests read /proc; the program does not).
+// processAlive reports whether the process exists and has not ended (a
+// zombie has ended).
 func processAlive(pid int) bool {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return false
+	st, ok := readProcStat(procDir, pid)
+	return ok && !st.ended()
+}
+
+// setSubreaper makes the test process the reaper of the processes orphaned
+// below it (PR_SET_CHILD_SUBREAPER) until the test ends, so that an orphan
+// that ended stays a zombie until the test reaps it, whatever the host's
+// init does.
+func setSubreaper(t *testing.T) {
+	t.Helper()
+	const prSetChildSubreaper = 36
+	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); e != 0 {
+		t.Skipf("PR_SET_CHILD_SUBREAPER: %v", e)
 	}
-	// The state follows the command name in parentheses.
-	s := string(b)
-	i := strings.LastIndexByte(s, ')')
-	return i > 0 && len(s) > i+2 && s[i+2] != 'Z'
+	t.Cleanup(func() { _, _, _ = syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 0, 0) })
+}
+
+// reapLater reaps the process at the end of the test (a zombie the test
+// keeps).
+func reapLater(t *testing.T, pid int) {
+	t.Cleanup(func() {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		var ws syscall.WaitStatus
+		_, _ = syscall.Wait4(pid, &ws, 0, nil)
+	})
 }
 
 // pidFrom waits until the file holds a process ID and returns it.
@@ -102,7 +119,7 @@ func TestCommandGroupGetsTheGrace(t *testing.T) {
 echo started; wait`, done)
 	start := time.Now()
 	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
-		KillGrace: 8 * time.Second, Stop: closedAfter(300 * time.Millisecond)}, 20*time.Second)
+		KillGrace: 20 * time.Second, Stop: closedAfter(300 * time.Millisecond)}, 30*time.Second)
 	took := time.Since(start)
 	if _, err := os.Stat(done); err != nil {
 		t.Fatalf("the member did not get the 5 s it needed after SIGTERM (result after %s): %+v %q", took, r, r.Output)
@@ -110,9 +127,56 @@ echo started; wait`, done)
 	if r.Kind != ResultError || r.Reason != ReasonInterrupted || !strings.Contains(string(r.Output), "member done") {
 		t.Fatalf("result: %+v %q", r, r.Output)
 	}
-	// The reading went on until the group was gone or the grace over.
-	if took < 5*time.Second || took > 8*time.Second+3*time.Second {
+	// The reading went on until no process of the group was left (the
+	// member ended after its 5 s), not to the end of the grace of 20 s.
+	if took < 5*time.Second || took > 8*time.Second {
 		t.Fatalf("the command ended after %s", took)
+	}
+}
+
+// TestCommandGraceEndsWhenOnlyZombiesAreLeft: after SIGTERM the grace of the
+// group ends as soon as only processes that ended and were not reaped yet
+// (zombies; signal 0 to the group still answers) are left. Nothing is sent
+// to them: no SIGKILL at the end of the grace.
+func TestCommandGraceEndsWhenOnlyZombiesAreLeft(t *testing.T) {
+	requireBash(t)
+	setSubreaper(t)
+	var kills atomic.Int32
+	killProcessGroup = func(pid int, sig syscall.Signal) error {
+		if sig == syscall.SIGKILL {
+			kills.Add(1)
+		}
+		return syscall.Kill(pid, sig)
+	}
+	t.Cleanup(func() { killProcessGroup = syscall.Kill })
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	start := time.Now()
+	// The member is started by a subshell that ends at once: from then on
+	// it is a child of the test (the subreaper), which does not reap it, and
+	// the main process (sleep, a child of the test that the command's wait
+	// reaps) cannot reap it either.
+	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir,
+		Command:   testCommand(fmt.Sprintf(`( sleep 30 & echo $! > %s ); exec sleep 30`, pidFile)),
+		KillGrace: 20 * time.Second, Stop: closedAfter(500 * time.Millisecond)}, 30*time.Second)
+	took := time.Since(start)
+	member := pidFrom(t, pidFile)
+	reapLater(t, member)
+	st, ok := readProcStat(procDir, member)
+	if !ok || !st.ended() {
+		t.Fatalf("the member left behind is not a zombie: %+v %v", st, ok)
+	}
+	if err := syscall.Kill(-st.pgrp, 0); err != nil {
+		t.Fatalf("signal 0 to the group of the zombie: %v", err)
+	}
+	if took > 3*time.Second {
+		t.Fatalf("the command ended %s after its start: the grace of 20 s went on while only a zombie was left", took)
+	}
+	if kills.Load() != 0 {
+		t.Fatalf("SIGKILL sent %d time(s) to a group of zombies", kills.Load())
+	}
+	if r.Kind != ResultError || r.Reason != ReasonInterrupted {
+		t.Fatalf("result: %+v", r)
 	}
 }
 
@@ -165,16 +229,19 @@ func TestCommandReadingAfterEndObeysStop(t *testing.T) {
 	line := fmt.Sprintf(`( while :; do echo x; sleep 0.3; done ) & echo $! > %s; echo main done`, pidFile)
 	start := time.Now()
 	r := executeWithin(t, CommandExecInput{OSUser: agentUserName(), WorkDir: dir, Command: testCommand(line),
-		KillGrace: time.Second, Stop: closedAfter(1500 * time.Millisecond)}, 15*time.Second)
+		KillGrace: 20 * time.Second, Stop: closedAfter(1500 * time.Millisecond)}, 30*time.Second)
 	took := time.Since(start)
 	writer := pidFrom(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(writer, syscall.SIGKILL) })
-	// The group is gone soon after the SIGTERM; a group whose ended members
-	// are not reaped yet keeps the reading until the grace of 1 s is over.
-	if took < 1400*time.Millisecond || took > 4500*time.Millisecond {
+	// The writer ends at the SIGTERM: the reading ends with it, long before
+	// the grace of 20 s is over.
+	if took < 1400*time.Millisecond || took > 3500*time.Millisecond {
 		t.Fatalf("the reading ended %s after the start, want soon after the stop at 1.5 s", took)
 	}
-	if r.Kind != ResultSuccess || r.ExitCode == nil || *r.ExitCode != 0 || !strings.HasPrefix(string(r.Output), "main done\nx\n") {
+	// The main process and the writer write at the same time: both are in
+	// the output, in either order.
+	if out := string(r.Output); r.Kind != ResultSuccess || r.ExitCode == nil || *r.ExitCode != 0 ||
+		!strings.Contains(out, "main done\n") || strings.Count(out, "x\n") < 3 {
 		t.Fatalf("the result is the main process's: %+v %q", r, r.Output)
 	}
 	time.Sleep(100 * time.Millisecond)

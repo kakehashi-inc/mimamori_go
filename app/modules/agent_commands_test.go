@@ -998,7 +998,8 @@ func startSurvivor(t *testing.T) *os.Process {
 // TestSurvivingGroupKeepsSetFromStarting (STOP-2): a run found unfinished at
 // start whose recorded process group still exists in the same boot is
 // reported interrupted, and its set does not start (also not for a manual
-// request) until the group is gone; the group is never signalled. A record
+// request) until the group has no process left that has not ended: a zombie
+// nobody reaped yet does not keep it; the group is never signalled. A record
 // of another boot, or of a group that is gone, keeps nothing.
 func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	requireBash(t)
@@ -1062,10 +1063,19 @@ func TestSurvivingGroupKeepsSetFromStarting(t *testing.T) {
 	if !processAlive(survivor.Pid) || signalled.Load() != 0 {
 		t.Fatalf("the surviving group was signalled (alive %v, %d signals)", processAlive(survivor.Pid), signalled.Load())
 	}
-	// The group ends: the set starts.
-	_ = survivor.Kill()
-	_, _ = survivor.Wait()
-	waitFor(t, "the set after the group ended", func() bool { return newRuns(1) == 1 })
+	// The process of the group ends and stays a zombie (the test reaps it
+	// at its end; signal 0 to the group still answers): the set starts.
+	if err := syscall.Kill(survivor.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the survivor to become a zombie", func() bool {
+		st, ok := readProcStat(procDir, survivor.Pid)
+		return ok && st.ended()
+	})
+	waitFor(t, "the set after the group's only process ended", func() bool { return newRuns(1) == 1 })
+	if st, ok := readProcStat(procDir, survivor.Pid); !ok || !st.ended() || syscall.Kill(-survivor.Pid, 0) != nil {
+		t.Fatalf("the set did not start with a zombie left in the group: %+v %v", st, ok)
+	}
 	close(stop)
 	<-done
 	interrupted := map[string]bool{}
