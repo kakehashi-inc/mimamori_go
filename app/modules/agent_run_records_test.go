@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -284,3 +285,79 @@ func (l *lockedLog) String() string {
 }
 
 func (l *lockedLog) logger() *log.Logger { return log.New(l, "", 0) }
+
+// TestInterruptedRecordWrittenAgain: a run found unfinished at the start
+// whose interrupted record cannot be stored is written again (with the wait
+// of the run records) until it is stored, while the rounds and the
+// monitoring steps go on; its set does not start before (a request for it
+// waits), 'was interrupted' is logged only once it was stored, and then the
+// agent no longer lists its request as running.
+func TestInterruptedRecordWrittenAgain(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	rt.recordRetry = 50 * time.Millisecond
+	var logs lockedLog
+	rt.Logger = logs.logger()
+	set := testSet(1, PurposeRunOnly, "true")
+	rt.storeCommandDefinitions(defsOf(set))
+	tr.resp.CommandSets = defsOf(set)
+	tr.resp.CommandRequests = manualRequests(6, 1)
+	insertExecution(t, rt.DB, "killed-run", 5, 0)
+	execOnDB(t, rt.DB, `CREATE TRIGGER fail_finish BEFORE UPDATE OF finished_at ON command_executions WHEN OLD.run_uid = 'killed-run'
+		BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+	// The rounds and the monitoring steps go on while the record fails.
+	waitFor(t, "three rounds", func() bool { return len(tr.seen()) >= 3 })
+	waitFor(t, "a second monitoring step", func() bool {
+		return strings.Count(logs.String(), "storing it failed") >= 3 && monitorSteps(t, rt, tr) >= 2
+	})
+	if all, _ := countRuns(rt.DB); all != 1 {
+		t.Fatalf("the set started before its interrupted run was recorded: %d runs", all)
+	}
+	if strings.Contains(logs.String(), "run killed-run was interrupted (") {
+		t.Fatalf("'was interrupted' logged although nothing was stored: %q", logs.String())
+	}
+	if ids, _ := rt.runningRequests(); !slices.Contains(ids, int64(5)) {
+		t.Fatalf("running requests while the record fails: %v", ids)
+	}
+	execOnDB(t, rt.DB, `DROP TRIGGER fail_finish`)
+	waitFor(t, "the request of the set", func() bool { _, finished := countRuns(rt.DB); return finished == 2 })
+	if !strings.Contains(logs.String(), "command set run killed-run was interrupted (the agent ended while it ran)") {
+		t.Fatalf("log: %q", logs.String())
+	}
+	if ids, _ := rt.runningRequests(); slices.Contains(ids, int64(5)) {
+		t.Fatalf("the interrupted run is still listed as running: %v", ids)
+	}
+	reported := 0
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.RunUID == "killed-run" && r.Finished && r.Reason == ReasonInterrupted {
+			reported++
+		}
+	}
+	if reported != 1 {
+		t.Fatalf("the interrupted run was reported %d time(s)", reported)
+	}
+}
+
+// monitorSteps returns the number of periodic reports the monitoring steps
+// queued (sent or still queued).
+func monitorSteps(t *testing.T, rt *AgentRuntime, tr *parTransport) int {
+	t.Helper()
+	n := 0
+	for _, r := range allReports(t, rt, tr) {
+		if len(r.CommandRuns) == 0 && len(r.CommandRequestAcks) == 0 && r.CommandApply == nil {
+			n++
+		}
+	}
+	return n
+}

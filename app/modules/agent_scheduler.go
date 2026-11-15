@@ -52,8 +52,8 @@ import (
 //     check interval of the rounds and the monitoring entry).
 //   - The queue (this file, its one mutex): the entries, the sets that run,
 //     the requests taken by a worker, the sets kept by a surviving process
-//     group, the command set definitions and the valid sets, the worker
-//     count.
+//     group or by an interrupted run whose record is not stored yet, the
+//     command set definitions and the valid sets, the worker count.
 //   - The outbox (agent_outbox.go): the table outbox and the state key
 //     outbox_batch, through its methods, each one Write.
 //   - Each run (agent_commands.go): its definition, run UID, results, its own
@@ -129,6 +129,10 @@ type agentScheduler struct {
 	running map[int64]bool
 	taken   map[int64]bool
 	held    map[int64]*groupProbe
+	// unrecorded counts per set the runs found unfinished at the start whose
+	// interrupted record is not stored yet; the set does not start
+	// meanwhile.
+	unrecorded map[int64]int
 	// replan are the scheduled sets whose entry could not be computed (the
 	// schedule state could not be read); a worker that looks for an entry
 	// computes them again.
@@ -141,7 +145,7 @@ type agentScheduler struct {
 
 func newAgentScheduler(db *DB, now func() time.Time, loc func() *time.Location) *agentScheduler {
 	return &agentScheduler{db: db, now: now, loc: loc, workers: 1, changed: make(chan struct{}),
-		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, replan: map[int64]bool{},
+		running: map[int64]bool{}, taken: map[int64]bool{}, held: map[int64]*groupProbe{}, unrecorded: map[int64]int{}, replan: map[int64]bool{},
 		valid: map[int64]*CommandSetDef{}}
 }
 
@@ -253,9 +257,10 @@ func (s *agentScheduler) heldLocked(id int64) bool {
 }
 
 // blockedLocked reports whether an entry may not start now for its set: the
-// set runs or is held.
+// set runs, the record of its interrupted run is not stored yet, or it is
+// held.
 func (s *agentScheduler) blockedLocked(e *queueEntry) bool {
-	return !e.monitor && (s.running[e.setID] || s.heldLocked(e.setID))
+	return !e.monitor && (s.running[e.setID] || s.unrecorded[e.setID] > 0 || s.heldLocked(e.setID))
 }
 
 // next returns the unit the calling worker processes next, and the answers
@@ -506,6 +511,24 @@ func (s *agentScheduler) hold(setID int64, pgid int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.held[setID] = &groupProbe{pgid: pgid}
+}
+
+// awaitRecord keeps a set from starting until recordDone: the record of a
+// run of it found unfinished at the start is not stored yet.
+func (s *agentScheduler) awaitRecord(setID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unrecorded[setID]++
+}
+
+// recordDone lets a set kept by awaitRecord start again.
+func (s *agentScheduler) recordDone(setID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unrecorded[setID]--; s.unrecorded[setID] <= 0 {
+		delete(s.unrecorded, setID)
+	}
+	s.changedLocked()
 }
 
 // setWorkers sets the agent's worker count.

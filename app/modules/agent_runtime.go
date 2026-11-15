@@ -293,10 +293,11 @@ func (rt *AgentRuntime) ReapplyStored() {
 }
 
 // Run runs the agent until stop is closed (a nil stop never is). The runs
-// found unfinished are reported first (recoverInterruptedRuns); then the
-// queue gets the monitoring entry and the entries of the scheduled sets, the
-// communication flow starts and so do the workers (the calling flow is the
-// first of them).
+// found unfinished are reported first (recoverInterruptedRuns; a record that
+// cannot be stored is written again on a flow of its own, recordInterrupted,
+// and its set does not start before); then the queue gets the monitoring
+// entry and the entries of the scheduled sets, the communication flow starts
+// and so do the workers (the calling flow is the first of them).
 //
 // After the stop no entry starts; a monitoring step in progress completes
 // (see monitorStep), and a running command is ended (SIGTERM to its process
@@ -323,10 +324,16 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 			rt.logf("failed to clear the worker count in use: %v", err)
 		}
 	}()
-	rt.recovered("panic", rt.recoverInterruptedRuns)
+	var unstored []*interruptedRun
+	rt.recovered("panic", func() { unstored = rt.recoverInterruptedRuns() })
 	rt.sched.start()
 	workersDone := make(chan struct{})
 	commDone := make(chan struct{})
+	recordsDone := make(chan struct{})
+	go func() {
+		defer close(recordsDone)
+		rt.recovered("panic", func() { rt.recordInterrupted(unstored) })
+	}()
 	go func() {
 		defer close(commDone)
 		rt.communicate(workersDone)
@@ -344,6 +351,7 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 	rt.leftovers.closeAll()
 	close(workersDone)
 	<-commDone
+	<-recordsDone
 }
 
 // work is one worker: it processes the entries the queue gives it until the

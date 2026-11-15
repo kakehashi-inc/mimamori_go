@@ -568,23 +568,35 @@ func (rt *AgentRuntime) writeRunRecord(what string, afterStop bool, write func()
 	}
 }
 
+// interruptedRun is a run found unfinished at the start and its report as
+// interrupted.
+type interruptedRun struct {
+	uid   string
+	setID int64
+	at    int64
+	rep   CommandRunReport
+}
+
 // recoverInterruptedRuns reports the runs found unfinished at start (the
 // agent ended while they ran) as interrupted. The command that was running
 // gets an interrupted result (the central keeps a result already reported
 // for its position). The report of a run is queued and the run is recorded
 // as finished in one transaction of the outbox, so that a run is never
-// reported twice nor finished without its report. When the process group
-// recorded for the running command still exists in the same boot of the
-// host, the set counts as running: none of its entries starts until the
-// group is gone. The group is never signalled.
-func (rt *AgentRuntime) recoverInterruptedRuns() {
+// reported twice nor finished without its report. A record that cannot be
+// stored is returned: recordInterrupted writes it again, and its set does
+// not start before it is stored. When the process group recorded for the
+// running command still exists in the same boot of the host, the set
+// counts as running: none of its entries starts until the group is gone.
+// The group is never signalled.
+func (rt *AgentRuntime) recoverInterruptedRuns() []*interruptedRun {
 	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
 	if err != nil {
 		rt.logf("reading unfinished command set runs failed: %v", err)
-		return
+		return nil
 	}
 	now := rt.now().Unix()
 	boot, bootErr := currentBoot()
+	var pending []*interruptedRun
 	for _, e := range runs {
 		if e.RunningPgid > 0 && bootErr == nil && sameBoot(parseHostBoot(e.RunningBoot), boot) && groupExists(e.RunningPgid) {
 			rt.sched.hold(e.SetID, e.RunningPgid)
@@ -611,18 +623,46 @@ func (rt *AgentRuntime) recoverInterruptedRuns() {
 			}
 			rep.Results = append(rep.Results, res)
 		}
-		finishing := false
-		err := rt.out.queueWith(rt.stamped(&ReportRequest{CommandRuns: []CommandRunReport{rep}}), func(tx models.Writer) error {
-			finishing = true
-			return models.FinishCommandExecution(tx, e.RunUID, now)
-		})
-		switch {
-		case err != nil && finishing:
-			rt.logf("recording the end of run %s failed: %v", e.RunUID, err)
-		case err != nil:
-			rt.logf("failed to queue a command set report: %v", err)
+		r := &interruptedRun{uid: e.RunUID, setID: e.SetID, at: now, rep: rep}
+		if err := rt.storeInterrupted(r); err != nil {
+			rt.logf("command set run %s: recording that it was interrupted failed, it is written again: %v", r.uid, err)
+			rt.sched.awaitRecord(r.setID)
+			pending = append(pending, r)
+			continue
 		}
 		rt.logf("command set run %s was interrupted (the agent ended while it ran)", e.RunUID)
+	}
+	return pending
+}
+
+// storeInterrupted queues the report of an interrupted run and records the
+// run as finished, in one transaction.
+func (rt *AgentRuntime) storeInterrupted(r *interruptedRun) error {
+	return rt.out.queueWith(rt.stamped(&ReportRequest{CommandRuns: []CommandRunReport{r.rep}}), func(tx models.Writer) error {
+		return models.FinishCommandExecution(tx, r.uid, r.at)
+	})
+}
+
+// recordInterrupted writes the records of interrupted runs that could not be
+// stored at the start again (storeRunRecord: 1 s, doubling to 30 s, until
+// stored or the stop), on a flow of its own, so that neither the monitoring
+// step nor the rounds wait for it. The set of a run may start once its
+// record is stored (or the record has nothing left to write).
+func (rt *AgentRuntime) recordInterrupted(pending []*interruptedRun) {
+	for _, r := range pending {
+		err := rt.storeRunRecord(fmt.Sprintf("command set run %s: the record that it was interrupted", r.uid), func() error {
+			return rt.storeInterrupted(r)
+		})
+		switch {
+		case err == nil:
+			rt.logf("command set run %s was interrupted (the agent ended while it ran)", r.uid)
+		case isClosed(rt.stop):
+			rt.logf("command set run %s: recording that it was interrupted failed (the next start reports it again): %v", r.uid, err)
+			continue
+		default:
+			rt.logf("command set run %s: recording that it was interrupted failed: %v", r.uid, err)
+		}
+		rt.sched.recordDone(r.setID)
 	}
 }
 
