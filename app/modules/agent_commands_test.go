@@ -447,14 +447,14 @@ func TestCommandRunInterruptedCommand(t *testing.T) {
 		}
 	}
 	if err := rt.DB.Write(func(tx models.Writer) error {
-		if err := models.SetCommandExecutionRunning(tx, "same", 1, 105); err != nil {
+		if err := models.SetCommandExecutionRunning(tx, "same", 1, 105, 0, ""); err != nil {
 			return err
 		}
-		if err := models.SetCommandExecutionRunning(tx, "older", 1, 95); err != nil {
+		if err := models.SetCommandExecutionRunning(tx, "older", 1, 95, 0, ""); err != nil {
 			return err
 		}
 		// "between" ended between two commands: its last command was reported.
-		if err := models.SetCommandExecutionRunning(tx, "between", 0, 111); err != nil {
+		if err := models.SetCommandExecutionRunning(tx, "between", 0, 111, 0, ""); err != nil {
 			return err
 		}
 		return models.ClearCommandExecutionRunning(tx, "between")

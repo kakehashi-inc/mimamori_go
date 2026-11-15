@@ -3,6 +3,8 @@ package modules
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -148,11 +150,13 @@ func TestStopBeforeFirstCommand(t *testing.T) {
 }
 
 // TestStopWhileCommandMarkRetried: the record of the command that starts
-// cannot be written and the worker waits to write it again; the stop comes.
-// The command does not start, the run is closed as interrupted.
+// (with its process group) cannot be written and the worker waits to write
+// it again while the command waits at its gate; the stop comes. Nothing of
+// the command runs and its gate is gone; the run is closed as interrupted.
 func TestStopWhileCommandMarkRetried(t *testing.T) {
 	var logs lockedLog
-	rt, stop, sig := stopRuntime(t, &logs, "sleep 30")
+	ran := filepath.Join(t.TempDir(), "ran")
+	rt, stop, sig := stopRuntime(t, &logs, "touch "+ran+"; sleep 30")
 	rt.recordRetry = 2 * time.Second
 	job := nextCommandJob(rt)
 	execOnDB(t, rt.DB, `CREATE TRIGGER fail_mark BEFORE UPDATE OF running_position ON command_executions WHEN NEW.running_position >= 0
@@ -167,6 +171,12 @@ func TestStopWhileCommandMarkRetried(t *testing.T) {
 	if len(sig.list()) > 0 {
 		t.Fatalf("the command was started after the stop: signals %s", sig)
 	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("the command line ran although its start was never recorded")
+	}
+	if n := gatesOf(t); n != 0 {
+		t.Fatalf("gates left: %d", n)
+	}
 	last, executed := lastRun(t, runReports(queuedReports(t, rt)))
 	if executed != 0 || last.Reason != ReasonInterrupted {
 		t.Fatalf("closing report: %+v (%d results)", last, executed)
@@ -180,3 +190,29 @@ func TestStopWhileCommandMarkRetried(t *testing.T) {
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// gatesOf returns the number of the gates of commands that are children of
+// the test process.
+func gatesOf(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, pid := range strings.Fields(childrenOf(os.Getpid())) {
+		if b, err := os.ReadFile("/proc/" + pid + "/cmdline"); err == nil && strings.Contains(string(b), "read -r -u 3 _") {
+			n++
+		}
+	}
+	return n
+}
+
+// childrenOf returns the process IDs of the children of pid, separated by
+// spaces, from the lists of children of its threads.
+func childrenOf(pid int) string {
+	tasks, _ := filepath.Glob(fmt.Sprintf("/proc/%d/task/*/children", pid))
+	var all []string
+	for _, f := range tasks {
+		if b, err := os.ReadFile(f); err == nil {
+			all = append(all, strings.TrimSpace(string(b)))
+		}
+	}
+	return strings.Join(all, " ")
+}

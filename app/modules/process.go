@@ -267,8 +267,12 @@ func currentBoot() (hostBoot, error) {
 }
 
 // String is the stored form of the boot (command_executions.running_boot):
-// the boot time in decimal, then a space and the boot id when it is known.
+// the boot time in decimal, then a space and the boot id when it is known;
+// "" for the zero hostBoot.
 func (b hostBoot) String() string {
+	if b == (hostBoot{}) {
+		return ""
+	}
 	s := strconv.FormatInt(b.time, 10)
 	if b.id != "" {
 		s += " " + b.id

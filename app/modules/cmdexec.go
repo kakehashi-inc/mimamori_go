@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,6 +24,17 @@ import (
 // 1, which could not be told from the command's own 1), a first marker
 // without the second means the working directory could not be entered.
 //
+// The program is not started directly: the agent starts "BASH -c GATE" with
+// the whole argument list of the program after it, in a session of its own,
+// and the gate waits for one line on descriptor 3, the read end of a pipe
+// the agent holds (startCommand). The agent stores the process group with
+// the run and then releases the command (release): the gate replaces itself
+// with the program by exec, in the same process and process group, so the
+// program gets the argument list, environment, working directory, open
+// descriptors and signal state it gets without the gate. When the agent ends
+// or gives the command up before the release, the pipe closes and the gate
+// ends without running anything (cancel).
+//
 // A command runs on the calling flow (the agent's worker that runs the set)
 // and nothing else runs there meanwhile: the main process is polled with
 // wait4 and the output pipe is drained in the same loop; after the main
@@ -37,6 +49,20 @@ const commandWrapper = `printf '%s\n' "$1"
 if [ -n "$2" ]; then cd -- "$2" || exit 1; else cd || exit 1; fi
 printf '%s\n' "$1"
 exec "$BASH" -c "$3"`
+
+// commandGate is the script of the gate (see the file comment), run with
+// $1 "-", or "=VALUE" when the agent's environment holds BASH_ENV=VALUE, and
+// the program's argument list after it. The gate's own output goes to
+// /dev/null; descriptor 4 is the output pipe, which the exec puts on 1 and 2.
+// BASH_ENV is left out of the gate's environment, so that the gate runs no
+// startup file, and put back before the exec.
+const commandGate = `read -r -u 3 _ || exit 1
+case $1 in =*) BASH_ENV=${1#=}; export BASH_ENV;; esac
+shift
+exec 1>&4 2>&4 4>&- 3<&- "$@"`
+
+// commandEnviron is the environment of the commands (replaced by tests).
+var commandEnviron = os.Environ
 
 // commandPollMax is the longest pause of the wait loop.
 const commandPollMax = 50 * time.Millisecond
@@ -83,6 +109,7 @@ type CommandExecInput struct {
 // whatever goes wrong is an error result with a reason.
 func ExecuteCommand(in CommandExecInput) *CommandResultReport {
 	p := startCommand(in)
+	p.release()
 	p.wait()
 	return p.result(in.CollectOutput)
 }
@@ -108,7 +135,9 @@ type wrappedOutput struct {
 // its output. Its fields are the state of the wait, so that wait can be
 // called again after it was left by a panic and goes on where it was.
 type commandProcess struct {
-	in      CommandExecInput
+	in CommandExecInput
+	// startAt is when the command was released (its time limit counts from
+	// then on), or when its start failed.
 	startAt time.Time
 	endAt   time.Time
 	// failed is the output of a command whose process could not be
@@ -116,8 +145,16 @@ type commandProcess struct {
 	failed *wrappedOutput
 	marker string
 	proc   *os.Process
-	r      *os.File
-	buf    *limitedBuffer
+	// pid is the process ID of the main process, which leads the process
+	// group (kept: proc forgets it when it is released).
+	pid int
+	r   *os.File
+	// gate is the agent's end of the gate's pipe until the release (nil
+	// after it); cancelled: the command was given up before the release
+	// and never ran.
+	gate      *os.File
+	cancelled bool
+	buf       *limitedBuffer
 	// deadline is when the time limit passes (zero: no limit); grace the
 	// time between SIGTERM and SIGKILL.
 	deadline time.Time
@@ -138,15 +175,21 @@ type commandProcess struct {
 	done        bool
 }
 
-// startCommand starts the wrapper of a command. A command that cannot be
-// started is returned as ended, with the reason as its output.
+// startCommand starts the gate of a command (see the file comment): the
+// command waits there until release, or ends without running anything at
+// cancel. A command that cannot be started is returned as ended, with the
+// reason as its output.
 func startCommand(in CommandExecInput) *commandProcess {
 	p := &commandProcess{in: in, startAt: time.Now()}
 	marker, err := RandomHex(16)
 	if err != nil {
 		return p.failStart(err)
 	}
-	path, argv, viaSudo, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
+	argv, viaSudo, err := commandArgv(in.OSUser, marker, in.WorkDir, in.Command.CommandLine)
+	if err != nil {
+		return p.failStart(err)
+	}
+	bash, err := LookupCommand("bash")
 	if err != nil {
 		return p.failStart(err)
 	}
@@ -155,8 +198,19 @@ func startCommand(in CommandExecInput) *commandProcess {
 		return p.failStart(err)
 	}
 	defer devnull.Close()
+	sink, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return p.failStart(err)
+	}
+	defer sink.Close()
+	gr, gw, err := os.Pipe()
+	if err != nil {
+		return p.failStart(err)
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
+		gr.Close()
+		gw.Close()
 		return p.failStart(err)
 	}
 	if sc, err := r.SyscallConn(); err == nil {
@@ -165,16 +219,19 @@ func startCommand(in CommandExecInput) *commandProcess {
 			_, _, _ = syscall.Syscall(syscall.SYS_FCNTL, fd, fSetPipeSz, pipeSizeCommand)
 		})
 	}
-	proc, err := os.StartProcess(path, argv, &os.ProcAttr{
+	env, bashEnv := gateEnviron(commandEnviron())
+	proc, err := os.StartProcess(bash, append([]string{bash, "-c", commandGate, AppName, bashEnv}, argv...), &os.ProcAttr{
 		Dir:   "/",
-		Files: []*os.File{devnull, w, w},
-		Env:   os.Environ(),
+		Files: []*os.File{devnull, sink, sink, gr, w},
+		Env:   env,
 		// A new session: its own process group (ended as a whole) and no
 		// controlling terminal, so sudo never prompts or allocates one.
 		Sys: &syscall.SysProcAttr{Setsid: true},
 	})
+	gr.Close()
 	w.Close()
 	if err != nil {
+		gw.Close()
 		r.Close()
 		// The error names the program's path; the output does not.
 		var pe *os.PathError
@@ -183,31 +240,85 @@ func startCommand(in CommandExecInput) *commandProcess {
 		}
 		return p.failStart(err)
 	}
-	p.marker, p.proc, p.r = marker, proc, r
+	p.marker, p.proc, p.pid, p.r, p.gate = marker, proc, proc.Pid, r, gw
 	// The raw buffer also holds the two marker lines and a little of what
 	// the wrapper may write before them.
 	p.buf = &limitedBuffer{limit: MaxCommandOutputBytes + 2*int64(len(marker)+1) + 4096}
-	p.deadline = commandDeadline(p.startAt, in.Command.TimeoutSec)
 	p.grace = in.KillGrace
 	if p.grace <= 0 {
 		p.grace = CommandKillGrace
 	}
-	p.sig = &groupSignaler{pgid: proc.Pid, logf: in.Logf}
+	p.sig = &groupSignaler{pgid: p.pid, logf: in.Logf}
 	// The main process leads the group: it is the member looked at first.
-	p.group = &groupProbe{pgid: proc.Pid, member: proc.Pid}
+	p.group = &groupProbe{pgid: p.pid, member: p.pid}
 	if viaSudo {
 		p.sig.osUser = in.OSUser
 	}
 	return p
 }
 
+// gateEnviron returns the environment of the gate: env without BASH_ENV,
+// and the gate's first argument: "=VALUE" for the BASH_ENV=VALUE of env (the
+// first one), else "-".
+func gateEnviron(env []string) ([]string, string) {
+	out := make([]string, 0, len(env))
+	bashEnv := "-"
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "BASH_ENV="); ok {
+			if bashEnv == "-" {
+				bashEnv = "=" + v
+			}
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out, bashEnv
+}
+
+// release lets a started command run: the gate reads its line and replaces
+// itself with the program. Its time limit counts from here. A gate that
+// ended before (the pipe is broken) is found ended by wait.
+func (p *commandProcess) release() {
+	if p.gate == nil {
+		return
+	}
+	_, _ = p.gate.Write([]byte("\n"))
+	_ = p.gate.Close()
+	p.gate = nil
+	p.startAt = time.Now()
+	p.deadline = commandDeadline(p.startAt, p.in.Command.TimeoutSec)
+}
+
+// cancel gives up a command that was not released: the gate's pipe is
+// closed, the gate ends without running anything and is waited for (nothing
+// is signalled). The command never ran.
+func (p *commandProcess) cancel() {
+	if p.gate == nil {
+		return
+	}
+	_ = p.gate.Close()
+	p.gate = nil
+	var ws syscall.WaitStatus
+	for {
+		if _, err := syscall.Wait4(p.pid, &ws, 0, nil); err != syscall.EINTR {
+			break
+		}
+	}
+	_ = p.proc.Release()
+	_ = p.r.Close()
+	p.cancelled, p.reaped, p.done, p.endAt = true, true, true, time.Now()
+}
+
+// ran reports whether the command ran or failed to start (it has a result):
+// not when it was given up before the release.
+func (p *commandProcess) ran() bool {
+	return !p.cancelled
+}
+
 // pgid returns the process group of the command (the process ID of its
 // main process), or 0 when its process could not be started.
 func (p *commandProcess) pgid() int {
-	if p.proc == nil {
-		return 0
-	}
-	return p.proc.Pid
+	return p.pid
 }
 
 // failStart ends p as a command whose process could not be started.
@@ -230,8 +341,12 @@ func commandDeadline(start time.Time, timeoutSec int) time.Time {
 
 // wait waits until the main process ended and the reading of the output
 // ended (see waitMain and readAfterEnd). It goes on where it was when it
-// is called again.
+// is called again. A command that was not released is given up (cancel).
 func (p *commandProcess) wait() {
+	if p.gate != nil {
+		p.cancel()
+		return
+	}
 	if !p.reaped {
 		p.waitMain()
 	}
@@ -277,7 +392,7 @@ func (p *commandProcess) drainPipe() { drain(p.r, p.buf) }
 // waiting one grace after the SIGKILL, so that the agent's stop never hangs
 // on such a command; the reading of the output ends with it.
 func (p *commandProcess) waitMain() {
-	pid := p.proc.Pid
+	pid := p.pid
 	sleep := 2 * time.Millisecond
 	var ws syscall.WaitStatus
 	for {
@@ -458,12 +573,13 @@ func (p *commandProcess) result(collect bool) *CommandResultReport {
 	return res
 }
 
-// commandArgv returns the program and its arguments for a command: bash
-// directly, or bash through sudo (viaSudo).
-func commandArgv(osUser, marker, workDir, commandLine string) (path string, argv []string, viaSudo bool, err error) {
+// commandArgv returns the argument list of the program of a command, whose
+// first element is the program's path: bash directly, or bash through sudo
+// (viaSudo).
+func commandArgv(osUser, marker, workDir, commandLine string) (argv []string, viaSudo bool, err error) {
 	bash, err := LookupCommand("bash")
 	if err != nil {
-		return "", nil, false, err
+		return nil, false, err
 	}
 	if IsAgentUser(osUser) {
 		if workDir == "" {
@@ -473,14 +589,14 @@ func commandArgv(osUser, marker, workDir, commandLine string) (path string, argv
 			workDir = agentHomeDir()
 		}
 		wrapped := []string{"-c", commandWrapper, AppName, marker, workDir, commandLine}
-		return bash, append([]string{bash}, wrapped...), false, nil
+		return append([]string{bash}, wrapped...), false, nil
 	}
 	wrapped := []string{"-c", commandWrapper, AppName, marker, workDir, commandLine}
 	sudo, err := LookupCommand("sudo")
 	if err != nil {
-		return "", nil, false, errNoSwitchProgram
+		return nil, false, errNoSwitchProgram
 	}
-	return sudo, append([]string{sudo, "-n", "-H", "-u", osUser, "--", bash}, wrapped...), true, nil
+	return append([]string{sudo, "-n", "-H", "-u", osUser, "--", bash}, wrapped...), true, nil
 }
 
 // errNoSwitchProgram: the project's messages do not name the switching

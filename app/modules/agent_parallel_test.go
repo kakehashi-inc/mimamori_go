@@ -441,10 +441,10 @@ func TestRestartAfterCrashSeveralRuns(t *testing.T) {
 		}
 	}
 	if err := rt.DB.Write(func(tx models.Writer) error {
-		if err := models.SetCommandExecutionRunning(tx, "a", 1, 105); err != nil {
+		if err := models.SetCommandExecutionRunning(tx, "a", 1, 105, 0, ""); err != nil {
 			return err
 		}
-		return models.SetCommandExecutionRunning(tx, "b", 0, 101)
+		return models.SetCommandExecutionRunning(tx, "b", 0, 101, 0, "")
 	}); err != nil {
 		t.Fatal(err)
 	}

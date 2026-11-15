@@ -55,17 +55,12 @@ func InsertCommandExecution(db Writer, e *CommandExecution) error {
 }
 
 // SetCommandExecutionRunning records the command that starts running
-// (position from 0) and its start time.
-func SetCommandExecutionRunning(db Writer, runUID string, position int, startedAt int64) error {
-	return execOne(db, `UPDATE command_executions SET running_position = ?, running_started_at = ? WHERE run_uid = ?`,
-		position, startedAt, runUID)
-}
-
-// SetCommandExecutionGroup records the process group of the running command
-// and the boot of the host it runs in (the boot time in decimal, then a
-// space and the kernel's boot id when it is known).
-func SetCommandExecutionGroup(db Writer, runUID string, pgid int, boot string) error {
-	return execOne(db, `UPDATE command_executions SET running_pgid = ?, running_boot = ? WHERE run_uid = ?`, pgid, boot, runUID)
+// (position from 0), its start time, its process group and the boot of the
+// host it runs in (the boot time in decimal, then a space and the kernel's
+// boot id when it is known; the empty string when neither is).
+func SetCommandExecutionRunning(db Writer, runUID string, position int, startedAt int64, pgid int, boot string) error {
+	return execOne(db, `UPDATE command_executions SET running_position = ?, running_started_at = ?, running_pgid = ?, running_boot = ?
+		WHERE run_uid = ?`, position, startedAt, pgid, boot, runUID)
 }
 
 // ClearCommandExecutionRunning records that no command of the run is

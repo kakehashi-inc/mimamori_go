@@ -182,12 +182,11 @@ func TestPanicInRunWhileCommandRuns(t *testing.T) {
 	}
 }
 
-// TestPanicWhenRecordingTheGroup: a panic right after the command started,
-// while the run records its process group, is handled as any panic while a
-// command runs: the worker waits for the command in the plain way and closes
-// the run with its result (internal_error), the command is not signalled, and
-// a second request for the same set starts only after the first run ended
-// (the same set never runs twice at the same time).
+// TestPanicWhenRecordingTheGroup: a panic after the command was started at
+// its gate, while the run records its process group, gives the command up
+// before its release: nothing of it runs, nothing is signalled, and the run
+// is closed with internal_error without a result of that command. A second
+// request for the same set runs afterwards.
 func TestPanicWhenRecordingTheGroup(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
@@ -231,7 +230,7 @@ func TestPanicWhenRecordingTheGroup(t *testing.T) {
 	if !injected.Load() {
 		t.Fatal("the panic was not injected")
 	}
-	panicLogHas(t, logged.String(), "worker panic: test panic while the process group is recorded", "recordGroup")
+	panicLogHas(t, logged.String(), "worker panic: test panic while the process group is recorded", "recordCommandStart")
 	if n := signals.Load(); n != 0 {
 		t.Fatalf("%d signals were sent to commands", n)
 	}
@@ -239,8 +238,8 @@ func TestPanicWhenRecordingTheGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(b); got != "start\nend\nstart\nend\n" {
-		t.Fatalf("log of the command: %q, want the two runs one after the other", got)
+	if got := string(b); got != "start\nend\n" {
+		t.Fatalf("log of the command: %q, want only the second run", got)
 	}
 	runs := map[int64]CommandRunReport{}
 	for _, r := range runReports(allReports(t, rt, tr)) {
@@ -249,13 +248,8 @@ func TestPanicWhenRecordingTheGroup(t *testing.T) {
 		}
 	}
 	r := runs[1]
-	if r.State != ResultError || r.Reason != ReasonInternalError || len(r.Results) != 1 {
+	if r.State != ResultError || r.Reason != ReasonInternalError || len(r.Results) != 0 {
 		t.Fatalf("the run the panic hit: %+v", r)
-	}
-	res := r.Results[0]
-	if res.Kind != ResultError || res.Reason != ReasonInternalError || res.ExitCode == nil || *res.ExitCode != 0 ||
-		string(res.Output) != "begin\ndone\n" || res.FinishedAt-res.StartedAt < 3 {
-		t.Fatalf("the command the panic hit ran to its end: %+v %q", res, res.Output)
 	}
 	if r2 := runs[2]; r2.State != ResultSuccess || r2.StartedAt < r.FinishedAt {
 		t.Fatalf("the second run of the set: %+v (first ended at %d)", r2, r.FinishedAt)

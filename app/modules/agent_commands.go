@@ -314,30 +314,17 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 			break
 		}
 		c := &def.Commands[i]
-		// Recorded while the command runs, so that a run cut short by the end
-		// of the agent reports this command as interrupted at the next start.
-		startedAt := time.Now().Unix()
-		if err := rt.storeRunStart(fmt.Sprintf("command set %q: command %d of run %s", def.Name, i+1, uid), func() error {
-			return rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionRunning(tx, uid, i, startedAt) })
-		}); err != nil {
-			if errors.As(err, &stopped) {
-				rt.logf("command set %q: command %d of run %s not started: the agent stops%s", def.Name, i+1, uid,
-					stopped.cause("recording its start failed"))
-			} else {
-				rt.logf("command set %q: recording the start of command %d of run %s failed, it is not run: %v", def.Name, i+1, uid, err)
-			}
-			break
-		}
-		if isClosed(rt.stop) {
-			break
-		}
 		run.cur = startCommand(CommandExecInput{Position: i, OSUser: def.OSUser, WorkDir: def.WorkDir, Command: c,
 			CollectOutput: run.collect, KillGrace: rt.cmdKillGrace, Stop: rt.stop, Logf: rt.logf, Leftover: rt.leftovers.add})
 		// The command is known to the run (run.cur) before anything else is
-		// done, so that a panic from here on waits for it (closeAfterPanic).
-		if pgid := run.cur.pgid(); pgid > 0 {
-			rt.recordGroup(def, uid, i, pgid)
+		// done, so that a panic from here on waits for it, or gives it up
+		// when it was not released (closeAfterPanic).
+		if !rt.recordCommandStart(run, i) {
+			run.cur.cancel()
+			run.cur = nil
+			break
 		}
+		run.cur.release()
 		run.cur.wait()
 		res := run.cur.result(run.collect)
 		run.res = res
@@ -393,18 +380,45 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 	return true
 }
 
-// recordGroup records the process group of the command that started and the
-// boot of the host (hostBoot) with the run, so that after a forced end of
-// the agent the set does not start again while the group still exists (one
-// attempt: the command runs already; a failure is logged).
-func (rt *AgentRuntime) recordGroup(def *CommandSetDef, uid string, pos, pgid int) {
+// recordCommandStart records the command at position pos of the run that
+// starts (run.cur, waiting at its gate) with its process group and the boot
+// of the host (hostBoot), in one transaction written again until it is
+// stored or the stop comes (storeRunStart): a run cut short by the end of
+// the agent then reports this command as interrupted at the next start, and
+// its set does not start again while the group exists (DESIGN 1.7). It
+// reports whether the command may be released: not when the record was not
+// stored or the stop came. A command whose start failed has no group; it is
+// not recorded and its result is reported.
+func (rt *AgentRuntime) recordCommandStart(run *commandRun, pos int) bool {
+	def := run.job.def
+	pgid := run.cur.pgid()
+	if pgid == 0 {
+		return true
+	}
 	boot, err := currentBoot()
-	if err == nil {
-		err = rt.DB.Write(func(tx models.Writer) error { return models.SetCommandExecutionGroup(tx, uid, pgid, boot.String()) })
-	}
 	if err != nil {
-		rt.logf("command set %q: recording the process group of command %d of run %s failed: %v", def.Name, pos+1, uid, err)
+		rt.logf("command set %q: command %d of run %s: %v; its process group is recorded without it", def.Name, pos+1, run.uid, err)
 	}
+	at := time.Now().Unix()
+	err = rt.storeRunStart(fmt.Sprintf("command set %q: the start of command %d of run %s", def.Name, pos+1, run.uid), func() error {
+		return rt.DB.Write(func(tx models.Writer) error {
+			return models.SetCommandExecutionRunning(tx, run.uid, pos, at, pgid, boot.String())
+		})
+	})
+	var stopped *stoppedBeforeRecord
+	switch {
+	case errors.As(err, &stopped):
+		rt.logf("command set %q: command %d of run %s not started: the agent stops%s", def.Name, pos+1, run.uid,
+			stopped.cause("recording its start failed"))
+		return false
+	case err != nil:
+		rt.logf("command set %q: recording the start of command %d of run %s failed, it is not run: %v", def.Name, pos+1, run.uid, err)
+		return false
+	case isClosed(rt.stop):
+		rt.logf("command set %q: command %d of run %s not started: the agent stops", def.Name, pos+1, run.uid)
+		return false
+	}
+	return true
 }
 
 // closeAfterPanic closes a run whose processing panicked. The command that
@@ -428,8 +442,11 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 		hit = &r
 	case run.cur != nil:
 		if rt.recovered("worker panic", func() {
+			// A command that was not released is given up: it never ran.
 			run.cur.wait()
-			hit = run.cur.result(false)
+			if run.cur.ran() {
+				hit = run.cur.result(false)
+			}
 		}) {
 			rt.leaveCommand(run)
 			rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
@@ -465,6 +482,11 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 // output).
 func (rt *AgentRuntime) leaveCommand(run *commandRun) {
 	p := run.cur
+	if p.gate != nil {
+		// Not released: the gate ends without running anything.
+		_ = p.gate.Close()
+		p.gate = nil
+	}
 	if pgid := p.pgid(); pgid > 0 {
 		rt.sched.hold(run.job.def.ID, pgid)
 		rt.logf("command set %q: its command may still run as process group %d; the set does not start until that group is gone",
