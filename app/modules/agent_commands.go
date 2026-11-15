@@ -399,10 +399,10 @@ func (rt *AgentRuntime) logFinished(def *CommandSetDef, rep *CommandRunReport) {
 // of the host (hostBoot), in one transaction written again until it is
 // stored or the stop comes (storeRunStart): a run cut short by the end of
 // the agent then reports this command as interrupted at the next start, and
-// its set does not start again while the group exists (DESIGN 1.7). It
-// reports whether the command may be released: not when the record was not
-// stored or the stop came. A command whose start failed has no group; it is
-// not recorded and its result is reported.
+// its set does not start again while the group exists. It reports whether
+// the command may be released: not when the record was not stored or the
+// stop came. A command whose start failed has no group; it is not recorded
+// and its result is reported.
 func (rt *AgentRuntime) recordCommandStart(run *commandRun, pos int) bool {
 	def := run.job.def
 	pgid := run.cur.pgid()

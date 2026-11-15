@@ -26,10 +26,10 @@ import (
 // (also for running and waiting sets, with short expiries, for unknown
 // sets), changes the rule assignment, loses requests and answers, and moves
 // the agent's clock forward. The stop comes at a random moment, or after
-// everything handed over was answered (the drain). The invariants of DESIGN
-// 1.1 are checked all the time on the queue and after every round on the
-// records. MIMAMORI_STRESS_SEED gives the seed (by default the time; it is
-// logged).
+// everything handed over was answered (the drain). The invariants of the
+// queue (the file comment of agent_scheduler.go) are checked all the time on
+// the queue and after every round on the records. MIMAMORI_STRESS_SEED gives
+// the seed (by default the time; it is logged).
 
 // stressClock is the agent's clock, moved forward by the central.
 type stressClock struct{ off atomic.Int64 }
@@ -392,7 +392,7 @@ func (c *stressCentral) periodicSeen() int {
 const stressIdleWaitMax = 300 * time.Millisecond
 
 // stressQueueCheck looks at the queue under its mutex and returns what breaks
-// the invariants of DESIGN 1.1.
+// its invariants (the file comment of agent_scheduler.go).
 func stressQueueCheck(s *agentScheduler) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

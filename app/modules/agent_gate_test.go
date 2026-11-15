@@ -15,7 +15,8 @@ import (
 )
 
 // A command of a run starts only after its process group is stored with the
-// run (DESIGN 1.7): it waits at its gate until then.
+// run, so that a set never runs next to a command of it that survived the
+// agent: the command waits at its gate until then.
 
 // TestCommandStartsAfterItsGroupIsStored: while the record of the command
 // that starts and its process group cannot be written, the command does not
