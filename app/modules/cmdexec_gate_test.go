@@ -52,18 +52,32 @@ var (
 	wrapperMarker = regexp.MustCompile(`\b[0-9a-f]{32}\b`)
 )
 
-// probePid is the line of the probe that names the process ID of its shell.
-var probePid = regexp.MustCompile(`--- pid ([0-9]+)`)
+// probePid is the line of the probe that names the process ID of its shell,
+// the only line that shows it.
+var probePid = regexp.MustCompile(`--- pid [0-9]+\n`)
 
 // normalized removes from the output of the probe what differs from one run
-// to the next: the inodes of pipes, the process IDs and the marker.
+// to the next: the inodes of pipes, the process IDs and the marker. The ID
+// of the shell is replaced in its own line only: the same digits elsewhere
+// are other numbers (a shell of ID 512 is no reason to change "pipe size
+// (512 bytes, -p)").
 func normalized(out string) string {
 	out = pipeIno.ReplaceAllString(out, "pipe")
-	if m := probePid.FindStringSubmatch(out); m != nil {
-		out = regexp.MustCompile(`\b`+m[1]+`\b`).ReplaceAllString(out, "PID")
-	}
+	out = probePid.ReplaceAllString(out, "--- pid PID\n")
 	out = wrapperMarker.ReplaceAllString(out, "MARKER")
 	return childProc.ReplaceAllString(out, "/proc/CHILD/")
+}
+
+// TestNormalizedKeepsOtherNumbers: two outputs of the probe that differ only
+// in the ID of the shell are the same once normalized, also when that ID is
+// a number the output shows elsewhere.
+func TestNormalizedKeepsOtherNumbers(t *testing.T) {
+	rest := "pipe size                (512 bytes, -p) 8\nopen files (-n) 20000\n"
+	for _, pid := range []string{"512", "20000", "8"} {
+		if a, b := normalized("--- pid "+pid+"\n"+rest), normalized("--- pid 4711\n"+rest); a != b {
+			t.Errorf("shell %s:\n%s\nshell 4711:\n%s", pid, a, b)
+		}
+	}
 }
 
 // runWithoutGate runs a command line as the agent starts the program of a
