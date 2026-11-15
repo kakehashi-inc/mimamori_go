@@ -289,7 +289,7 @@ func (c *core) handleListCommandSets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := commandSetListJSON{AgentID: a.ID, AgentName: c.agentDisplayName(a), DefaultOSUser: a.HostOSUser, TimeZone: a.TimeZone,
 		UTCOffsetSec: a.UTCOffsetSec, Delivered: a.CommandSig == sig, Sets: []commandSetJSON{},
-		AgentResponding: c.responding(c.db.Read(), a, time.Now().Unix())}
+		AgentResponding: c.responding(a, time.Now().Unix())}
 	problems := agentCommandProblems(a)
 	for _, row := range rows {
 		s, err := c.commandSetOut(r, a, tdb, row, problems, latest, running, requests)

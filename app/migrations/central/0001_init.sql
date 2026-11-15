@@ -161,6 +161,7 @@ CREATE TABLE agents (
     ca_fingerprints       TEXT    NOT NULL DEFAULT '[]',
     auditd_json           TEXT    NOT NULL DEFAULT '',
     last_sync_at          INTEGER NOT NULL DEFAULT 0,
+    check_interval_sec    INTEGER NOT NULL DEFAULT 0,
     last_report_at        INTEGER NOT NULL DEFAULT 0,
     dropped_total         INTEGER NOT NULL DEFAULT 0,
     host_os_user          TEXT    NOT NULL DEFAULT '',

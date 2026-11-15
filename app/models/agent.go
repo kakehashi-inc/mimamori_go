@@ -37,8 +37,11 @@ type Agent struct {
 	CAFingerprints      string
 	AuditdJSON          string
 	LastSyncAt          int64
-	LastReportAt        int64
-	DroppedTotal        int64
+	// CheckIntervalSec is the check interval the answer to the last sync
+	// gave the agent (seconds; 0 before the first sync).
+	CheckIntervalSec int
+	LastReportAt     int64
+	DroppedTotal     int64
 	// HostOSUser is the OS user the agent runs as; TimeZone and
 	// UTCOffsetSec describe the host's local time (all from its host
 	// information). CommandSig is the signature of the command set
@@ -58,15 +61,15 @@ type Agent struct {
 
 const agentCols = `id, kind, token_id, db_file, hostname, os_name, os_version, agent_version, assigned_rule_id, assigned_rule_version,
 	assigned_at, reported_rule_id, reported_rule_version, apply_status, apply_message, apply_warnings, apply_i18n, apply_version, apply_at,
-	ca_fingerprints, auditd_json, last_sync_at, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec, command_sig, command_problems,
-	last_central_report_id, created_at`
+	ca_fingerprints, auditd_json, last_sync_at, check_interval_sec, last_report_at, dropped_total, host_os_user, time_zone, utc_offset_sec,
+	command_sig, command_problems, last_central_report_id, created_at`
 
 func scanAgent(s rowScanner) (*Agent, error) {
 	a := &Agent{}
 	if err := s.Scan(&a.ID, &a.Kind, &a.TokenID, &a.DBFile, &a.Hostname, &a.OSName, &a.OSVersion, &a.AgentVersion,
 		&a.AssignedRuleID, &a.AssignedRuleVersion, &a.AssignedAt, &a.ReportedRuleID, &a.ReportedRuleVersion, &a.ApplyStatus,
 		&a.ApplyMessage, &a.ApplyWarnings, &a.ApplyI18n, &a.ApplyVersion, &a.ApplyAt, &a.CAFingerprints, &a.AuditdJSON, &a.LastSyncAt,
-		&a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems,
+		&a.CheckIntervalSec, &a.LastReportAt, &a.DroppedTotal, &a.HostOSUser, &a.TimeZone, &a.UTCOffsetSec, &a.CommandSig, &a.CommandProblems,
 		&a.LastCentralReportID, &a.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -163,10 +166,12 @@ func CountAgentsUsingRule(db Reader, ruleID int64) (int, error) {
 	return n, err
 }
 
-// RecordAgentSync stores the state reported in a sync request.
-func RecordAgentSync(db Writer, id int64, agentVersion string, ruleID int64, ruleVersion int, caFPs string, now int64) error {
-	_, err := db.Exec(`UPDATE agents SET agent_version = ?, reported_rule_id = ?, reported_rule_version = ?, ca_fingerprints = ?, last_sync_at = ? WHERE id = ?`,
-		agentVersion, ruleID, ruleVersion, caFPs, now, id)
+// RecordAgentSync stores the state reported in a sync request and the check
+// interval the answer to it gives the agent.
+func RecordAgentSync(db Writer, id int64, agentVersion string, ruleID int64, ruleVersion int, caFPs string, checkInterval int, now int64) error {
+	_, err := db.Exec(`UPDATE agents SET agent_version = ?, reported_rule_id = ?, reported_rule_version = ?, ca_fingerprints = ?, last_sync_at = ?,
+		check_interval_sec = ? WHERE id = ?`,
+		agentVersion, ruleID, ruleVersion, caFPs, now, checkInterval, id)
 	return err
 }
 

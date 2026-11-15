@@ -279,41 +279,164 @@ func TestQueueNeverSyncedAgent(t *testing.T) {
 	}
 }
 
-// The judgement "responding" at its edges, with the default interval and
-// with the interval of the rule version the agent reports.
+// insertRule stores a rule with one version whose check interval is
+// interval (0: the content does not specify one).
+func insertRule(t *testing.T, e *testEnv, id int64, interval int) {
+	t.Helper()
+	if err := e.exec(`INSERT INTO rules (id, name, created_at, updated_at) VALUES (?, ?, 1, 1)`, id, "r"+itoa64(id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.exec(`INSERT INTO rule_versions (rule_id, version, content, created_at) VALUES (?, 1, ?, 1)`, id,
+		fmt.Sprintf(`{"check_interval_sec": %d}`, interval)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setDefaultInterval sets default_check_interval_sec of the running
+// configuration.
+func setDefaultInterval(e *testEnv, sec int) {
+	cfg := *e.c.conf()
+	cfg.DefaultCheckIntervalSec = sec
+	e.c.cfg.Store(&cfg)
+}
+
+// wantResponding checks the judgement of an agent whose last sync was ago
+// seconds before now, directly and as the list of its sets shows it.
+func wantResponding(t *testing.T, e *testEnv, agentID, now, ago int64, want bool) {
+	t.Helper()
+	setLastSync(t, e, agentID, now-ago)
+	a, err := models.GetAgent(e.c.db.Read(), agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := agentResponding(a, now); got != want {
+		t.Fatalf("last sync %d s ago, interval %d: responding %v, want %v", ago, a.CheckIntervalSec, got, want)
+	}
+	if ago < 60 {
+		if list := e.admin("GET", "/agents/"+itoa64(agentID)+"/command-sets", nil); list["agent_responding"] != want {
+			t.Fatalf("last sync %d s ago: agent_responding %v, want %v", ago, list["agent_responding"], want)
+		}
+	}
+}
+
+// The judgement "responding" at its edges: the agent synced within three
+// of the check intervals its last sync answer gave it and 600 seconds. That
+// interval is the one the agent uses after the answer: the assigned rule
+// version's (60 when the version does not specify one), else
+// default_check_interval_sec as it was configured at that sync. A later
+// change of the default changes nothing until the next sync.
 func TestQueueInterval(t *testing.T) {
 	e := newTestEnv(t)
-	now := int64(1_000_000)
-	if err := e.exec(`INSERT INTO rules (id, name, created_at, updated_at) VALUES (900, 'slow', 1, 1)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.exec(`INSERT INTO rule_versions (rule_id, version, content, created_at) VALUES (900, 1, '{"check_interval_sec": 3600}', 1)`); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name          string
-		rule          int64
-		version       int
-		last          int64
-		def, interval int
-		want          bool
+	insertRule(t, e, 900, 3600)
+	insertRule(t, e, 901, 0)
+	now := time.Now().Unix()
+	for i, tc := range []struct {
+		name     string
+		def      int   // default_check_interval_sec at the sync
+		rule     int64 // the assigned rule (0: none)
+		interval int   // the interval the answer gives the agent
 	}{
-		{"never synced", 0, 0, 0, 60, 60, false},
-		{"default, at the edge", 0, 0, now - 780, 60, 60, true},
-		{"default, past the edge", 0, 0, now - 781, 60, 60, false},
-		{"configured default", 0, 0, now - (3*120 + 600), 120, 120, true},
-		{"rule 3600, at the edge", 900, 1, now - (3*3600 + 600), 60, 3600, true},
-		{"rule 3600, past the edge", 900, 1, now - (3*3600 + 601), 60, 3600, false},
-		{"unreadable rule version", 900, 7, now - 781, 60, 60, false},
+		{"default", 60, 0, 60},
+		{"configured default", 120, 0, 120},
+		{"rule 3600", 60, 900, 3600},
+		{"rule 3600, other default", 10, 900, 3600},
+		{"rule without an interval", 300, 901, modules.DefaultCheckIntervalSec},
 	} {
-		a := &models.Agent{LastSyncAt: tc.last, ReportedRuleID: tc.rule, ReportedRuleVersion: tc.version}
-		if got := agentInterval(e.c.db.Read(), a, tc.def); got != tc.interval {
-			t.Errorf("%s: interval %d, want %d", tc.name, got, tc.interval)
+		A := newQueueAgent(t, e, fmt.Sprintf("int-%d", i), 0)
+		if tc.rule > 0 {
+			e.admin("POST", "/rules/"+itoa64(tc.rule)+"/apply", map[string]any{"agent_ids": []int64{A.a.ID}})
 		}
-		if got := agentResponding(e.c.db.Read(), a, tc.def, now); got != tc.want {
-			t.Errorf("%s: responding %v, want %v", tc.name, got, tc.want)
+		setDefaultInterval(e, tc.def)
+		resp := syncFree(t, e, A.tok)
+		given := resp.DefaultIntervalSec
+		if resp.Rule != nil {
+			given = resp.Rule.Content.CheckInterval()
 		}
+		a, err := models.GetAgent(e.c.db.Read(), A.a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if given != tc.interval || a.CheckIntervalSec != tc.interval {
+			t.Fatalf("%s: the answer gives %d, stored %d, want %d", tc.name, given, a.CheckIntervalSec, tc.interval)
+		}
+		setDefaultInterval(e, 3000)
+		wantResponding(t, e, A.a.ID, now, 0, true)
+		wantResponding(t, e, A.a.ID, now, 3*int64(tc.interval)+600, true)
+		wantResponding(t, e, A.a.ID, now, 3*int64(tc.interval)+601, false)
 	}
+	setDefaultInterval(e, 60)
+	never := newQueueAgent(t, e, "never", 0)
+	if a, _ := models.GetAgent(e.c.db.Read(), never.a.ID); agentResponding(a, now) || a.CheckIntervalSec != 0 {
+		t.Fatalf("an agent that never synced: responding %v, interval %d", agentResponding(a, now), a.CheckIntervalSec)
+	}
+}
+
+// A rule unassigned and deleted while the agent still runs it (it has not
+// synced since): the agent waits the rule's interval until its next sync,
+// and the central judges it with that interval, not with the default; its
+// delivered request stays delivered until three of those intervals and 600
+// seconds passed.
+func TestDeletedRuleKeepsJudgement(t *testing.T) {
+	e := newTestEnv(t)
+	insertRule(t, e, 900, 3600)
+	A := newQueueAgent(t, e, "slow-a", 1)
+	e.admin("POST", "/rules/900/apply", map[string]any{"agent_ids": []int64{A.a.ID}})
+	runsRule := modules.SyncRequest{RunningRequests: []int64{}, FreeWorker: true, RuleID: 900, RuleVersion: 1}
+	syncWith(t, e, A.tok, runsRule)
+	r1, _ := requestRun(t, e, A.a, A.sets[0])
+	if got := handedIDs(syncWith(t, e, A.tok, runsRule)); !slices.Equal(got, []int64{r1}) {
+		t.Fatalf("handed over: %v", got)
+	}
+	e.admin("POST", "/rules/unassign", map[string]any{"agent_ids": []int64{A.a.ID}})
+	e.admin("DELETE", "/rules/900", nil)
+	if a, _ := models.GetAgent(e.c.db.Read(), A.a.ID); a.ReportedRuleID != 900 {
+		t.Fatalf("the agent reports rule %d", a.ReportedRuleID)
+	}
+
+	now := time.Now()
+	for _, tc := range []struct {
+		ago  int64
+		want string
+	}{{1000, models.RequestDelivered}, {3*3600 + 600, models.RequestDelivered}, {3*3600 + 601, models.RequestQueued}} {
+		setLastSync(t, e, A.a.ID, now.Unix()-tc.ago)
+		e.c.runRequestsStep(now)
+		wantStates(t, e, fmt.Sprintf("last sync %d s ago", tc.ago), A.a.ID, r1, tc.want)
+	}
+	if list := e.admin("GET", "/agents/"+itoa64(A.a.ID)+"/command-sets", nil); list["agent_responding"] != false {
+		t.Fatalf("agent_responding: %v", list["agent_responding"])
+	}
+}
+
+// default_check_interval_sec lowered from 3600 to 10: an agent without a
+// rule still waits the 3600 seconds its last sync gave it and is judged
+// with them until it syncs again; its next sync gives it 10 and the
+// central judges with 10 from then on.
+func TestLoweredDefaultKeepsJudgement(t *testing.T) {
+	e := newTestEnv(t)
+	setDefaultInterval(e, 3600)
+	A := newQueueAgent(t, e, "def-a", 1)
+	syncFree(t, e, A.tok)
+	r1, _ := requestRun(t, e, A.a, A.sets[0])
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{r1}) {
+		t.Fatalf("handed over: %v", got)
+	}
+	setDefaultInterval(e, 10)
+
+	now := time.Now()
+	for _, tc := range []struct {
+		ago  int64
+		want string
+	}{{800, models.RequestDelivered}, {3*3600 + 600, models.RequestDelivered}, {3*3600 + 601, models.RequestQueued}} {
+		setLastSync(t, e, A.a.ID, now.Unix()-tc.ago)
+		e.c.runRequestsStep(now)
+		wantStates(t, e, fmt.Sprintf("last sync %d s ago", tc.ago), A.a.ID, r1, tc.want)
+	}
+
+	if got := handedIDs(syncFree(t, e, A.tok)); !slices.Equal(got, []int64{r1}) {
+		t.Fatalf("handed over again: %v", got)
+	}
+	wantResponding(t, e, A.a.ID, now.Unix(), 3*10+600, true)
+	wantResponding(t, e, A.a.ID, now.Unix(), 3*10+601, false)
 }
 
 // running_requests: a running request the agent no longer lists ends; a

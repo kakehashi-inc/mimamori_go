@@ -121,7 +121,7 @@ func (c *core) retention(now time.Time) {
 				return err
 			}
 			for _, a := range agents {
-				if c.responding(tx, a, now.Unix()) {
+				if c.responding(a, now.Unix()) {
 					continue
 				}
 				if _, err := models.DeleteOpenCommandRequestsBefore(tx, a.ID, cut); err != nil {

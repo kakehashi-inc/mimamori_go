@@ -25,18 +25,20 @@ import (
 // expire meanwhile. Its running requests stay running.
 
 // responding reports whether the agent is responding: it did not say that
-// it stops since its last sync, and agentResponding holds. r reads the rule
-// version the agent reports.
-func (c *core) responding(r models.Reader, a *models.Agent, now int64) bool {
-	return !c.isStopping(a.ID) && agentResponding(r, a, c.conf().DefaultCheckIntervalSec, now)
+// it stops since its last sync, and agentResponding holds.
+func (c *core) responding(a *models.Agent, now int64) bool {
+	return !c.isStopping(a.ID) && agentResponding(a, now)
 }
 
 // agentResponding reports whether the agent synced within three of its
 // check intervals and ten minutes (the judgement the central uses for "this
-// agent has not connected for a while"). An agent that never synced is not
+// agent has not connected for a while"). The interval is the one the answer
+// to its last sync gave it (agents.check_interval_sec, stored with the
+// sync): the agent waits that interval until it syncs again, whatever
+// changed at the central meanwhile. An agent that never synced is not
 // responding.
-func agentResponding(r models.Reader, a *models.Agent, defaultInterval int, now int64) bool {
-	return a.LastSyncAt > 0 && now-a.LastSyncAt <= 3*int64(agentInterval(r, a, defaultInterval))+600
+func agentResponding(a *models.Agent, now int64) bool {
+	return a.LastSyncAt > 0 && now-a.LastSyncAt <= 3*int64(a.CheckIntervalSec)+600
 }
 
 // markStopping remembers that the agent said it stops (a report with
@@ -125,20 +127,6 @@ func (c *core) silentWhy(a *models.Agent) string {
 	return "the agent has not synced since " + time.Unix(a.LastSyncAt, 0).UTC().Format(time.RFC3339)
 }
 
-// agentInterval returns the check interval the agent runs with: that of the
-// rule version it reports it runs, else defaultInterval (what an agent uses
-// without a rule). A rule version that cannot be read gives the default.
-func agentInterval(r models.Reader, a *models.Agent, defaultInterval int) int {
-	if a.ReportedRuleID > 0 {
-		if rv, err := models.GetRuleVersion(r, a.ReportedRuleID, a.ReportedRuleVersion); err == nil {
-			if content, err := modules.ParseRuleContent([]byte(rv.Content)); err == nil {
-				return content.CheckInterval()
-			}
-		}
-	}
-	return defaultInterval
-}
-
 // runRequestsStep is the periodic step "run requests", one transaction:
 // the delivered requests of every agent that is not responding go back to
 // queued (logged after the transaction), then the queued requests whose
@@ -154,7 +142,7 @@ func (c *core) runRequestsStep(now time.Time) {
 			return err
 		}
 		for _, a := range agents {
-			if c.responding(tx, a, now.Unix()) {
+			if c.responding(a, now.Unix()) {
 				continue
 			}
 			rs, err := requeueRequests(tx, a, c.silentWhy(a))
