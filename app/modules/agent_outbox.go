@@ -199,7 +199,7 @@ type outboxBatch struct {
 func (o *outbox) flush(tr AgentTransport, stopping bool, onError func(error)) {
 	batch, items, err := o.takeBatch()
 	if err != nil {
-		o.logf("report: the queued items cannot be read: %v", err)
+		o.logf("report: forming the batch of the queued items failed (nothing was sent; the next round tries again): %v", err)
 		return
 	}
 	batch.Stopping = stopping

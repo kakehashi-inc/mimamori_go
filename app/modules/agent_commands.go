@@ -94,7 +94,7 @@ func (rt *AgentRuntime) loadCommandDefinitions() {
 	}
 	_, valid, scheduled := checkDefinitions(&defs)
 	if err := rt.DB.Write(func(tx models.Writer) error { return armSchedules(tx, scheduled, rt.now().Unix()) }); err != nil {
-		rt.logf("%v", err)
+		rt.logf("the stored command set definitions: storing their schedule states failed (the states stored before are used): %v", err)
 	}
 	rt.sched.acceptDefinitions(&defs, valid)
 }
@@ -355,6 +355,9 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 			}
 		} else {
 			run.unstored = nil
+			if last {
+				rt.logFinished(def, &rep)
+			}
 		}
 		run.cur, run.res = nil, nil
 		if last {
@@ -373,11 +376,22 @@ func (rt *AgentRuntime) executeRun(run *commandRun) bool {
 		run.finish(rt, &rep, reason)
 		if err := rt.storeRunReport(run, fmt.Sprintf("command set %q: the end of run %s", def.Name, uid), rep); err != nil {
 			rt.logf("command set %q: recording the end of run %s failed (the next start reports it as interrupted): %v", def.Name, uid, err)
+		} else {
+			rt.logFinished(def, &rep)
 		}
 		run.closed = true
 	}
-	rt.logf("command set %q finished: %s", def.Name, RunState(run.kinds))
 	return true
+}
+
+// logFinished logs the end of a run whose end was stored: its state, and
+// its reason when it has one.
+func (rt *AgentRuntime) logFinished(def *CommandSetDef, rep *CommandRunReport) {
+	if rep.Reason != "" {
+		rt.logf("command set %q finished: %s (%s)", def.Name, rep.State, rep.Reason)
+		return
+	}
+	rt.logf("command set %q finished: %s", def.Name, rep.State)
 }
 
 // recordCommandStart records the command at position pos of the run that
@@ -466,7 +480,7 @@ func (rt *AgentRuntime) closeAfterPanic(run *commandRun) {
 			rt.logf("command set %q: recording the end of run %s failed (the next start reports it as interrupted): %v", def.Name, run.uid, err)
 			return
 		}
-		rt.logf("command set %q ended by an internal error: %s", def.Name, ResultError)
+		rt.logFinished(def, &rep)
 	}) {
 		rt.logf("command set %q: run %s is left unfinished (the next start reports it as interrupted)", def.Name, run.uid)
 	}
@@ -670,7 +684,7 @@ func (rt *AgentRuntime) recordInterrupted(pending []*interruptedRun) {
 // sent with the next report.
 func (rt *AgentRuntime) queueCommandReport(req *ReportRequest) {
 	if err := rt.out.queue(rt.stamped(req)); err != nil {
-		rt.logf("failed to queue a command set report: %v", err)
+		rt.logf("queuing the answers to run requests failed (they are made again when the requests are delivered again): %v", err)
 	}
 }
 

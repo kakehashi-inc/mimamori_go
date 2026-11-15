@@ -226,6 +226,11 @@ func (rt *AgentRuntime) logConnectionError(op string, err error) {
 		rt.logf("%s: the central sent nothing for %d seconds: %v", op, int(IdleTimeout/time.Second), err)
 	case IsCertificateError(err):
 		rt.logf("%s: the central certificate is not signed by a trusted CA (%v). If the CA was rolled over while this agent was offline, re-initialize the agent", op, err)
+	case errors.As(err, &he):
+		rt.logf("%s: the central answered %v", op, err)
+	case rt.comm.config == nil:
+		// The built-in agent hands its requests to the central in process.
+		rt.logf("%s: the central could not take it: %v", op, err)
 	default:
 		rt.logf("%s: cannot reach the central: %v", op, err)
 	}
