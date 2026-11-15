@@ -37,7 +37,7 @@ type CtlCmd struct {
 	CommandSets  CtlCommandSetsCmd  `cmd:"" name:"command-sets" help:"Command sets of agents: definitions, run requests and results"`
 	Accounts     CtlAccountsCmd     `cmd:"" help:"Accounts"`
 	Certs        CtlCertsCmd        `cmd:"" help:"Certificate status"`
-	History      CtlHistoryCmd      `cmd:"" help:"History"`
+	History      CtlHistoryCmd      `cmd:"" help:"Show the history"`
 }
 
 // ctlClient is the connected management API client.
@@ -475,9 +475,9 @@ type CtlTokensCmd struct {
 }
 type CtlTokensIssueCmd struct {
 	Name        string `arg:""`
-	ValidDays   int    `name:"valid-days" help:"Validity in days (default: central setting)"`
-	Rule        int64  `help:"Rule id to apply"`
-	RuleVersion int    `name:"rule-version" help:"Rule version (default: latest)"`
+	ValidDays   int    `name:"valid-days" placeholder:"N" help:"Validity in days (default: central setting)"`
+	Rule        int64  `placeholder:"ID" help:"Rule id to apply"`
+	RuleVersion int    `name:"rule-version" placeholder:"V" help:"Rule version (default: latest)"`
 }
 type CtlTokensListCmd struct{}
 type CtlTokensShowCmd struct {
@@ -485,7 +485,7 @@ type CtlTokensShowCmd struct {
 }
 type CtlTokensReissueCmd struct {
 	ID        int64 `arg:""`
-	ValidDays int   `name:"valid-days" help:"Validity in days (default: central setting)"`
+	ValidDays int   `name:"valid-days" placeholder:"N" help:"Validity in days (default: central setting)"`
 }
 type CtlTokensIDCmd struct {
 	ID int64 `arg:""`
@@ -591,28 +591,28 @@ type CtlRulesCmd struct {
 type CtlRulesListCmd struct{}
 type CtlRulesShowCmd struct {
 	ID      int64 `arg:""`
-	Version int   `help:"Version (default: latest)"`
+	Version int   `placeholder:"V" help:"Version (default: latest)"`
 }
 type CtlRulesCreateCmd struct {
 	Name        string   `arg:""`
-	Description string   `help:"Description"`
-	Template    []string `help:"Template to expand (repeatable)"`
-	Choice      []string `help:"Conflict choice FIELD=TEMPLATE (repeatable; FIELD may contain commas)" sep:"none"`
-	File        string   `help:"Content JSON file ('-' for standard input)"`
+	Description string   `placeholder:"D" help:"Description"`
+	Template    []string `placeholder:"T" help:"Template to expand (repeatable)"`
+	Choice      []string `placeholder:"FIELD=TEMPLATE" help:"Conflict choice: the template whose value of FIELD is used (repeatable; FIELD may contain commas)" sep:"none"`
+	File        string   `placeholder:"F" help:"Content JSON file ('-' for standard input)"`
 }
 type CtlRulesExportCmd struct {
 	ID      int64 `arg:""`
-	Version int   `help:"Version (default: latest)"`
+	Version int   `placeholder:"V" help:"Version (default: latest)"`
 }
 type CtlRulesSaveCmd struct {
 	ID          int64   `arg:""`
-	File        string  `help:"Content JSON file ('-' for standard input)" required:""`
-	Comment     string  `help:"Comment of the new version"`
-	Description *string `help:"New description"`
+	File        string  `placeholder:"F" help:"Content JSON file ('-' for standard input)" required:""`
+	Comment     string  `placeholder:"C" help:"Comment of the new version"`
+	Description *string `placeholder:"D" help:"New description (default: unchanged)"`
 }
 type CtlRulesEditCmd struct {
 	ID      int64  `arg:""`
-	Comment string `help:"Comment of the new version"`
+	Comment string `placeholder:"C" help:"Comment of the new version"`
 	Editor  string `help:"Editor command" default:"vi"`
 }
 type CtlRulesHistoryCmd struct {
@@ -625,17 +625,17 @@ type CtlRulesDiffCmd struct {
 }
 type CtlRulesApplyCmd struct {
 	ID      int64   `arg:""`
-	Agent   []int64 `help:"Agent id (repeatable)" required:""`
-	Version int     `help:"Version (default: latest)"`
+	Agent   []int64 `placeholder:"ID" help:"Agent id (repeatable)" required:""`
+	Version int     `placeholder:"V" help:"Version (default: latest)"`
 }
 type CtlRulesUnassignCmd struct {
-	Agent []int64 `help:"Agent id (repeatable)" required:""`
+	Agent []int64 `placeholder:"ID" help:"Agent id (repeatable)" required:""`
 }
 type CtlRulesToTemplateCmd struct {
 	ID          int64  `arg:""`
 	Name        string `arg:""`
-	Version     int    `help:"Version (default: latest)"`
-	Description string `help:"Description"`
+	Version     int    `placeholder:"V" help:"Version (default: latest)"`
+	Description string `placeholder:"D" help:"Description"`
 }
 type CtlRulesDeleteCmd struct {
 	ID int64 `arg:""`
@@ -827,16 +827,16 @@ type CtlTemplatesShowCmd struct {
 }
 type CtlTemplatesCreateCmd struct {
 	Name        string `arg:""`
-	Description string `help:"Description"`
-	FromBuiltin string `name:"from-builtin" help:"Copy a built-in template"`
-	FromRule    int64  `name:"from-rule" help:"Copy a rule version (latest unless --version is given)"`
-	Version     int    `help:"Rule version for --from-rule (default: latest)"`
-	File        string `help:"Content JSON file ('-' for standard input)"`
+	Description string `placeholder:"D" help:"Description"`
+	FromBuiltin string `name:"from-builtin" placeholder:"T" help:"Copy a built-in template"`
+	FromRule    int64  `name:"from-rule" placeholder:"ID" help:"Copy a rule version (latest unless --version is given)"`
+	Version     int    `placeholder:"V" help:"Rule version for --from-rule (default: latest)"`
+	File        string `placeholder:"F" help:"Content JSON file ('-' for standard input)"`
 }
 type CtlTemplatesUpdateCmd struct {
 	Name        string  `arg:""`
-	File        string  `help:"Content JSON file ('-' for standard input)" required:""`
-	Description *string `help:"New description (default: unchanged)"`
+	File        string  `placeholder:"F" help:"Content JSON file ('-' for standard input)" required:""`
+	Description *string `placeholder:"D" help:"New description (default: unchanged)"`
 }
 type CtlTemplatesDeleteCmd struct {
 	Name string `arg:""`
@@ -886,16 +886,20 @@ type CtlDetectionsCmd struct {
 	Show CtlDetectionsShowCmd `cmd:"" help:"Show a detection"`
 	Ack  CtlDetectionsAckCmd  `cmd:"" help:"Mark detections as acknowledged (AGENT_ID:ID ...)"`
 }
+
+// CtlDetectionsListCmd lists detections. A filter flag that is not given
+// filters nothing; the value of a given one is one of the values its
+// placeholder lists (kong refuses another one with that list).
 type CtlDetectionsListCmd struct {
-	Agent        int64  `help:"Agent id"`
-	Category     string `help:"${detection_categories_help}" enum:"${detection_categories}" default:""`
-	Type         string `help:"${detection_types_help}" enum:"${detection_types}" default:""`
-	From         string `help:"From, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
-	To           string `help:"To, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
-	Acknowledged string `help:"true or false" enum:",true,false" default:""`
-	Suppressed   string `help:"true or false" enum:",true,false" default:""`
-	Limit        int    `help:"Maximum rows (1 to 500)" default:"100"`
-	Offset       int    `help:"Rows to skip (0 to 1000000)" default:"0"`
+	Agent        int64   `placeholder:"ID" help:"Only this agent id (omitted, 0 or less: all agents)"`
+	Category     *string `placeholder:"${detection_categories_placeholder}" help:"Only detections of this category" enum:"${detection_categories}"`
+	Type         *string `placeholder:"${detection_types_placeholder}" help:"Only detections of this type" enum:"${detection_types}"`
+	From         string  `placeholder:"T" help:"Last occurrence at or after T, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
+	To           string  `placeholder:"T" help:"Last occurrence at or before T, in the forms of --from"`
+	Acknowledged *string `placeholder:"true|false" help:"Only acknowledged (true) or unacknowledged (false) detections" enum:"true,false"`
+	Suppressed   *string `placeholder:"true|false" help:"Only suppressed (true) or not suppressed (false) detections" enum:"true,false"`
+	Limit        int     `help:"Maximum rows (1 to 500)" default:"100"`
+	Offset       int     `help:"Rows to skip (0 to 1000000)" default:"0"`
 }
 type CtlDetectionsShowCmd struct {
 	Agent int64 `arg:""`
@@ -938,9 +942,9 @@ func (c *CtlDetectionsListCmd) Run(p *CtlCmd) error {
 	if c.Agent > 0 {
 		q.Set("agent_id", fmt.Sprint(c.Agent))
 	}
-	for k, v := range map[string]string{"category": c.Category, "type": c.Type, "from": from, "to": to, "acknowledged": c.Acknowledged, "suppressed": c.Suppressed} {
-		if v != "" {
-			q.Set(k, v)
+	for k, v := range map[string]*string{"category": c.Category, "type": c.Type, "from": &from, "to": &to, "acknowledged": c.Acknowledged, "suppressed": c.Suppressed} {
+		if v != nil && *v != "" {
+			q.Set(k, *v)
 		}
 	}
 	q.Set("limit", fmt.Sprint(c.Limit))
@@ -1026,11 +1030,11 @@ type CtlSuppressionsCmd struct {
 type CtlSuppressionsListCmd struct{}
 type CtlSuppressionsCreateCmd struct {
 	Agent   *int64 `placeholder:"ID" help:"Only this agent id (omitted: all agents)"`
-	Type    string `help:"Detection type"`
-	User    string `help:"OS user"`
-	Exe     string `help:"Executable (glob with *)"`
-	Target  string `help:"Target (glob with *)"`
-	Comment string `help:"Comment"`
+	Type    string `placeholder:"T" help:"Detection type"`
+	User    string `placeholder:"U" help:"OS user"`
+	Exe     string `placeholder:"E" help:"Executable (glob with *)"`
+	Target  string `placeholder:"T" help:"Target (glob with *)"`
+	Comment string `placeholder:"C" help:"Comment"`
 }
 type CtlSuppressionsDeleteCmd struct {
 	ID int64 `arg:""`
@@ -1073,8 +1077,8 @@ type CtlAccountsCmd struct {
 type CtlAccountsListCmd struct{}
 type CtlAccountsCreateCmd struct {
 	Email       string `arg:"" help:"E-mail address (the login ID)"`
-	DisplayName string `name:"display-name" help:"Display name shown on the screens" required:""`
-	Role        string `help:"admin or viewer" enum:"admin,viewer" required:""`
+	DisplayName string `name:"display-name" placeholder:"NAME" help:"Display name shown on the screens" required:""`
+	Role        string `placeholder:"admin|viewer" help:"Role: admin or viewer" enum:"admin,viewer" required:""`
 	Language    string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
 }
 type CtlAccountsEmailCmd struct {
@@ -1087,7 +1091,7 @@ type CtlAccountsDisplayNameCmd struct {
 }
 type CtlAccountsRoleCmd struct {
 	ID   int64  `arg:""`
-	Role string `arg:"" enum:"admin,viewer"`
+	Role string `arg:"" enum:"admin,viewer" help:"admin or viewer"`
 }
 type CtlAccountsNotifyCmd struct {
 	ID    int64  `arg:""`
@@ -1170,18 +1174,20 @@ type CtlCertsStatusCmd struct{}
 
 func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/certificates", nil) }
 
+// CtlHistoryCmd shows the history; --category, when given, is one of the
+// categories (kong refuses another value with their list).
 type CtlHistoryCmd struct {
-	Category string `help:"${history_categories_help}" enum:"${history_categories}" default:""`
-	Limit    int    `help:"Maximum rows (1 to 500)" default:"50"`
-	Offset   int    `help:"Rows to skip (0 to 10000000)" default:"0"`
+	Category *string `placeholder:"C" help:"Only rows of this category: ${history_categories_help}" enum:"${history_categories}"`
+	Limit    int     `help:"Maximum rows (1 to 500)" default:"50"`
+	Offset   int     `help:"Rows to skip (0 to 10000000)" default:"0"`
 }
 
 func (c *CtlHistoryCmd) Run(p *CtlCmd) error {
 	q := url.Values{}
 	q.Set("limit", fmt.Sprint(c.Limit))
 	q.Set("offset", fmt.Sprint(c.Offset))
-	if c.Category != "" {
-		q.Set("category", c.Category)
+	if c.Category != nil {
+		q.Set("category", *c.Category)
 	}
 	return runCtl(p, "GET", "/history?"+q.Encode(), nil, "at", "account_name", "category", "action", "target", "detail", "remote_addr", "count")
 }

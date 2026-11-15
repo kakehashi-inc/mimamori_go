@@ -529,7 +529,7 @@ func TestNumbersOnTheCommandLine(t *testing.T) {
 		t.Errorf("config set: %+v", c.Central.Config.Set)
 	}
 	c := parse("ctl", "detections", "list", "--agent", "-1", "--limit", "-5", "--offset=-2", "--category", "alert")
-	if l := c.Ctl.Detections.List; l.Agent != -1 || l.Limit != -5 || l.Offset != -2 || l.Category != "alert" {
+	if l := c.Ctl.Detections.List; l.Agent != -1 || l.Limit != -5 || l.Offset != -2 || l.Category == nil || *l.Category != "alert" {
 		t.Errorf("detections list: %+v", l)
 	}
 	if c := parse("ctl", "rules", "apply", "3", "--agent", "-1", "--agent", "2,-4"); !reflect.DeepEqual(c.Ctl.Rules.Apply.Agent, []int64{-1, 2, -4}) {
@@ -684,31 +684,47 @@ func TestSuppressionsCreateHelpNamesTheAgentID(t *testing.T) {
 }
 
 // The filters of ctl history and ctl detections list take only the values
-// the program defines (the lists of the models and of the rule content):
-// another value ends the program with exit code 2 and kong's message, which
-// lists the accepted values; --help lists them.
+// the program defines (the lists of the models and of the rule content, and
+// true or false): a filter that is not given is nil (it filters nothing);
+// another value, the empty one included, ends the program with exit code 2
+// and kong's message, which lists only the accepted values; --help shows
+// them in the placeholder (the long list of the history categories in the
+// text).
 func TestFilterFlagsTakeDefinedValues(t *testing.T) {
+	trueFalse := []string{"true", "false"}
 	for _, tc := range []struct {
 		cmd      []string
 		flag     string
 		accepted []string
-		got      func(c *CLI) string
+		got      func(c *CLI) *string
+		help     string
 	}{
-		{[]string{"ctl", "history"}, "category", models.HistoryCategories, func(c *CLI) string { return c.Ctl.History.Category }},
-		{[]string{"ctl", "detections", "list"}, "category", modules.DetectionCategories, func(c *CLI) string { return c.Ctl.Detections.List.Category }},
-		{[]string{"ctl", "detections", "list"}, "type", modules.DetectionTypes, func(c *CLI) string { return c.Ctl.Detections.List.Type }},
+		{[]string{"ctl", "history"}, "category", models.HistoryCategories, func(c *CLI) *string { return c.Ctl.History.Category },
+			"--category=C Only rows of this category: " + strings.Join(models.HistoryCategories[:len(models.HistoryCategories)-1], ", ") + " or " + models.HistoryCategories[len(models.HistoryCategories)-1]},
+		{[]string{"ctl", "detections", "list"}, "category", modules.DetectionCategories, func(c *CLI) *string { return c.Ctl.Detections.List.Category },
+			"--category=" + strings.Join(modules.DetectionCategories, "|") + " Only detections of this category"},
+		{[]string{"ctl", "detections", "list"}, "type", modules.DetectionTypes, func(c *CLI) *string { return c.Ctl.Detections.List.Type },
+			"--type=" + strings.Join(modules.DetectionTypes, "|") + " Only detections of this type"},
+		{[]string{"ctl", "detections", "list"}, "acknowledged", trueFalse, func(c *CLI) *string { return c.Ctl.Detections.List.Acknowledged },
+			"--acknowledged=true|false Only acknowledged (true) or unacknowledged (false) detections"},
+		{[]string{"ctl", "detections", "list"}, "suppressed", trueFalse, func(c *CLI) *string { return c.Ctl.Detections.List.Suppressed },
+			"--suppressed=true|false Only suppressed (true) or not suppressed (false) detections"},
 	} {
+		var unset CLI
+		if _, err := parseArgs(testParser(t, &unset, io.Discard), tc.cmd); err != nil || tc.got(&unset) != nil {
+			t.Errorf("%q without --%s: %v, got %v", tc.cmd, tc.flag, err, tc.got(&unset))
+		}
 		for _, v := range tc.accepted {
 			var cli CLI
-			if _, err := parseArgs(testParser(t, &cli, io.Discard), append(append([]string{}, tc.cmd...), "--"+tc.flag, v)); err != nil || tc.got(&cli) != v {
-				t.Errorf("%q --%s %s: %v, got %q", tc.cmd, tc.flag, v, err, tc.got(&cli))
+			if _, err := parseArgs(testParser(t, &cli, io.Discard), append(append([]string{}, tc.cmd...), "--"+tc.flag, v)); err != nil || tc.got(&cli) == nil || *tc.got(&cli) != v {
+				t.Errorf("%q --%s %s: %v, got %v", tc.cmd, tc.flag, v, err, tc.got(&cli))
 			}
 		}
-		quoted := []string{`""`}
+		var quoted []string
 		for _, v := range tc.accepted {
 			quoted = append(quoted, fmt.Sprintf("%q", v))
 		}
-		for _, v := range []string{"bogus", strings.ToUpper(tc.accepted[0]), " " + tc.accepted[0], tc.accepted[0] + ","} {
+		for _, v := range []string{"bogus", "", strings.ToUpper(tc.accepted[0]), " " + tc.accepted[0], tc.accepted[0] + ","} {
 			_, errOut, code := runMain(t, append(append([]string{"--data-dir", t.TempDir()}, tc.cmd...), "--"+tc.flag, v)...)
 			want := fmt.Sprintf("mimamori: error: --%s must be one of %s but got %q\n", tc.flag, strings.Join(quoted, ","), v)
 			if code != 2 || errOut != want {
@@ -716,10 +732,8 @@ func TestFilterFlagsTakeDefinedValues(t *testing.T) {
 			}
 		}
 		help, _, code := runMain(t, append(append([]string{}, tc.cmd...), "--help")...)
-		n := len(tc.accepted)
-		want := "--" + tc.flag + `="" ` + strings.Join(tc.accepted[:n-1], ", ") + " or " + tc.accepted[n-1]
-		if code != 0 || !strings.Contains(strings.Join(strings.Fields(help), " "), want) {
-			t.Errorf("help of %q lacks %q:\n%s", tc.cmd, want, help)
+		if code != 0 || !strings.Contains(strings.Join(strings.Fields(help), " "), tc.help) {
+			t.Errorf("help of %q lacks %q:\n%s", tc.cmd, tc.help, help)
 		}
 	}
 }

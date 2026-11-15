@@ -87,8 +87,8 @@ func readNewPassword() (string, error) {
 
 // CentralInitAdminCmd creates the first administrator.
 type CentralInitAdminCmd struct {
-	Email       string `help:"E-mail address (the login ID)" required:""`
-	DisplayName string `name:"display-name" help:"Display name shown on the screens" required:""`
+	Email       string `placeholder:"ADDRESS" help:"E-mail address (the login ID)" required:""`
+	DisplayName string `name:"display-name" placeholder:"NAME" help:"Display name shown on the screens" required:""`
 	Language    string `help:"Display language of the browser screens: auto (follow the browser), en or ja" enum:"auto,en,ja" default:"auto"`
 }
 
@@ -152,7 +152,7 @@ func (c *CentralInitAdminCmd) Run() error {
 
 // CentralResetPasswordCmd resets an administrator's password.
 type CentralResetPasswordCmd struct {
-	Email string `help:"E-mail address (login ID) of the administrator" required:""`
+	Email string `placeholder:"ADDRESS" help:"E-mail address (login ID) of the administrator" required:""`
 }
 
 func (c *CentralResetPasswordCmd) Run() error {
@@ -234,10 +234,10 @@ func (c *AgentSetWorkersCmd) Run() error {
 
 // AgentInitCmd initializes the agent.
 type AgentInitCmd struct {
-	CentralHost   string `name:"central-host" help:"Host name or IP address of the central" required:""`
+	CentralHost   string `name:"central-host" placeholder:"HOST" help:"Host name or IP address of the central" required:""`
 	CentralPort   int    `name:"central-port" help:"Port of the central for the agents" default:"${default_agent_port}"`
 	Overwrite     bool   `help:"Replace an existing initialization"`
-	CAFingerprint string `name:"ca-fingerprint" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
+	CAFingerprint string `name:"ca-fingerprint" placeholder:"FP" help:"Expected SHA-256 fingerprint of the central CA (shown on the setup guide screen)"`
 }
 
 func (c *AgentInitCmd) Run() error {
@@ -248,7 +248,7 @@ func (c *AgentInitCmd) Run() error {
 
 // AgentSetCentralCmd changes the central host of an initialized agent.
 type AgentSetCentralCmd struct {
-	Host string `help:"New host name or IP address of the central" required:""`
+	Host string `placeholder:"HOST" help:"New host name or IP address of the central" required:""`
 	Port *int   `help:"Port of the central for the agents (default: keep the current port)"`
 }
 

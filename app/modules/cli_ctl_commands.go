@@ -51,17 +51,17 @@ type CtlCommandSetsRunCmd struct {
 }
 type CtlCommandSetsCreateCmd struct {
 	Agent int64  `arg:"" help:"Agent id"`
-	File  string `help:"Definition JSON file ('-' for standard input)" required:""`
+	File  string `placeholder:"F" help:"Definition JSON file ('-' for standard input)" required:""`
 }
 type CtlCommandSetsUpdateCmd struct {
 	Agent int64  `arg:"" help:"Agent id"`
 	Set   int64  `arg:"" help:"Command set id"`
-	File  string `help:"Definition JSON file ('-' for standard input)" required:""`
+	File  string `placeholder:"F" help:"Definition JSON file ('-' for standard input)" required:""`
 }
 type CtlCommandSetsImportCmd struct {
 	Agent int64    `arg:"" help:"Agent id (destination)"`
 	Items []string `arg:"" help:"SET_ID or SET_ID=NEW_NAME of the source agent"`
-	From  int64    `help:"Source agent id" required:""`
+	From  int64    `placeholder:"SOURCE_AGENT_ID" help:"Source agent id" required:""`
 }
 type CtlCommandSetsDiscardCmd struct {
 	Agent   int64 `arg:"" help:"Agent id"`
@@ -71,7 +71,7 @@ type CtlCommandSetsRunsCmd struct {
 	Agent  int64 `arg:"" help:"Agent id"`
 	Set    int64 `arg:"" help:"Command set id"`
 	Limit  int   `help:"Maximum rows (1 to 500)" default:"50"`
-	Before int64 `help:"List only runs older than this run id (the value printed after the table)"`
+	Before int64 `placeholder:"RUN_ID" help:"List only runs older than this run id (the value printed after the table)"`
 }
 type CtlCommandSetsShowRunCmd struct {
 	Agent int64 `arg:"" help:"Agent id"`

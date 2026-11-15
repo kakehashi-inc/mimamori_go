@@ -14,9 +14,10 @@ import (
 //
 //   - default_agent_port: DefaultAgentPort.
 //   - detection_categories, detection_types, history_categories: the
-//     accepted values of a filter flag (the empty value, "not given", first,
-//     then DetectionCategories, DetectionTypes or models.HistoryCategories).
-//   - the same names with _help: those values for --help ("a, b or c").
+//     accepted values of a filter flag (DetectionCategories, DetectionTypes
+//     or models.HistoryCategories), the enum of the flag ("a,b,c").
+//   - the same names with _help: those values for the text of --help ("a, b
+//     or c"), and with _placeholder: for the placeholder ("a|b|c").
 func CLIVars() map[string]string {
 	vars := map[string]string{"default_agent_port": strconv.Itoa(DefaultAgentPort)}
 	for name, list := range map[string][]string{
@@ -24,8 +25,9 @@ func CLIVars() map[string]string {
 		"detection_types":      DetectionTypes,
 		"history_categories":   models.HistoryCategories,
 	} {
-		vars[name] = "," + strings.Join(list, ",")
+		vars[name] = strings.Join(list, ",")
 		vars[name+"_help"] = orList(list)
+		vars[name+"_placeholder"] = strings.Join(list, "|")
 	}
 	return vars
 }
