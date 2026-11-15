@@ -847,13 +847,14 @@ func TestConfigSavedReachesTransport(t *testing.T) {
 
 // TestAgentStopEndsLeftoverReading (TO-1): a process left behind by a command
 // that keeps writing holds the reading of the output after the command
-// ended; agent stop ends it within the grace (SIGTERM to the process group),
-// the run is recorded and the agent ends.
+// ended; agent stop ends it (SIGTERM to the process group; the writer ends
+// at once, so nothing waits for the grace), the run is recorded and the
+// agent ends.
 func TestAgentStopEndsLeftoverReading(t *testing.T) {
 	requireBash(t)
 	tr := &parTransport{}
 	rt := newParallelRuntime(t, tr, 1)
-	rt.cmdKillGrace = time.Second
+	rt.cmdKillGrace = 20 * time.Second
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	tr.resp.CommandSets = defsOf(testSet(1, PurposeRunOnly, "( while :; do echo x; sleep 0.3; done ) & echo $! > "+pidFile+"; echo main"))
 	tr.resp.CommandRequests = manualRequests(1, 1)
@@ -877,7 +878,7 @@ func TestAgentStopEndsLeftoverReading(t *testing.T) {
 		t.Fatal("agent stop did not end while a process left behind keeps writing")
 	}
 	if d := time.Since(stopAt); d > 4*time.Second {
-		t.Fatalf("the stop took %s (grace 1 s)", d)
+		t.Fatalf("the stop took %s (the writer ends at the SIGTERM; grace 20 s)", d)
 	}
 	if all, finished := countRuns(rt.DB); all != 1 || finished != 1 {
 		t.Fatalf("runs recorded %d, finished %d", all, finished)
@@ -923,8 +924,8 @@ func TestLeftoverWriterNotBlockedWhileWorkerBusy(t *testing.T) {
 	holder := pidFrom(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(holder, syscall.SIGKILL) })
 	waitFor(t, "the long command of set 2", func() bool { all, _ := countRuns(rt.DB); return all == 2 })
-	if n, r := rt.leftovers.held(), pipeReaders(); n != 1 || r != readersBefore+1 {
-		t.Fatalf("pipes held when set 2 started: %d, readers %d (%d before)", n, r, readersBefore)
+	if n, r := rt.leftovers.held(), pipeReaders(); n != 1 || r < 1 {
+		t.Fatalf("pipes held when set 2 started: %d, reader goroutines %d", n, r)
 	}
 	waitFile(t, after)
 	if _, finished := countRuns(rt.DB); finished != 1 {

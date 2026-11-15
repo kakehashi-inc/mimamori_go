@@ -127,7 +127,8 @@ type commandProcess struct {
 	deadline time.Time
 	grace    time.Duration
 	sig      *groupSignaler
-	// group tells whether the process group still has a process.
+	// group tells whether the process group still has a process that has
+	// not ended.
 	group *groupProbe
 
 	raw rawExit
