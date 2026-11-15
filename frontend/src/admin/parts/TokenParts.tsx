@@ -5,7 +5,7 @@ import { getGuide, getRule, listRules } from '../../api/client';
 import { Button } from '../../components/Button';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { CodeBlock } from '../../components/CopyButton';
-import { Field, inputClass, invalidInputClass } from '../../components/FormControls';
+import { Field, inputClass, invalidInputClass, wholeNumberInputProps } from '../../components/FormControls';
 import { Modal } from '../../components/Modal';
 import { Alert } from '../../components/StateViews';
 import { Td, Th } from '../../components/Table';
@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import type { Guide, RuleSummary, RuleVersionInfo, Token, TokenWithValue } from '../../types';
 import { agentInitCommand } from '../../utils/commands';
 import { errorMessage } from '../../utils/format';
+import { wholeNumberIn } from '../../utils/wholeNumber';
 import { serverText } from '../../utils/serverText';
 import { issueToken, reissueToken, revokeToken, unbindToken } from '../api';
 
@@ -190,21 +191,10 @@ function IssuedTokenHelp({ issued, reissued }: { issued: TokenWithValue; reissue
     );
 }
 
-/** What the valid days input holds: its value and whether it holds text that is no number. */
-interface DaysInput {
-    text: string;
-    bad: boolean;
-}
-
-const noDays: DaysInput = { text: '', bad: false };
-
-/** The days to send: undefined for the default, null when the input is not a whole number in the range. */
-function parseValidDays(d: DaysInput): number | undefined | null {
-    if (d.bad) return null;
-    if (d.text === '') return undefined;
-    if (!/^[0-9]+$/.test(d.text)) return null;
-    const n = Number(d.text);
-    return n >= VALID_DAYS.min && n <= VALID_DAYS.max ? n : null;
+/** The days to send for the typed text: undefined for the default (empty), null when it is not a whole number in the range. */
+function parseValidDays(text: string): number | undefined | null {
+    if (text === '') return undefined;
+    return wholeNumberIn(text, VALID_DAYS.min, VALID_DAYS.max) ? Number(text) : null;
 }
 
 /** The valid days input of the issue and reissue dialogs. */
@@ -215,26 +205,20 @@ function ValidDaysField({
     onChange,
 }: {
     id: string;
-    value: DaysInput;
+    value: string;
     invalid: boolean;
-    onChange: (d: DaysInput) => void;
+    onChange: (text: string) => void;
 }) {
     const { t } = useTranslation();
     return (
         <Field label={t('tokens.validDays')} htmlFor={id} hint={t('tokens.validDaysHint', VALID_DAYS)}>
             <input
                 id={id}
-                type='number'
-                min={VALID_DAYS.min}
-                max={VALID_DAYS.max}
-                step={1}
-                inputMode='numeric'
+                {...wholeNumberInputProps}
                 className={`${inputClass} ${invalid ? invalidInputClass : ''}`}
                 aria-invalid={invalid}
-                value={value.text}
-                // onInput, not onChange: React reports no change while text that is no
-                // number keeps the value empty, and an empty field means the default.
-                onInput={e => onChange({ text: e.currentTarget.value, bad: e.currentTarget.validity.badInput })}
+                value={value}
+                onChange={e => onChange(e.target.value)}
             />
         </Field>
     );
@@ -251,7 +235,7 @@ function IssueTokenModal({
 }) {
     const { t } = useTranslation();
     const [name, setName] = useState('');
-    const [validDays, setValidDays] = useState<DaysInput>(noDays);
+    const [validDays, setValidDays] = useState('');
     const [daysInvalid, setDaysInvalid] = useState(false);
     const [rules, setRules] = useState<RuleSummary[]>([]);
     const [ruleId, setRuleId] = useState('');
@@ -263,7 +247,7 @@ function IssueTokenModal({
     useEffect(() => {
         if (!open) return;
         setName('');
-        setValidDays(noDays);
+        setValidDays('');
         setDaysInvalid(false);
         setRuleId('');
         setVersion('');
@@ -408,14 +392,14 @@ function ReissueTokenModal({
     onIssued: (r: TokenWithValue) => void;
 }) {
     const { t } = useTranslation();
-    const [validDays, setValidDays] = useState<DaysInput>(noDays);
+    const [validDays, setValidDays] = useState('');
     const [daysInvalid, setDaysInvalid] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (token) {
-            setValidDays(noDays);
+            setValidDays('');
             setDaysInvalid(false);
             setError(null);
         }

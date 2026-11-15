@@ -6,7 +6,13 @@ import { getConfig, listAccounts, setAccountNotify, updateConfig } from '../api'
 import { NotifyRecipients } from '../components/NotifyRecipients';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { checkboxClass, Field, inputClass, invalidInputClass } from '../../components/FormControls';
+import {
+    checkboxClass,
+    Field,
+    inputClass,
+    invalidInputClass,
+    wholeNumberInputProps,
+} from '../../components/FormControls';
 import { Card, PageHeader } from '../../components/PageHeader';
 import { Alert, ErrorAlert, Loading } from '../../components/StateViews';
 import { useToast } from '../../context/ToastContext';
@@ -15,6 +21,7 @@ import { useApi } from '../../hooks/useApi';
 import type { Account, CentralConfig, ConfigItem, ServerProblem } from '../../types';
 import { errorMessage } from '../../utils/format';
 import { problemText } from '../../utils/serverText';
+import { wholeNumber } from '../../utils/wholeNumber';
 
 // Items grouped by subject, in display order. Items the server reports but
 // that are not listed here are shown in the last group.
@@ -58,15 +65,12 @@ const itemKey = (name: string) => name.replace(/\./g, '_') as ItemKey;
 
 const inputId = (name: string) => `cfg-${itemKey(name)}`;
 
-// A whole number as the server reads it: the digits 0 to 9 only.
-const WHOLE_NUMBER = /^[0-9]+$/;
-
-/** The screen's own problem with the value of a number item (its range is the server's), or null. */
+/** The screen's own problem with the typed text of a number item (its range is the server's), or null. */
 function intProblem(t: TFunction, item: ConfigItem, value: string): string | null {
     if (item.kind !== 'int' || item.min === undefined || item.max === undefined) return null;
     const range = { min: item.min, max: item.max };
-    if (!WHOLE_NUMBER.test(value)) return t('config.intNotWhole', range);
-    const n = Number(value);
+    const n = wholeNumber(value);
+    if (n === null) return t('config.intNotWhole', range);
     return n < item.min || n > item.max ? t('config.intOutOfRange', range) : null;
 }
 
@@ -358,11 +362,7 @@ export function ConfigPage() {
             return (
                 <input
                     id={id}
-                    type='number'
-                    min={item.min}
-                    max={item.max}
-                    step={1}
-                    inputMode='numeric'
+                    {...wholeNumberInputProps}
                     className={`${inputClass} sm:max-w-48 ${markClass}`}
                     aria-invalid={marked}
                     value={value}

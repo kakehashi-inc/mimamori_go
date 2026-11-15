@@ -3,9 +3,16 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { DetectionType, LegitLocation, RuleContent } from '../../types';
 import { enabledTypes, normalizeRuleContent } from '../../utils/ruleContent';
+import { wholeNumber } from '../../utils/wholeNumber';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { inputClass, inputSmAutoClass, inputSmClass, invalidInputClass } from '../../components/FormControls';
+import {
+    inputClass,
+    inputSmAutoClass,
+    inputSmClass,
+    invalidInputClass,
+    wholeNumberInputProps,
+} from '../../components/FormControls';
 import { CategorySelect, CommaListInput, ElementListEditor, RemoveButton, StringListEditor } from './ListEditors';
 import { Tabs } from '../../components/Tabs';
 import { ruleContentProblems, type ContentProblem } from './ruleContentCheck';
@@ -397,10 +404,10 @@ function NumberInput({
 }) {
     const { t } = useTranslation();
     const [text, setText] = useState(String(value));
+    // The typed text is judged as it is (the number rule): 0 or a whole number in the range.
     const valid = (s: string) => {
-        if (!/^[0-9]+$/.test(s)) return false;
-        const n = Number(s);
-        return n === 0 || (n >= range.min && n <= range.max);
+        const n = wholeNumber(s);
+        return n === 0 || (n !== null && n >= range.min && n <= range.max);
     };
     // A value set from outside (the JSON tab) replaces the text; the text of
     // the same valid value is kept as typed ("010").
@@ -413,11 +420,7 @@ function NumberInput({
         <>
             <input
                 id={id}
-                type='number'
-                min={0}
-                max={range.max}
-                step={1}
-                inputMode='numeric'
+                {...wholeNumberInputProps}
                 className={`${inputSmClass} w-40 ${ok ? '' : invalidInputClass}`}
                 aria-invalid={!ok}
                 value={text}

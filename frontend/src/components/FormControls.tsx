@@ -44,6 +44,18 @@ export function Field({ label, htmlFor, hint, error, required, children, classNa
     );
 }
 
+// Attributes of the input of a whole number. type="number" is not used: the
+// browser cleans the text before the screen sees it ("+30" or "30." becomes
+// 30) and reports some values only with its own messages, in the browser's
+// language. The screens judge the typed text by the number rule
+// (utils/wholeNumber) and report problems with their own texts.
+export const wholeNumberInputProps = {
+    type: 'text',
+    inputMode: 'numeric',
+    autoComplete: 'off',
+    spellCheck: false,
+} as const;
+
 // Attributes of an e-mail address input. type="email" is not used because
 // browsers rewrite or reject addresses the server accepts (for example
 // international domain names are turned into punycode).

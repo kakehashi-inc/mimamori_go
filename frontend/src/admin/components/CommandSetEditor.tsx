@@ -1,7 +1,14 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/Button';
-import { checkboxClass, Field, inputClass, inputSmAutoClass, inputSmClass } from '../../components/FormControls';
+import {
+    checkboxClass,
+    Field,
+    inputClass,
+    inputSmAutoClass,
+    inputSmClass,
+    wholeNumberInputProps,
+} from '../../components/FormControls';
 import { Modal } from '../../components/Modal';
 import { Card } from '../../components/PageHeader';
 import { Alert } from '../../components/StateViews';
@@ -166,9 +173,7 @@ export function CommandSetEditor({ draft, onChange, agentUser, hostZone }: Edito
                     >
                         <input
                             id={`${id}-keep`}
-                            type='number'
-                            min={1}
-                            max={10000}
+                            {...wholeNumberInputProps}
                             className={`${inputClass} sm:max-w-48`}
                             value={draft.keepRuns}
                             onChange={e => set('keepRuns', e.target.value)}
@@ -496,9 +501,7 @@ function ScheduleCard({
                             <Field label={t('commandSets.editor.minuteOfHour')} htmlFor={`${id}-min`}>
                                 <input
                                     id={`${id}-min`}
-                                    type='number'
-                                    min={0}
-                                    max={59}
+                                    {...wholeNumberInputProps}
                                     className={`${inputClass} sm:max-w-32`}
                                     value={draft.minute}
                                     onChange={e => set('minute', e.target.value)}
@@ -651,22 +654,10 @@ function CommandEditor({
                     >
                         <input
                             id={`${id}-to`}
-                            type='number'
-                            min={0}
-                            max={86400}
-                            step={1}
-                            inputMode='numeric'
+                            {...wholeNumberInputProps}
                             className={inputClass}
                             value={command.timeoutSec}
-                            // onInput, not onChange: React reports no change while text that is
-                            // no number keeps the value empty, and an empty field means no limit.
-                            onInput={e =>
-                                onChange({
-                                    ...command,
-                                    timeoutSec: e.currentTarget.value,
-                                    timeoutBadInput: e.currentTarget.validity.badInput,
-                                })
-                            }
+                            onChange={e => set('timeoutSec', e.target.value)}
                         />
                     </Field>
                 </div>
@@ -679,9 +670,7 @@ function CommandEditor({
                         >
                             <input
                                 id={`${id}-ll`}
-                                type='number'
-                                min={1}
-                                max={10000}
+                                {...wholeNumberInputProps}
                                 className={`${inputClass} sm:max-w-48`}
                                 value={command.lineLimit}
                                 onChange={e => set('lineLimit', e.target.value)}
@@ -773,9 +762,7 @@ function CodeSpecInput({
     const id = useId();
     const numberInput = (field: 'a' | 'b', aria: string) => (
         <input
-            type='number'
-            min={0}
-            max={255}
+            {...wholeNumberInputProps}
             aria-label={`${label}: ${aria}`}
             className={inputSmClass.replace('w-full', 'w-20')}
             value={value[field]}

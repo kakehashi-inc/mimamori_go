@@ -1,6 +1,7 @@
 // Form state of the command set editor and its conversion from and to the
 // definition the API takes, the schedule summary and the code spec helpers.
 import type { TFunction } from 'i18next';
+import { wholeNumber } from '../../utils/wholeNumber';
 import type {
     CodeSpec,
     CodeSpecKind,
@@ -44,8 +45,6 @@ export interface CommandDraft {
     failure: CodeDraft;
     onProblems: OnProblems;
     timeoutSec: string;
-    /** The time limit field holds text that is no number (the browser gives it as empty). */
-    timeoutBadInput: boolean;
     lineLimit: string;
     patterns: { key: number; value: string }[];
 }
@@ -97,7 +96,6 @@ export function newCommandDraft(): CommandDraft {
         failure: { kind: 'min', a: '1', b: '' },
         onProblems: 'stop',
         timeoutSec: String(INITIAL_TIMEOUT_SEC),
-        timeoutBadInput: false,
         lineLimit: String(DEFAULT_LINE_LIMIT),
         patterns: [],
     };
@@ -114,7 +112,6 @@ export function isBlankCommandDraft(c: CommandDraft): boolean {
         c.patterns.length === 0 &&
         c.onProblems === 'stop' &&
         c.timeoutSec === String(INITIAL_TIMEOUT_SEC) &&
-        !c.timeoutBadInput &&
         c.lineLimit === String(DEFAULT_LINE_LIMIT) &&
         c.success.kind === 'single' &&
         c.success.a === '0' &&
@@ -198,21 +195,20 @@ export function setDraftFrom(set: CommandSet): SetDraft {
             failure: codeDraft(c.failure, { kind: 'min', a: 1 }),
             onProblems: c.on_problems,
             timeoutSec: String(c.timeout_sec),
-            timeoutBadInput: false,
             lineLimit: String(c.line_limit),
             patterns: (c.patterns ?? []).map(p => ({ key: newKey(), value: p })),
         })),
     };
 }
 
-/** A typed number; an empty or invalid field becomes NaN (sent as null; see draftProblems). */
+/** A typed number; a text that is no whole number (the number rule) becomes NaN (sent as null; see draftProblems). */
 function num(s: string): number {
-    return s.trim() === '' ? NaN : Number(s);
+    return wholeNumber(s) ?? NaN;
 }
 
-/** Whether a typed number is a whole number (the server takes whole numbers only). */
+/** Whether a typed text is a whole number by the number rule (digits 0 to 9 only, nothing else). */
 function isWhole(s: string): boolean {
-    return /^\s*\d+\s*$/.test(s);
+    return wholeNumber(s) !== null;
 }
 
 function codeSpec(c: CodeDraft): CodeSpec {
@@ -266,7 +262,7 @@ export function draftToSpec(d: SetDraft): CommandSetSpec {
             failure: codeSpec(c.failure),
             on_problems: c.onProblems,
             // An empty time limit is 0: no limit.
-            timeout_sec: c.timeoutSec.trim() === '' ? 0 : num(c.timeoutSec),
+            timeout_sec: c.timeoutSec === '' ? 0 : num(c.timeoutSec),
             line_limit: collect || isWhole(c.lineLimit) ? num(c.lineLimit) : DEFAULT_LINE_LIMIT,
             patterns: collect ? c.patterns.map(p => p.value) : [],
         })),
@@ -293,10 +289,8 @@ export function draftProblems(t: TFunction, d: SetDraft): string[] {
     d.commands.forEach((c, i) => {
         const prefix = (p: string) => t('commandSets.local.inCommand', { n: i + 1, problem: p });
         const before = out.length;
-        // An empty time limit is 0 (no limit); text the browser cannot read as a number is not.
-        const timeoutField = t('commandSets.fields.timeoutSec');
-        if (c.timeoutBadInput) out.push(t('commandSets.local.wholeNumber', { field: timeoutField }));
-        else if (c.timeoutSec.trim() !== '') whole(c.timeoutSec, timeoutField);
+        // An empty time limit is 0 (no limit).
+        if (c.timeoutSec !== '') whole(c.timeoutSec, t('commandSets.fields.timeoutSec'));
         if (d.purpose === 'collect_output') whole(c.lineLimit, t('commandSets.fields.lineLimit'));
         for (const [spec, label] of [
             [c.success, t('commandSets.fields.success')],
