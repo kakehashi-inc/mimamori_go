@@ -41,6 +41,9 @@ func TestPasswordHashProductionCount(t *testing.T) {
 	if PasswordIterations != 600000 {
 		t.Fatalf("PasswordIterations = %d, the documents say 600,000", PasswordIterations)
 	}
+	// The program's count, not the one TestMain sets for the other tests.
+	UseTestPasswordIterations(0)
+	t.Cleanup(func() { UseTestPasswordIterations(testHashIterations) })
 	h, err := HashPassword("correct horse battery")
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +65,7 @@ func TestPasswordHashProductionCount(t *testing.T) {
 // keeps its format, verification reads the count from the hash, 0 gives the
 // production count back, and outside a test binary the hook refuses.
 func TestPasswordHashTestHook(t *testing.T) {
-	t.Cleanup(func() { UseTestPasswordIterations(0) })
+	t.Cleanup(func() { UseTestPasswordIterations(testHashIterations) })
 	UseTestPasswordIterations(1000)
 	h, err := HashPassword("correct horse battery")
 	if err != nil {
