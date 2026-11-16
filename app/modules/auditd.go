@@ -77,7 +77,7 @@ func CheckAuditd() error {
 	}
 	st, err := ReadAuditdStatus(nil)
 	if err != nil {
-		return M("auditd.status_failed", "cause", AsMsg(err))
+		return M("auditd.status_failed", "cause", toolCause(err, "auditctl", "-s"))
 	}
 	if !st.Running {
 		return M("auditd.not_running")
@@ -86,9 +86,22 @@ func CheckAuditd() error {
 		return M("auditd.disabled")
 	}
 	if _, err := RunSimple(nil, "auditctl", "-l"); err != nil {
-		return M("auditd.list_failed", "cause", AsMsg(err))
+		return M("auditd.list_failed", "cause", toolCause(err, "auditctl", "-l"))
 	}
 	return nil
+}
+
+// toolCause returns the cause of a failed RunSimple of the tool name with
+// args for a message whose English names that command line itself
+// (auditd.command_failed, auditd.status_failed, auditd.list_failed): the
+// failed exit without the command line RunSimple puts in front of it
+// ("exit 1: <stderr>"), so that the command line is named once; any other
+// error (the tool could not be started, it was stopped) as it is.
+func toolCause(err error, name string, args ...string) Msg {
+	if rest, ok := strings.CutPrefix(err.Error(), name+" "+strings.Join(args, " ")+": exit "); ok {
+		return Raw("exit " + rest)
+	}
+	return AsMsg(err)
 }
 
 // HaltActions lists auditd.conf settings that would halt or single-user the
@@ -306,7 +319,7 @@ func setGlobals(g AuditGlobals) error {
 		{"--backlog_wait_time", strconv.FormatInt(g.BacklogWaitTime, 10)},
 	} {
 		if _, err := RunSimple(nil, "auditctl", args...); err != nil {
-			errs = append(errs, M("auditd.command_failed", "args", strings.Join(args, " "), "cause", AsMsg(err)))
+			errs = append(errs, M("auditd.command_failed", "args", strings.Join(args, " "), "cause", toolCause(err, "auditctl", args...)))
 		}
 	}
 	return errors.Join(errs...)

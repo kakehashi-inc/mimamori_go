@@ -230,6 +230,68 @@ func TestAuditErrorsCarryCodes(t *testing.T) {
 	checkCoded(t, "check", &m, "auditd.tool_missing", `audit tool ausearch is not available: command "ausearch" not found in PATH`)
 }
 
+// refusingAuditctl puts an auditctl and an ausearch first in PATH. auditctl
+// answers -s with a running and enabled auditd when status is set, and
+// refuses every other call (-s too without status) with exit 1 and
+// "Operation not permitted" on stderr.
+func refusingAuditctl(t *testing.T, status bool) {
+	t.Helper()
+	bin := t.TempDir()
+	answer := ""
+	if status {
+		answer = "-s) printf 'enabled 1\\npid 123\\n'; exit 0 ;;\n"
+	}
+	script := "#!/bin/sh\ncase \"$1\" in\n" + answer + "*) echo 'Operation not permitted' >&2; exit 1 ;;\nesac\n"
+	for name, content := range map[string]string{"auditctl": script, "ausearch": "#!/bin/sh\nexit 0\n"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A message that names an auditctl command line in English (the CLI and the
+// logs) names it once: its cause is the failed exit without the command line
+// (the error of RunSimple, which its other callers get, begins with it). The
+// screen text names no tool, in its fixed part nor in the cause.
+func TestAuditToolErrorNamesItsCommandLineOnce(t *testing.T) {
+	refusingAuditctl(t, false)
+	if _, err := RunSimple(nil, "auditctl", "-b", "64"); err == nil || err.Error() != "auditctl -b 64: exit 1: Operation not permitted" {
+		t.Fatalf("RunSimple: %v", err)
+	}
+	type coded struct{ code, english, screen string }
+	check := func(name string, err error, want []coded) {
+		t.Helper()
+		m := AsMsg(err)
+		msgs := []Msg{m}
+		if m.Code == "common.lines" {
+			msgs = nil
+			lines, _ := m.Params["lines"].([]Msg)
+			msgs = append(msgs, lines...)
+		}
+		if len(msgs) != len(want) {
+			t.Fatalf("%s: %d messages, want %d: %v", name, len(msgs), len(want), err)
+		}
+		for i, w := range want {
+			checkCoded(t, name, &msgs[i], w.code, w.english)
+			if got := renderTemplate(msgCatalog[w.code].screenText(), msgs[i].Params); got != w.screen || strings.Contains(got, "auditctl") {
+				t.Fatalf("%s: screen text %q, want %q", name, got, w.screen)
+			}
+		}
+	}
+	check("status", CheckAuditd(), []coded{{"auditd.status_failed",
+		"auditctl -s failed: exit 1: Operation not permitted", "reading the audit status failed: exit 1: Operation not permitted"}})
+	check("settings", setGlobals(AuditGlobals{BacklogLimit: 64, BacklogWaitTime: 0, Failure: 1}), []coded{
+		{"auditd.command_failed", "auditctl -b 64: exit 1: Operation not permitted", "changing the audit setting -b 64 failed: exit 1: Operation not permitted"},
+		{"auditd.command_failed", "auditctl -f 1: exit 1: Operation not permitted", "changing the audit setting -f 1 failed: exit 1: Operation not permitted"},
+		{"auditd.command_failed", "auditctl --backlog_wait_time 0: exit 1: Operation not permitted",
+			"changing the audit setting --backlog_wait_time 0 failed: exit 1: Operation not permitted"},
+	})
+	refusingAuditctl(t, true)
+	check("rules", CheckAuditd(), []coded{{"auditd.list_failed",
+		"auditctl -l failed: exit 1: Operation not permitted", "reading the loaded audit rules failed: exit 1: Operation not permitted"}})
+}
+
 // The problems of a command set the agent refuses are reported in English
 // and with their codes in the same order.
 func TestCommandApplyProblemsCarryCodes(t *testing.T) {
