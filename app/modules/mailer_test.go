@@ -35,23 +35,28 @@ const (
 	stepRcpt      = "rcpt"
 	stepData      = "data"
 	stepMessage   = "message" // taking the message after 354
+	stepAccept    = "accept"  // the reply to the end of the message
 	stepQuit      = "quit"
 )
 
 type testMailServer struct {
-	addr     *net.TCPAddr
-	security string
-	cert     *tls.Certificate
-	limit    int           // smtp.timeout_sec of the client (0: 2)
-	delay    time.Duration // before every answer
-	silentAt string        // the step that is never answered
-	slowTake bool          // take the message at about 6 MB per second
-	done     chan struct{} // closed when the test ends
+	addr       *net.TCPAddr
+	security   string
+	cert       *tls.Certificate
+	limit      int           // smtp.timeout_sec of the client (0: 2)
+	delay      time.Duration // before every answer
+	silentAt   string        // the step that is never answered
+	closeAt    string        // the step whose answer is a close of the connection
+	quitAnswer string        // the answer to QUIT ("": 221)
+	slowTake   bool          // take the message at about 6 MB per second
+	done       chan struct{} // closed when the test ends
 
 	mu       sync.Mutex
 	lastSent time.Time // when the server began to send its last answer
 	received int       // bytes of the message taken
 	got      bool      // the whole message arrived
+	messages int       // the whole messages that arrived
+	quit     bool      // the client sent QUIT
 }
 
 // mailConns holds the connection SendMailTo made to each mail server of the
@@ -139,12 +144,16 @@ func (s *testMailServer) sent() time.Time {
 // takes nothing more.
 func (s *testMailServer) silent(net.Conn) { <-s.done }
 
-// answer sends one line after the delay, unless step is the silent one. The
-// time it records is taken before the write: no byte of the answer reaches
-// the client before it.
+// answer sends one line after the delay, unless step is the silent one or
+// the one whose answer is a close (false: serve returns, which closes the
+// connection). The time it records is taken before the write: no byte of
+// the answer reaches the client before it.
 func (s *testMailServer) answer(c net.Conn, step, line string) bool {
 	if step == s.silentAt {
 		s.silent(c)
+		return false
+	}
+	if step == s.closeAt {
 		return false
 	}
 	time.Sleep(s.delay)
@@ -252,12 +261,20 @@ func (s *testMailServer) serve(c net.Conn) {
 			}
 			s.mu.Lock()
 			s.got = true
+			s.messages++
 			s.mu.Unlock()
-			if !s.answer(c, stepMessage, "250 queued") {
+			if !s.answer(c, stepAccept, "250 queued") {
 				return
 			}
 		case cmd == "QUIT":
-			s.answer(c, stepQuit, "221 bye")
+			s.mu.Lock()
+			s.quit = true
+			s.mu.Unlock()
+			bye := "221 bye"
+			if s.quitAnswer != "" {
+				bye = s.quitAnswer
+			}
+			s.answer(c, stepQuit, bye)
 			return
 		default:
 			s.answer(c, "", "502 unknown")
@@ -476,6 +493,77 @@ func TestSendMailSilenceErrorText(t *testing.T) {
 	cfg.From = "bad\r\nfrom@example.com"
 	if err := SendMailTo(cfg, []string{"a@example.com"}, "subject", "body"); err == nil || strings.Contains(err.Error(), "the mail server") {
 		t.Fatalf("a refused sender: %v", err)
+	}
+}
+
+// With its success reply to the end of the message the mail server took
+// the mail (RFC 5321, 4.1.1.4): the mail is sent, whatever happens at the
+// QUIT that follows. The client still sends QUIT; when the server stays
+// silent at it, the client waits for the answer up to the limit.
+func TestSendMailAcceptedWhateverQuitDoes(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		closeAt, silentAt  string
+		quitAnswer         string
+		waitsForQuitAnswer bool
+	}{
+		{name: "connection closed without answering quit", closeAt: stepQuit},
+		{name: "quit answered with 421", quitAnswer: "421 closing the connection"},
+		{name: "no answer at quit", silentAt: stepQuit, waitsForQuitAnswer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := startMailServer(t, &testMailServer{security: "none", closeAt: tc.closeAt, silentAt: tc.silentAt, quitAnswer: tc.quitAnswer})
+			err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", "body")
+			end := time.Now()
+			if err != nil {
+				t.Fatalf("the server accepted the message, the mail failed: %v", err)
+			}
+			s.mu.Lock()
+			messages, quit := s.messages, s.quit
+			s.mu.Unlock()
+			if messages != 1 || !quit {
+				t.Fatalf("%d messages arrived, QUIT sent %v; want 1 and true", messages, quit)
+			}
+			if tc.waitsForQuitAnswer {
+				// s.sent() is the moment before the server wrote its
+				// acceptance; the client waited one limit after it.
+				if d := end.Sub(s.sent()); d < s.limitTime() || d > s.limitTime()+3*time.Second {
+					t.Fatalf("SendMailTo returned %v after the acceptance, want about %v", d, s.limitTime())
+				}
+			}
+		})
+	}
+}
+
+// Without the server's reply to the end of the message the mail is not
+// sent, though the whole message arrived: the server closes the connection
+// instead of the reply, or stays silent until the limit.
+func TestSendMailFailsWithoutTheReplyToTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		closeAt, silentAt string
+		want              string
+	}{
+		{name: "connection closed", closeAt: stepAccept},
+		{name: "no reply", silentAt: stepAccept, want: "the mail server sent nothing for 2 seconds: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := startMailServer(t, &testMailServer{security: "none", closeAt: tc.closeAt, silentAt: tc.silentAt})
+			err := SendMailTo(s.cfg(), []string{"a@example.com"}, "subject", "body")
+			if err == nil {
+				t.Fatal("the server did not reply to the message, the mail was sent")
+			}
+			if !strings.HasPrefix(err.Error(), tc.want) || (tc.want == "" && strings.Contains(err.Error(), "the mail server")) {
+				t.Fatalf("error %v, want %q", err, tc.want)
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.messages != 1 || s.quit {
+				t.Fatalf("%d messages arrived, QUIT sent %v; want 1 and false", s.messages, s.quit)
+			}
+		})
 	}
 }
 

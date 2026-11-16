@@ -28,7 +28,9 @@ var mailDial = DialIdle
 // server, and the sending of the message, which is cut only when the server
 // took no byte for that long (IdleConn). There is no limit on the whole
 // mail. When the connection is cut because the server was silent, the error
-// says so (mailSilenceError).
+// says so (mailSilenceError). The mail is sent when the server replied with
+// success to the end of the message; QUIT is sent after it and its answer
+// waited for, and nothing at QUIT makes the mail fail.
 func SendMailTo(cfg SMTPConfig, to []string, subject, body string) (err error) {
 	if !cfg.CanSend() {
 		return fmt.Errorf("SMTP is not configured (smtp.host and smtp.from are required)")
@@ -96,7 +98,12 @@ func SendMailTo(cfg SMTPConfig, to []string, subject, body string) (err error) {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	return c.Quit()
+	// The server replied with success to the end of the message: it took the
+	// mail (RFC 5321, 4.1.1.4), and the mail is sent whatever QUIT gets (an
+	// error, silence until the limit, a connection closed without an answer).
+	// The deferred conversion leaves the nil result as it is.
+	_ = c.Quit()
+	return nil
 }
 
 // mailSilenceError is the error of a mail whose connection was cut because
