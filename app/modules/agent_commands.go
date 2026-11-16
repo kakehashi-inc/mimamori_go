@@ -571,10 +571,7 @@ func (e *stoppedBeforeRecord) cause(what string) string {
 // writeRunRecord is storeRunRecord (afterStop: one more attempt after the
 // stop) and storeRunStart (no attempt after the stop).
 func (rt *AgentRuntime) writeRunRecord(what string, afterStop bool, write func() error) error {
-	wait, most := RunRecordRetryFirst, RunRecordRetryMax
-	if rt.recordRetry > 0 {
-		wait, most = rt.recordRetry, rt.recordRetry*(RunRecordRetryMax/RunRecordRetryFirst)
-	}
+	wait, most := rt.recordRetryWaits()
 	var last error
 	for {
 		if !afterStop && isClosed(rt.stop) {
@@ -605,6 +602,16 @@ func (rt *AgentRuntime) writeRunRecord(what string, afterStop bool, write func()
 	}
 }
 
+// recordRetryWaits returns the first and the longest wait before a failed
+// record of a run is written again: RunRecordRetryFirst and
+// RunRecordRetryMax (in tests recordRetry, and as many times more).
+func (rt *AgentRuntime) recordRetryWaits() (first, most time.Duration) {
+	if rt.recordRetry > 0 {
+		return rt.recordRetry, rt.recordRetry * (RunRecordRetryMax / RunRecordRetryFirst)
+	}
+	return RunRecordRetryFirst, RunRecordRetryMax
+}
+
 // interruptedRun is a run found unfinished at the start and its report as
 // interrupted.
 type interruptedRun struct {
@@ -624,12 +631,17 @@ type interruptedRun struct {
 // not start before it is stored. When the process group recorded for the
 // running command still exists in the same boot of the host, the set
 // counts as running: none of its entries starts until the group is gone.
-// The group is never signalled.
-func (rt *AgentRuntime) recoverInterruptedRuns() []*interruptedRun {
-	runs, err := models.ListUnfinishedCommandExecutions(rt.DB.Read())
+// The group is never signalled. When the runs cannot be read, nothing is
+// done and the error of the read is returned (Run keeps the command sets
+// from starting and recoverInterruptedRunsAgain reads them again).
+func (rt *AgentRuntime) recoverInterruptedRuns() ([]*interruptedRun, error) {
+	read := rt.readUnfinished
+	if read == nil {
+		read = models.ListUnfinishedCommandExecutions
+	}
+	runs, err := read(rt.DB.Read())
 	if err != nil {
-		rt.logf("reading unfinished command set runs failed: %v", err)
-		return nil
+		return nil, err
 	}
 	now := rt.now().Unix()
 	boot, bootErr := currentBoot()
@@ -669,7 +681,32 @@ func (rt *AgentRuntime) recoverInterruptedRuns() []*interruptedRun {
 		}
 		rt.logf("command set run %s was interrupted (the agent ended while it ran)", e.RunUID)
 	}
-	return pending
+	return pending, nil
+}
+
+// recoverInterruptedRunsAgain reads the runs left unfinished again after the
+// read failed at the start, on the flow of recordInterrupted (before it), so
+// that neither the monitoring step nor the rounds wait for it: after the
+// waits of storeRunRecord (RunRecordRetryFirst, doubling up to
+// RunRecordRetryMax), until the read succeeds or the stop comes. Nothing is
+// read after the stop: the runs stay unfinished and the next start reads
+// them. Once read, they are handled as at the start (recoverInterruptedRuns),
+// and the records that could not be stored are returned. No command set
+// starts before it returned (awaitUnfinishedRead).
+func (rt *AgentRuntime) recoverInterruptedRunsAgain() []*interruptedRun {
+	wait, most := rt.recordRetryWaits()
+	for {
+		if !rt.pause(wait) || isClosed(rt.stop) {
+			return nil
+		}
+		pending, err := rt.recoverInterruptedRuns()
+		if err == nil {
+			rt.logf("reading unfinished command set runs succeeded after failing; command sets may start")
+			return pending
+		}
+		wait = min(2*wait, most)
+		rt.logf("reading unfinished command set runs failed, tried again in %s: %v", wait, err)
+	}
 }
 
 // storeInterrupted queues the report of an interrupted run and records the
@@ -680,9 +717,10 @@ func (rt *AgentRuntime) storeInterrupted(r *interruptedRun) error {
 	})
 }
 
-// recordInterrupted writes the records of interrupted runs that could not be
-// stored at the start again (storeRunRecord: 1 s, doubling to 30 s, until
-// stored or the stop), on a flow of its own, so that neither the monitoring
+// recordInterrupted writes again the records of interrupted runs that could
+// not be stored when the unfinished runs were read (at the start or by
+// recoverInterruptedRunsAgain): storeRunRecord, 1 s doubling to 30 s, until
+// stored or the stop, on a flow of its own, so that neither the monitoring
 // step nor the rounds wait for it. The set of a run may start once its
 // record is stored (or the record has nothing left to write).
 func (rt *AgentRuntime) recordInterrupted(pending []*interruptedRun) {

@@ -419,7 +419,7 @@ func TestCommandRunInterrupted(t *testing.T) {
 	}
 	// The agent starts again and finds the run unfinished.
 	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
-	rt2.recoverInterruptedRuns()
+	recoverAtStart(t, rt2)
 	runs := runReports(queuedReports(t, rt2))
 	r := runs[len(runs)-1]
 	if r.RunUID != "u1" || !r.Finished || r.State != ResultError || r.Reason != ReasonInterrupted || r.SetName != "setb" ||
@@ -465,7 +465,7 @@ func TestCommandRunInterruptedCommand(t *testing.T) {
 	}
 	before := len(queuedReports(t, rt))
 	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
-	rt2.recoverInterruptedRuns()
+	recoverAtStart(t, rt2)
 	byUID := map[string]CommandRunReport{}
 	for _, r := range runReports(queuedReports(t, rt2)[before:]) {
 		byUID[r.RunUID] = r
@@ -1378,7 +1378,7 @@ func TestSurvivingGroupHeldAfterClockStep(t *testing.T) {
 	rt2 := NewAgentRuntime(rt1.DB, tr, nil)
 	stop2 := make(chan struct{})
 	rt2.stop, rt2.sched.stop = stop2, stop2
-	rt2.recoverInterruptedRuns()
+	recoverAtStart(t, rt2)
 	rt2.sched.start()
 	receiveRequests(rt2, manualRequests(2, 1))
 	if job := nextCommandJob(rt2); job != nil {

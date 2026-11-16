@@ -344,7 +344,7 @@ func TestReportRecoveredRunQueued(t *testing.T) {
 	tr := &fakeTransport{}
 	rt := newCommandRuntime(t, tr)
 	insertExecution(t, rt.DB, "u1", 7, 0)
-	rt.recoverInterruptedRuns()
+	recoverAtStart(t, rt)
 	rt.flushOutbox()
 	if len(tr.batches) != 1 || len(tr.reports) != 1 || tr.reports[0].CommandRuns[0].RunUID != "u1" {
 		t.Fatalf("sent: %+v", tr.reports)

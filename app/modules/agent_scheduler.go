@@ -52,7 +52,8 @@ import (
 //     check interval of the rounds and the monitoring entry).
 //   - The queue (this file, its one mutex): the entries, the sets that run,
 //     the requests taken by a worker, the sets kept by a surviving process
-//     group or by an interrupted run whose record is not stored yet, the
+//     group or by an interrupted run whose record is not stored yet, whether
+//     the runs left unfinished at the start are still to be read, the
 //     command set definitions and the valid sets, the worker count.
 //   - The outbox (agent_outbox.go): the table outbox and the state key
 //     outbox_batch, through its methods, each one Write.
@@ -134,6 +135,9 @@ type agentScheduler struct {
 	// interrupted record is not stored yet; the set does not start
 	// meanwhile.
 	unrecorded map[int64]int
+	// unread: the runs left unfinished at the start could not be read yet
+	// (the read is repeated); no command set starts meanwhile.
+	unread bool
 	// replan are the scheduled sets whose entry could not be computed (the
 	// schedule state could not be read); a worker that looks for an entry
 	// computes them again.
@@ -256,10 +260,10 @@ func (s *agentScheduler) heldLocked(id int64) bool {
 }
 
 // blockedLocked reports whether an entry may not start now for its set: the
-// set runs, the record of its interrupted run is not stored yet, or it is
-// held.
+// runs left unfinished at the start are not read yet, the set runs, the
+// record of its interrupted run is not stored yet, or it is held.
 func (s *agentScheduler) blockedLocked(e *queueEntry) bool {
-	return !e.monitor && (s.running[e.setID] || s.unrecorded[e.setID] > 0 || s.heldLocked(e.setID))
+	return !e.monitor && (s.unread || s.running[e.setID] || s.unrecorded[e.setID] > 0 || s.heldLocked(e.setID))
 }
 
 // next returns the unit the calling worker processes next, and the answers
@@ -546,6 +550,25 @@ func (s *agentScheduler) recordDone(setID int64) {
 	s.changedLocked()
 }
 
+// awaitUnfinishedRead keeps every command set from starting until
+// unfinishedReadDone: the runs left unfinished at the start could not be
+// read, so a set whose command survived the previous agent is not held yet.
+func (s *agentScheduler) awaitUnfinishedRead() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unread = true
+}
+
+// unfinishedReadDone lets the sets kept by awaitUnfinishedRead start, as far
+// as nothing else keeps them (the holds and the awaited records of the runs
+// read are in place before it is called).
+func (s *agentScheduler) unfinishedReadDone() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unread = false
+	s.changedLocked()
+}
+
 // setWorkers sets the agent's worker count.
 func (s *agentScheduler) setWorkers(n int) {
 	s.mu.Lock()
@@ -560,7 +583,8 @@ func (s *agentScheduler) setWorkers(n int) {
 // processed: a request taken meanwhile runs when the step ended, before a
 // monitoring entry that became startable later), nor does an entry that
 // waits because its own set runs, is held by a surviving process group or
-// waits for the record of its interrupted run.
+// waits for the record of its interrupted run or for the read of the runs
+// left unfinished at the start.
 func (s *agentScheduler) freeWorker() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

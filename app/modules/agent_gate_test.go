@@ -160,7 +160,7 @@ func TestAgentKilledBeforeTheRelease(t *testing.T) {
 	}
 	defer db.Close()
 	rt = NewAgentRuntime(db, &cmdTransport{}, nil)
-	rt.recoverInterruptedRuns()
+	recoverAtStart(t, rt)
 	last, _ := lastRun(t, runReports(queuedReports(t, rt)))
 	if last.Reason != ReasonInterrupted {
 		t.Fatalf("the run of the killed agent: %+v", last)

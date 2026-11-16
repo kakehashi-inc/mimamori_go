@@ -1,6 +1,8 @@
 package modules
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -244,10 +246,19 @@ func TestRunEndNotStoredBeforeStop(t *testing.T) {
 	execOnDB(t, rt.DB, `DROP TRIGGER fail_end`)
 	before := len(queuedReports(t, rt))
 	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
-	rt2.recoverInterruptedRuns()
+	recoverAtStart(t, rt2)
 	runs := runReports(queuedReports(t, rt2)[before:])
 	if len(runs) != 1 || !runs[0].Finished || runs[0].Reason != ReasonInterrupted || runs[0].RequestID != 7 {
 		t.Fatalf("reported at the next start: %+v", runs)
+	}
+}
+
+// recoverAtStart reads and reports the runs left unfinished, as the start of
+// Run does; the read must succeed.
+func recoverAtStart(t *testing.T, rt *AgentRuntime) {
+	t.Helper()
+	if _, err := rt.recoverInterruptedRuns(); err != nil {
+		t.Fatalf("reading the unfinished runs: %v", err)
 	}
 }
 
@@ -360,4 +371,204 @@ func monitorSteps(t *testing.T, rt *AgentRuntime, tr *parTransport) int {
 		}
 	}
 	return n
+}
+
+// failingRead is a read of the runs left unfinished (readUnfinished) that
+// fails while failing is set; attempts counts the reads.
+type failingRead struct {
+	mu       sync.Mutex
+	failing  bool
+	attempts int
+}
+
+func (f *failingRead) read(db models.Reader) ([]*models.CommandExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts++
+	if f.failing {
+		return nil, errors.New("injected failure")
+	}
+	return models.ListUnfinishedCommandExecutions(db)
+}
+
+func (f *failingRead) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+func (f *failingRead) succeed() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failing = false
+}
+
+// newRunsOf returns the number of finished runs of a set other than the
+// runs found unfinished at the start (their UIDs end in "-run").
+func newRunsOf(rt *AgentRuntime, set int64) int {
+	var n int
+	_ = rt.DB.Read().QueryRow(`SELECT count(*) FROM command_executions WHERE set_id = ? AND finished_at > 0 AND run_uid NOT LIKE '%-run'`, set).Scan(&n)
+	return n
+}
+
+// TestUnfinishedRunsReadAgain: when the runs left unfinished cannot be read
+// at the start, the read is repeated (with the wait of the run records)
+// until it succeeds, and meanwhile no command set starts, neither a
+// scheduled one that is due nor a manual request, while the rounds and the
+// monitoring steps go on; free_worker counts none of the waiting entries.
+// The failure is logged once with the sets waiting, each further attempt as
+// a record's is, and the success after it once. Then the runs are handled as
+// after a read at the start: the set whose recorded process group still
+// exists is held, the others start, and each run is reported interrupted
+// once.
+func TestUnfinishedRunsReadAgain(t *testing.T) {
+	requireBash(t)
+	boot, err := currentBoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	survivor := startSurvivor(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 2)
+	rt.recordRetry = 50 * time.Millisecond
+	var logs lockedLog
+	rt.Logger = logs.logger()
+	scheduled := testSet(2, PurposeRunOnly, "true")
+	scheduled.RunMode = RunModeSchedule
+	scheduled.Schedule = &CommandSchedule{Kind: ScheduleDaily, Time: "00:00"}
+	sets := defsOf(testSet(1, PurposeRunOnly, "true"), scheduled, testSet(3, PurposeRunOnly, "true"))
+	rt.storeCommandDefinitions(sets)
+	// Today's occurrence of the scheduled set passed and was not run.
+	execOnDB(t, rt.DB, `UPDATE command_schedules SET armed_at = armed_at - 2*86400`)
+	tr.resp.CommandSets = sets
+	tr.resp.CommandRequests = manualRequests(6, 1, 3)
+	// The previous agent was killed while a run of set 1 and one of set 3
+	// ran; the command of set 3 still runs as its process group.
+	insertExecution(t, rt.DB, "killed-run", 5, 0)
+	insertExecution(t, rt.DB, "surviving-run", 0, 0)
+	execOnDB(t, rt.DB, fmt.Sprintf(`UPDATE command_executions SET set_id = 3, running_position = 0, running_pgid = %d, running_boot = '%s'
+		WHERE run_uid = 'surviving-run'`, survivor.Pid, boot.String()))
+	reads := &failingRead{failing: true}
+	rt.readUnfinished = reads.read
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	waitFor(t, "three rounds and a second monitoring step", func() bool { return len(tr.seen()) >= 3 && monitorSteps(t, rt, tr) >= 2 })
+	if all, _ := countRuns(rt.DB); all != 2 {
+		t.Fatalf("a command set started while the unfinished runs were not read: %d runs", all)
+	}
+	waitFor(t, "four failed reads", func() bool { return reads.count() >= 4 })
+	for i, s := range tr.seen() {
+		if !s.freeWorker {
+			t.Fatalf("sync %d: free_worker false while every command set waits for the read", i+1)
+		}
+	}
+	logged := logs.String()
+	if n := strings.Count(logged, "reading unfinished command set runs failed (no command set starts until they are read), tried again in 50ms: injected failure"); n != 1 {
+		t.Fatalf("the failure with the waiting sets logged %d times: %q", n, logged)
+	}
+	if n := strings.Count(logged, "reading unfinished command set runs failed, tried again in "); n < 2 || n > reads.count()-1 {
+		t.Fatalf("%d further failures logged for %d reads: %q", n, reads.count(), logged)
+	}
+	if strings.Contains(logged, "was interrupted") || strings.Contains(logged, "process group") {
+		t.Fatalf("runs handled before they were read: %q", logged)
+	}
+
+	reads.succeed()
+	waitFor(t, "the manual and the scheduled set", func() bool { return newRunsOf(rt, 1) == 1 && newRunsOf(rt, 2) == 1 })
+	time.Sleep(1500 * time.Millisecond)
+	if n := newRunsOf(rt, 3); n != 0 {
+		t.Fatalf("the set of the surviving group started %d time(s)", n)
+	}
+	logged = logs.String()
+	for line, want := range map[string]int{
+		"reading unfinished command set runs succeeded after failing; command sets may start":                  1,
+		"command set run killed-run was interrupted (the agent ended while it ran)":                            1,
+		"command set run surviving-run was interrupted (the agent ended while it ran)":                         1,
+		fmt.Sprintf("command set run surviving-run: its command still runs as process group %d", survivor.Pid): 1,
+	} {
+		if n := strings.Count(logged, line); n != want {
+			t.Fatalf("%q logged %d times, want %d: %q", line, n, want, logged)
+		}
+	}
+	reported := map[string]int{}
+	for _, r := range runReports(allReports(t, rt, tr)) {
+		if r.Finished && r.Reason == ReasonInterrupted {
+			reported[r.RunUID]++
+		}
+	}
+	if reported["killed-run"] != 1 || reported["surviving-run"] != 1 || len(reported) != 2 {
+		t.Fatalf("reported interrupted: %v", reported)
+	}
+}
+
+// TestStopWhileUnfinishedRunsUnread: a stop while the runs left unfinished
+// still cannot be read ends the agent as usual (the last report says that it
+// stops, the worker count in use is cleared); no command set started, the
+// runs stay unfinished, and the next start reads them and reports them
+// interrupted.
+func TestStopWhileUnfinishedRunsUnread(t *testing.T) {
+	requireBash(t)
+	tr := &parTransport{}
+	rt := newParallelRuntime(t, tr, 1)
+	rt.recordRetry = 50 * time.Millisecond
+	set := testSet(1, PurposeRunOnly, "true")
+	rt.storeCommandDefinitions(defsOf(set))
+	tr.resp.CommandSets = defsOf(set)
+	tr.resp.CommandRequests = manualRequests(6, 1)
+	insertExecution(t, rt.DB, "killed-run", 5, 0)
+	reads := &failingRead{failing: true}
+	rt.readUnfinished = reads.read
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Run(stop)
+	}()
+	waitFor(t, "two rounds", func() bool { return len(tr.seen()) >= 2 })
+	if all, _ := countRuns(rt.DB); all != 1 {
+		close(stop)
+		<-done
+		t.Fatalf("a command set started while the unfinished runs were not read: %d runs", all)
+	}
+	waitFor(t, "three failed reads", func() bool { return reads.count() >= 3 })
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the agent did not end after the stop")
+	}
+	if e := executionOf(t, rt.DB); e.RunUID != "killed-run" || e.FinishedAt != 0 {
+		t.Fatalf("the unfinished run after the stop: %+v", e)
+	}
+	tr.mu.Lock()
+	stopping := len(tr.batches) > 0 && tr.batches[len(tr.batches)-1].Stopping
+	tr.mu.Unlock()
+	if !stopping {
+		t.Fatal("the last report does not say that the agent stops")
+	}
+	if _, found, err := models.FindLocalState(rt.DB.Read(), stateRunningWorkers); found || err != nil {
+		t.Fatalf("the worker count in use is still recorded (%v)", err)
+	}
+	before := allReports(t, rt, tr)
+	for _, r := range runReports(before) {
+		if r.RunUID == "killed-run" {
+			t.Fatalf("reported without being read: %+v", r)
+		}
+	}
+	queued := len(queuedReports(t, rt))
+	rt2 := NewAgentRuntime(rt.DB, &cmdTransport{}, nil)
+	recoverAtStart(t, rt2)
+	runs := runReports(queuedReports(t, rt2)[queued:])
+	if len(runs) != 1 || runs[0].RunUID != "killed-run" || !runs[0].Finished || runs[0].Reason != ReasonInterrupted {
+		t.Fatalf("reported at the next start: %+v", runs)
+	}
 }

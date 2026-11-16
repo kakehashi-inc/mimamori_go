@@ -251,6 +251,42 @@ func TestSyncSaysFreeWorker(t *testing.T) {
 	setRunning(1, false)
 }
 
+// TestUnreadRunsKeepEverySet: while the runs left unfinished at the start
+// are not read, no command set entry starts (the monitoring entry does), and
+// the waiting entries do not count for free_worker, as an entry that waits
+// for the record of its interrupted run does not; once they are read, the
+// entries start, except one whose set still waits for its record.
+func TestUnreadRunsKeepEverySet(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	rt, s := newTestQueue(t, &now)
+	rt.storeCommandDefinitions(defsOf(testSet(1, PurposeRunOnly, "true"), testSet(2, PurposeRunOnly, "true")))
+	exp := now.Unix() + 3600
+	s.awaitUnfinishedRead()
+	s.start()
+	s.awaitRecord(2)
+	receiveRequests(rt, []CommandRunRequest{{ID: 1, SetID: 1, RequestedAt: now.Unix(), ExpiresAt: exp},
+		{ID: 2, SetID: 2, RequestedAt: now.Unix(), ExpiresAt: exp}})
+	if u := pick(s); u == nil || !u.monitor {
+		t.Fatalf("the monitoring step: %+v", u)
+	}
+	if u := pick(s); u != nil {
+		t.Fatalf("a command set started before the unfinished runs were read: %+v", u)
+	}
+	if !s.freeWorker() {
+		t.Fatal("one worker, the requests wait for the read: not free")
+	}
+	s.unfinishedReadDone()
+	if s.freeWorker() {
+		t.Fatal("one worker, a request may start: free")
+	}
+	if u := pick(s); u == nil || u.job == nil || u.job.requestID != 1 {
+		t.Fatalf("after the read: %+v, want request 1", u)
+	}
+	if u := pick(s); u != nil {
+		t.Fatalf("the set that waits for its record started: %+v", u)
+	}
+}
+
 // TestFirstSyncSaysFreeWorker: with one worker, the first sync after the
 // start (the monitoring step is due or being processed then) says
 // free_worker, so the central hands a request over at once.

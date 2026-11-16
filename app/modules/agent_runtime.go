@@ -112,6 +112,9 @@ type AgentRuntime struct {
 	scanLimit   int
 	removeAudit func(restore *AuditGlobals) error
 	roundPace   func() time.Duration
+	// readUnfinished replaces models.ListUnfinishedCommandExecutions in the
+	// read of the runs left unfinished (recoverInterruptedRuns) in tests.
+	readUnfinished func(models.Reader) ([]*models.CommandExecution, error)
 }
 
 // monitorState is what only the monitoring step uses.
@@ -325,9 +328,11 @@ func (rt *AgentRuntime) ReapplyStored() {
 // Run runs the agent until stop is closed (a nil stop never is). The runs
 // found unfinished are reported first (recoverInterruptedRuns; a record that
 // cannot be stored is written again on a flow of its own, recordInterrupted,
-// and its set does not start before); then the queue gets the monitoring
-// entry and the entries of the scheduled sets, the communication flow starts
-// and so do the workers (the calling flow is the first of them).
+// and its set does not start before; when the runs cannot be read, that flow
+// reads them again first, recoverInterruptedRunsAgain, and no command set
+// starts before they are read); then the queue gets the monitoring entry and
+// the entries of the scheduled sets, the communication flow starts and so do
+// the workers (the calling flow is the first of them).
 //
 // After the stop no entry starts; a monitoring step in progress completes
 // (see monitorStep), and a running command is ended (SIGTERM to its process
@@ -363,13 +368,23 @@ func (rt *AgentRuntime) Run(stop <-chan struct{}) {
 		}
 	}()
 	var unstored []*interruptedRun
-	rt.recovered("panic", func() { unstored = rt.recoverInterruptedRuns() })
+	var unread error
+	rt.recovered("panic", func() { unstored, unread = rt.recoverInterruptedRuns() })
+	if unread != nil {
+		first, _ := rt.recordRetryWaits()
+		rt.logf("reading unfinished command set runs failed (no command set starts until they are read), tried again in %s: %v", first, unread)
+		rt.sched.awaitUnfinishedRead()
+	}
 	rt.recovered("worker panic", rt.sched.start)
 	workersDone := make(chan struct{})
 	commDone := make(chan struct{})
 	recordsDone := make(chan struct{})
 	go func() {
 		defer close(recordsDone)
+		if unread != nil {
+			rt.recovered("panic", func() { unstored = rt.recoverInterruptedRunsAgain() })
+			rt.sched.unfinishedReadDone()
+		}
 		rt.recovered("panic", func() { rt.recordInterrupted(unstored) })
 	}()
 	go func() {

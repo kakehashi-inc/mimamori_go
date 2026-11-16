@@ -493,7 +493,7 @@ func TestStopWhileEndRecordRetried(t *testing.T) {
 	}
 	execOnDB(t, rt.DB, `DROP TRIGGER fail_out`)
 	rt2 := NewAgentRuntime(rt.DB, tr, nil)
-	rt2.recoverInterruptedRuns()
+	recoverAtStart(t, rt2)
 	if last, _ := lastRun(t, runReports(queuedReports(t, rt2))); last.RunUID != open[0].RunUID || last.Reason != ReasonInterrupted {
 		t.Errorf("the next start must report run %s as interrupted: %+v", open[0].RunUID, last)
 	}
