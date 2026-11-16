@@ -121,7 +121,7 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error that names these forms. `--agent` 0 or less means all agents. A `--category` or `--type` other than the values shown is an argument error (exit code 2) that lists them. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 and is held between 0 and 1000000 |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error that names these forms. `--agent` 0 or less means all agents. An empty value of `--category`, `--type`, `--from`, `--to`, `--acknowledged` or `--suppressed` is the same as not giving the flag (it filters nothing); a `--category`, `--type`, `--acknowledged` or `--suppressed` other than the values shown is an argument error (exit code 2) that lists them. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 and is held between 0 and 1000000 |
 | `ctl detections show AGENT_ID ID` | Show a detection |
 | `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be positive integers written with digits only, with nothing after them. When any of the given detections does not exist, nothing is acknowledged, the missing ones are named, and the exit code is 2 (as for any object that does not exist). Detections that are already acknowledged count as existing |
 
@@ -190,7 +190,7 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | Command | Description |
 | --- | --- |
 | `ctl certs status` | Show the CA and server certificate status |
-| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0 and is held between 0 and 10000000). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command`; any other `--category` is an argument error (exit code 2) that lists them |
+| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0 and is held between 0 and 10000000). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command`; an empty `--category` is the same as not giving it (every category); any other `--category` is an argument error (exit code 2) that lists them |
 
 ## version
 

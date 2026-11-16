@@ -121,7 +121,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は、これらの形を示す引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--category` と `--type` に示した値以外は、受け付ける値を示す引数エラー（終了コード 2）。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 で、0 から 1000000 の範囲に収められる |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | 検知の一覧。`T` はローカル時間の `YYYY-MM-DD HH:MM:SS`（表に表示する形）、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM:SS`、`YYYY-MM-DDTHH:MM`、`YYYY-MM-DD`、または RFC3339。それ以外の値は、これらの形を示す引数エラー。`--agent` が 0 以下ならすべてのエージェント。`--category`、`--type`、`--from`、`--to`、`--acknowledged`、`--suppressed` の空の値は、そのフラグを指定しないのと同じ（絞り込まない）。`--category`、`--type`、`--acknowledged`、`--suppressed` に示した値以外は、受け付ける値を示す引数エラー（終了コード 2）。`--limit` の既定は 100 で、1 から 500 の範囲に収められる（0 は 1 件、500 を超える値は 500 件）。`--offset` の既定は 0 で、0 から 1000000 の範囲に収められる |
 | `ctl detections show AGENT_ID ID` | 検知を表示する |
 | `ctl detections ack AGENT_ID:ID...` | 検知を確認済みにする。`AGENT_ID` と `ID` は数字だけで書いた正の整数で、後ろに何も付けない。指定した検知のどれかが存在しない場合は、どれも確認済みにせず、存在しないものを示して終了コード 2 で終わる（他のコマンドで対象が存在しない場合と同じ）。確認済みの検知は存在するものとして扱う |
 
@@ -190,7 +190,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | コマンド | 説明 |
 | --- | --- |
 | `ctl certs status` | 独自 CA とサーバー証明書の状態を表示する |
-| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0 で、0 から 10000000 の範囲に収められる）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config`、`command`。それ以外の `--category` は、分類を示す引数エラー（終了コード 2） |
+| `ctl history [--category C] [--limit N] [--offset N]` | 履歴を表示する（`--limit` の既定は 50 で、1 から 500 の範囲に収められる。`--offset` の既定は 0 で、0 から 10000000 の範囲に収められる）。分類: `account`、`rule`、`token`、`certificate`、`rejected`、`template`、`suppression`、`detection`、`config`、`command`。空の `--category` は、指定しないのと同じ（すべての分類）。それ以外の `--category` は、分類を示す引数エラー（終了コード 2） |
 
 ## version
 

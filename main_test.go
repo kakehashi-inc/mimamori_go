@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -712,8 +716,8 @@ func TestSuppressionsCreateHelpNamesTheAgentID(t *testing.T) {
 
 // The filters of ctl history and ctl detections list take only the values
 // the program defines (the lists of the models and of the rule content, and
-// true or false): a filter that is not given is nil (it filters nothing);
-// another value, the empty one included, ends the program with exit code 2
+// true or false): a filter that is not given, or given the empty value, is
+// nil (it filters nothing); another value ends the program with exit code 2
 // and kong's message, which lists only the accepted values; --help shows
 // them in the placeholder (the long list of the history categories in the
 // text).
@@ -741,6 +745,15 @@ func TestFilterFlagsTakeDefinedValues(t *testing.T) {
 		if _, err := parseArgs(testParser(t, &unset, io.Discard), tc.cmd); err != nil || tc.got(&unset) != nil {
 			t.Errorf("%q without --%s: %v, got %v", tc.cmd, tc.flag, err, tc.got(&unset))
 		}
+		// The empty value after a space or '=', also after a value: the last
+		// one given counts.
+		for _, empty := range [][]string{{"--" + tc.flag, ""}, {"--" + tc.flag + "="}, {"--" + tc.flag, tc.accepted[0], "--" + tc.flag, ""}} {
+			var cli CLI
+			args := append(append([]string{}, tc.cmd...), empty...)
+			if _, err := parseArgs(testParser(t, &cli, io.Discard), args); err != nil || tc.got(&cli) != nil {
+				t.Errorf("%q: %v, got %v, want nil", args, err, tc.got(&cli))
+			}
+		}
 		for _, v := range tc.accepted {
 			var cli CLI
 			if _, err := parseArgs(testParser(t, &cli, io.Discard), append(append([]string{}, tc.cmd...), "--"+tc.flag, v)); err != nil || tc.got(&cli) == nil || *tc.got(&cli) != v {
@@ -751,7 +764,7 @@ func TestFilterFlagsTakeDefinedValues(t *testing.T) {
 		for _, v := range tc.accepted {
 			quoted = append(quoted, fmt.Sprintf("%q", v))
 		}
-		for _, v := range []string{"bogus", "", strings.ToUpper(tc.accepted[0]), " " + tc.accepted[0], tc.accepted[0] + ","} {
+		for _, v := range []string{"bogus", " ", strings.ToUpper(tc.accepted[0]), " " + tc.accepted[0], tc.accepted[0] + ","} {
 			_, errOut, code := runMain(t, append(append([]string{"--data-dir", t.TempDir()}, tc.cmd...), "--"+tc.flag, v)...)
 			want := fmt.Sprintf("mimamori: error: --%s must be one of %s but got %q\n", tc.flag, strings.Join(quoted, ","), v)
 			if code != 2 || errOut != want {
@@ -761,6 +774,97 @@ func TestFilterFlagsTakeDefinedValues(t *testing.T) {
 		help, _, code := runMain(t, append(append([]string{}, tc.cmd...), "--help")...)
 		if code != 0 || !strings.Contains(strings.Join(strings.Fields(help), " "), tc.help) {
 			t.Errorf("help of %q lacks %q:\n%s", tc.cmd, tc.help, help)
+		}
+	}
+}
+
+// ctlTestDataDir returns a data directory whose central, for ctl, is srv:
+// the central database names srv's address as agent_listen, ca.crt holds
+// srv's certificate (it names 127.0.0.1, the name ctl verifies), and the CLI
+// secret is there.
+func ctlTestDataDir(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	modules.MigrationsFS = migrationsFS
+	dir := t.TempDir()
+	db, err := modules.OpenSQLite(filepath.Join(dir, modules.CentralDBFileName), modules.SchemaCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Write(func(tx models.Writer) error {
+		_, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('config.agent_listen', ?)`, srv.Listener.Addr().String())
+		return err
+	})
+	if cerr := db.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(filepath.Join(dir, modules.CABundleFileName), ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, modules.CLISecretFileName), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// An empty value of a filter flag of ctl detections list and ctl history,
+// after a space or '=', is the flag not given: the command asks the central
+// for the same list as without the flag (a script can pass --category "$C"
+// with an empty C). A real value is in the request.
+func TestFilterFlagsEmptyValueFiltersNothing(t *testing.T) {
+	var mu sync.Mutex
+	var requests []string // path and query of each request
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"items":[],"total":0}`)
+	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	dir := ctlTestDataDir(t, srv)
+	// request runs the command and returns the path and query it sent.
+	request := func(args ...string) string {
+		t.Helper()
+		mu.Lock()
+		requests = nil
+		mu.Unlock()
+		out, errOut, code := runMain(t, append([]string{"--data-dir", dir}, args...)...)
+		mu.Lock()
+		defer mu.Unlock()
+		if code != 0 || len(requests) != 1 {
+			t.Errorf("%q: exit %d, requests %q\n%s%s", args, code, requests, out, errOut)
+			return ""
+		}
+		return requests[0]
+	}
+	for _, tc := range []struct {
+		cmd         []string
+		flag, value string
+	}{
+		{[]string{"ctl", "detections", "list"}, "category", "alert"},
+		{[]string{"ctl", "detections", "list"}, "type", "exec"},
+		{[]string{"ctl", "detections", "list"}, "acknowledged", "true"},
+		{[]string{"ctl", "detections", "list"}, "suppressed", "false"},
+		{[]string{"ctl", "history"}, "category", "rule"},
+	} {
+		unfiltered := request(tc.cmd...)
+		if unfiltered == "" || strings.Contains(unfiltered, tc.flag+"=") {
+			t.Fatalf("%q asked for %q", tc.cmd, unfiltered)
+		}
+		filtered := append(append([]string{}, tc.cmd...), "--"+tc.flag, tc.value)
+		if q := request(filtered...); !strings.Contains(q, tc.flag+"="+tc.value) {
+			t.Errorf("%q asked for %q", filtered, q)
+		}
+		for _, empty := range [][]string{{"--" + tc.flag, ""}, {"--" + tc.flag + "="}} {
+			args := append(append([]string{}, tc.cmd...), empty...)
+			if q := request(args...); q != "" && q != unfiltered {
+				t.Errorf("%q asked for %q, want %q", args, q, unfiltered)
+			}
 		}
 	}
 }

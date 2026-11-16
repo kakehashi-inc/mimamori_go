@@ -887,17 +887,18 @@ type CtlDetectionsCmd struct {
 	Ack  CtlDetectionsAckCmd  `cmd:"" help:"Mark detections as acknowledged (AGENT_ID:ID ...)"`
 }
 
-// CtlDetectionsListCmd lists detections. A filter flag that is not given
-// filters nothing; the value of a given one is one of the values its
-// placeholder lists (kong refuses another one with that list).
+// CtlDetectionsListCmd lists detections. A filter flag that is not given,
+// or given the empty value (type "filter": the flag stays nil), filters
+// nothing; another value is one of the values its placeholder lists (kong
+// refuses another one with that list).
 type CtlDetectionsListCmd struct {
 	Agent        int64   `placeholder:"ID" help:"Only this agent id (omitted, 0 or less: all agents)"`
-	Category     *string `placeholder:"${detection_categories_placeholder}" help:"Only detections of this category" enum:"${detection_categories}"`
-	Type         *string `placeholder:"${detection_types_placeholder}" help:"Only detections of this type" enum:"${detection_types}"`
+	Category     *string `type:"filter" placeholder:"${detection_categories_placeholder}" help:"Only detections of this category" enum:"${detection_categories}"`
+	Type         *string `type:"filter" placeholder:"${detection_types_placeholder}" help:"Only detections of this type" enum:"${detection_types}"`
 	From         string  `placeholder:"T" help:"Last occurrence at or after T, in local time: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM (T instead of the space is accepted), YYYY-MM-DD or RFC3339"`
 	To           string  `placeholder:"T" help:"Last occurrence at or before T, in the forms of --from"`
-	Acknowledged *string `placeholder:"true|false" help:"Only acknowledged (true) or unacknowledged (false) detections" enum:"true,false"`
-	Suppressed   *string `placeholder:"true|false" help:"Only suppressed (true) or not suppressed (false) detections" enum:"true,false"`
+	Acknowledged *string `type:"filter" placeholder:"true|false" help:"Only acknowledged (true) or unacknowledged (false) detections" enum:"true,false"`
+	Suppressed   *string `type:"filter" placeholder:"true|false" help:"Only suppressed (true) or not suppressed (false) detections" enum:"true,false"`
 	Limit        int     `help:"Maximum rows (1 to 500)" default:"100"`
 	Offset       int     `help:"Rows to skip (0 to 1000000)" default:"0"`
 }
@@ -1174,10 +1175,12 @@ type CtlCertsStatusCmd struct{}
 
 func (c *CtlCertsStatusCmd) Run(p *CtlCmd) error { return runCtl(p, "GET", "/certificates", nil) }
 
-// CtlHistoryCmd shows the history; --category, when given, is one of the
-// categories (kong refuses another value with their list).
+// CtlHistoryCmd shows the history; --category, when given a value other
+// than the empty one (type "filter": the flag stays nil, as when it is not
+// given), is one of the categories (kong refuses another value with their
+// list).
 type CtlHistoryCmd struct {
-	Category *string `placeholder:"C" help:"Only rows of this category: ${history_categories_help}" enum:"${history_categories}"`
+	Category *string `type:"filter" placeholder:"C" help:"Only rows of this category: ${history_categories_help}" enum:"${history_categories}"`
 	Limit    int     `help:"Maximum rows (1 to 500)" default:"50"`
 	Offset   int     `help:"Rows to skip (0 to 10000000)" default:"0"`
 }

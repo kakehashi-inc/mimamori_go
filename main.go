@@ -159,6 +159,28 @@ func stringMapper(ctx *kong.DecodeContext, target reflect.Value) error {
 	return nil
 }
 
+// filterMapper reads the value of a filter flag of a ctl list (a *string
+// with the tag type:"filter"): the empty value is the flag not given, and
+// the pointer is nil (kong checks no enum of a nil pointer); another value
+// is kept as it is, and kong checks it against the flag's enum.
+func filterMapper(ctx *kong.DecodeContext, target reflect.Value) error {
+	if target.Kind() != reflect.Pointer || target.Type().Elem().Kind() != reflect.String {
+		return fmt.Errorf(`the type "filter" applies to a *string, not to %s`, target.Type())
+	}
+	s, err := popValue(ctx, "string")
+	if err != nil {
+		return err
+	}
+	if s == "" {
+		target.Set(reflect.Zero(target.Type()))
+		return nil
+	}
+	v := reflect.New(target.Type().Elem())
+	v.Elem().SetString(s)
+	target.Set(v)
+	return nil
+}
+
 // durationMapper reads a duration flag value (time.ParseDuration, as kong
 // does).
 func durationMapper(ctx *kong.DecodeContext, target reflect.Value) error {
@@ -215,10 +237,12 @@ func parserOptions() []kong.Option {
 
 // valueMappers are the mappers of every kind of value the commands take:
 // int and int64 (also behind a pointer), list flags of int64, strings,
-// durations and the data directory. Each takes its value with popValue.
+// durations, the data directory and the filter flags of the ctl lists. Each
+// takes its value with popValue.
 func valueMappers() []kong.Option {
 	return []kong.Option{
 		kong.NamedMapper("datadir", kong.MapperFunc(dataDirMapper)),
+		kong.NamedMapper("filter", kong.MapperFunc(filterMapper)),
 		kong.KindMapper(reflect.Int, intMapper(strconv.IntSize)),
 		kong.KindMapper(reflect.Int64, intMapper(64)),
 		kong.TypeMapper(reflect.TypeOf([]int64(nil)), kong.MapperFunc(intListMapper)),
