@@ -22,7 +22,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 `central start` は SIGTERM または SIGINT を受けるまで前面で動き続けるため、サービス管理の仕組みから実行するか、その端末を開いたままにします。`ctl` のコマンドは別の端末で実行します。
 
-ブラウザで `http://<セントラル>:9080` を開いてログインし、監視ルールの作成とトークンの発行を行います。同じことは `ctl rules create` と `ctl tokens issue` でも行えます。
+ブラウザで `http://<セントラル>:9580` を開いてログインし、監視ルールの作成とトークンの発行を行います。同じことは `ctl rules create` と `ctl tokens issue` でも行えます。
 
 各監視対象のホストで:
 
@@ -41,7 +41,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 | --- | --- |
 | `central start` | セントラルを起動する（ブラウザ画面、エージェント用の API、管理用の API、内蔵エージェント）。SIGTERM または SIGINT で終了する |
 | `central stop [--timeout DURATION]` | 起動中のセントラルに SIGTERM を送り、停止するまで待つ（既定 120s）。セントラルは受け付けをやめ、処理中の要求を終え、内蔵エージェントは `agent stop` の説明のとおりに処理を終える（ただし、セントラルとの通信中の要求は切らずに終える）。セントラルが動いていなければ `central is not running` と表示する（終了コード 0）。`--timeout` の間に停止しなければ終了コード 7（`process <pid> did not stop within <timeout>`）で終わる。セントラルは停止を続ける |
-| `central status` | セントラルが稼働中か、プロセス ID、データディレクトリ、待ち受けを表示する（`central:`、`pid:`、`data dir:`、`web:`、`agents/admin:` の行）。稼働中は待ち受けの起動時の値（実際に使っている値）を表示し、保存済みの値が違う場合は `http://0.0.0.0:9080 (saved: 0.0.0.0:9090, takes effect after restart)` のように併記する。停止中は保存済みの値を表示する。停止中は終了コード 3 |
+| `central status` | セントラルが稼働中か、プロセス ID、データディレクトリ、待ち受けを表示する（`central:`、`pid:`、`data dir:`、`web:`、`agents/admin:` の行）。稼働中は待ち受けの起動時の値（実際に使っている値）を表示し、保存済みの値が違う場合は `http://0.0.0.0:9580 (saved: 0.0.0.0:9590, takes effect after restart)` のように併記する。停止中は保存済みの値を表示する。停止中は終了コード 3 |
 | `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | 最初の管理者を作成する。`ADDRESS` はログインに使うメールアドレス、`NAME` は画面に表示する名前。`--language` の既定は `auto`。管理者が 1 人もいない場合だけ。パスワードは端末または標準入力の 1 行目から読む |
 | `central reset-password --email ADDRESS` | このメールアドレス（大文字と小文字は区別しない）の管理者のパスワードを再設定し、アカウントを有効にして、セッション、信頼済みのブラウザ、送信済みの確認コードを無効にする |
 | `central config list` | 設定の全項目を、値、設定済みか既定値か、反映のタイミングとともに表示する |
@@ -59,7 +59,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9081。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ）。保存していた監視ルールは消え、次に起動した後の最初の同期で、トークンに割り当てられた監視ルールを適用するか、割り当てが無ければエージェントが読み込んだ auditd のルールを削除する |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | エージェントを初期化する。`HOST` はセントラルのホスト名または IP アドレス、`PORT` の既定は 9581。トークンは端末（エコー無し）または標準入力の 1 行目から読む。`--overwrite` で初期化済みのエージェントを初期化し直す（エージェントの停止中だけ）。保存していた監視ルールは消え、次に起動した後の最初の同期で、トークンに割り当てられた監視ルールを適用するか、割り当てが無ければエージェントが読み込んだ auditd のルールを削除する |
 | `agent set-central --host HOST [--port PORT]` | 初期化済みのエージェントの接続先（セントラルのホスト名とポート）を変える。エージェントの停止中だけ使え、新しい接続先に今のトークンで接続できた場合だけ保存する。`--port` を省略すると今のポートのままにする |
 | `agent set-workers N [--builtin]` | エージェントのワーカー数（1〜64、既定 1）を設定する。エージェントが処理の単位（監視の処理、コマンドセットの実行）をいくつ同時に処理するかの数。セントラルとの通信はこの数に関係しない。`--builtin` を付けてセントラルのホストで実行すると、内蔵エージェント自身の数を `builtin-agent.db` に設定する（無ければ作る。データディレクトリに空でない `central.db` が必要）。エージェント（`--builtin` ではセントラル）の次の起動で反映し、稼働中にも実行できる。新しい数と前の数を表示し、稼働中は再起動までに使う数も表示する。`N` が 1〜64 の整数でなければ `the agent's worker count must be a whole number from 1 to 64` で拒否し、終了コード 2。`agent.db` が無い（`--builtin` では `central.db` が無いか、空のファイルの `central.db`（`holds no central (central.db is empty)`）か、別のビルドが作った `central.db` で、このときは何も書かず、`builtin-agent.db` も作らない）場合は終了コード 3 |
 | `agent start` | エージェントを起動する。SIGTERM または SIGINT で終了する。エージェントが初期化されていないとき、同じデータディレクトリで別のエージェントが動いているとき、保存済みのワーカー数が 1〜64 の整数でないとき（`agent workers: stored value "X" is not a whole number from 1 to 64; set it with agent set-workers N`）は、終了コード 3 で拒否する |
@@ -83,7 +83,7 @@ mimamori [--data-dir DIR] <command> [arguments] [flags]
 
 | コマンド | 説明 |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行する（`--valid-days` の既定はセントラルの設定 `token_valid_days` で、0 以下を指定した場合も同じ。3650 を超える値は引数エラー。`--rule-version` は `--rule` と一緒に指定した場合だけ使われ、既定は最新の版）。値と、監視対象のホストで実行する `agent init` のコマンドを表示する（`agent_listen` のポートが 9081 以外なら `--central-port` を含む） |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | トークンを発行する（`--valid-days` の既定はセントラルの設定 `token_valid_days` で、0 以下を指定した場合も同じ。3650 を超える値は引数エラー。`--rule-version` は `--rule` と一緒に指定した場合だけ使われ、既定は最新の版）。値と、監視対象のホストで実行する `agent init` のコマンドを表示する（`agent_listen` のポートが 9581 以外なら `--central-port` を含む） |
 | `ctl tokens list` | トークンの一覧（値を省略せずに表示） |
 | `ctl tokens show ID` | トークンを値を省略せずに表示する |
 | `ctl tokens reissue ID [--valid-days N]` | 同じ名前でトークンを再発行する（`--valid-days` は `tokens issue` と同じ）。それまでの値は使えなくなる。表示する `agent init` のコマンドは `--overwrite` を含む |

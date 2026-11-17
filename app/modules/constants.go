@@ -45,8 +45,8 @@ const (
 	// Change the ports here; everything else (listen addresses, the port an
 	// agent connects to, examples on the screens) is derived from them.
 	DefaultListenAddress      = "0.0.0.0"
-	DefaultWebPort            = 9080
-	DefaultAgentPort          = 9081
+	DefaultWebPort            = 9580
+	DefaultAgentPort          = 9581
 	DefaultCheckIntervalSec   = 60
 	DefaultScanIntervalSec    = 3600
 	DefaultTokenValidDays     = 365
