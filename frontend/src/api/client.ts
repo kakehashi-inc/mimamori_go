@@ -13,6 +13,7 @@ import type {
     Guide,
     Health,
     HistoryItem,
+    InstallableCA,
     LoginChallenge,
     Me,
     Overview,
@@ -271,6 +272,16 @@ export function listSuppressions(): Promise<Suppression[]> {
 
 export function getCertificates(): Promise<CertStatus> {
     return request<CertStatus>('/certificates');
+}
+
+/** The CA certificates to install in a browser (no login needed). */
+export function listInstallableCAs(): Promise<InstallableCA[]> {
+    return request<{ cas: InstallableCA[] }>('/ca').then(r => r.cas);
+}
+
+/** URL of the download of one CA certificate (application/x-x509-ca-cert). */
+export function caFileURL(ca: InstallableCA): string {
+    return `${BASE}/ca/${encodeURIComponent(ca.file)}`;
 }
 
 export function listHistory(q: { category?: string; limit?: number; offset?: number }): Promise<Paged<HistoryItem>> {

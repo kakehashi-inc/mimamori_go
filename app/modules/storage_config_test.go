@@ -466,7 +466,7 @@ func TestRunningConfigStatus(t *testing.T) {
 		run          map[string]string
 		want         string
 	}{
-		{"web_listen", "http://", saved, run, "http://127.0.0.1:19610 (saved: 127.0.0.1:19612, takes effect after restart)"},
+		{"web_listen", "https://", saved, run, "https://127.0.0.1:19610 (saved: 127.0.0.1:19612, takes effect after restart)"},
 		{"agent_listen", "https://", saved, run, "https://127.0.0.1:19611"},
 		// An item that takes effect while running: always the saved value,
 		// also against a recorded start value.

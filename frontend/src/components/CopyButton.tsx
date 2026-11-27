@@ -11,7 +11,7 @@ export function CopyButton({ text, size = 'sm' }: { text: string; size?: 'sm' | 
         try {
             await navigator.clipboard.writeText(text);
         } catch {
-            // Clipboard API is unavailable on plain HTTP: fall back to a hidden textarea.
+            // The Clipboard API can be unavailable or refused: fall back to a hidden textarea.
             const area = document.createElement('textarea');
             area.value = text;
             area.style.position = 'fixed';

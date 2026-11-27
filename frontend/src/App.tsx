@@ -4,6 +4,7 @@ import { NotFoundPage } from './components/NotFoundPage';
 import { useExtensions } from './extensions/registry';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
+import { CaInstallPage } from './pages/CaInstallPage';
 import { CertificatesPage } from './pages/CertificatesPage';
 import { CommandResultsPage } from './pages/CommandResultsPage';
 import { CommandRunPage } from './pages/CommandRunPage';
@@ -22,6 +23,8 @@ import { TokensPage } from './pages/TokensPage';
 
 // Client-side routes. The server falls back to index.html for any path it
 // does not know, so every route here also works on a full page reload.
+// /login and /ca (the CA distribution screen) are outside the layout and
+// need no login.
 // Routes of extension modules (registered after login, before any page is
 // shown) are added beside them; without the module such a URL is not found.
 export default function App() {
@@ -29,6 +32,7 @@ export default function App() {
     return (
         <Routes>
             <Route path='/login' element={<LoginPage />} />
+            <Route path='/ca' element={<CaInstallPage />} />
             <Route element={<Layout />}>
                 <Route path='/' element={<AgentsPage />} />
                 <Route path='/agents' element={<AgentsPage />} />

@@ -571,6 +571,11 @@
             "commandsCount": "{{done}} of {{total}}"
         }
     },
+    "certificates": {
+        "caPage": "CA distribution page",
+        "caPageNote": "Tell the people who use the screens this URL. The page opens without a login and shows the CA certificates with the install steps for each device. No screen links to it.",
+        "open": "Open"
+    },
     "srv": {
         "account": {
             "last_admin_delete": "the last enabled administrator cannot be deleted",

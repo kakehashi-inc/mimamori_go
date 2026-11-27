@@ -1,7 +1,7 @@
 EXECUTABLE=mimamori
 LINUX_AMD64=$(EXECUTABLE)_linux_amd64
 LINUX_ARM64=$(EXECUTABLE)_linux_arm64
-VERSION=0.1.0
+VERSION=0.1.1
 
 LDFLAGS=-s -w -X main.version=$(VERSION)
 BIN_DIR=bin

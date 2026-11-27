@@ -6,9 +6,8 @@
 mimamori [--data-dir DIR] <command> [arguments] [flags]
 ```
 
-- `--data-dir DIR`: data directory. Default: `data/` next to the executable (`data/` in the current directory when the executable's directory cannot be determined). An empty value is an argument error (exit code 2).
+- `--data-dir DIR`: data directory. Default: `data/` next to the executable.
 - `mimamori <command> --help` shows the help of each command.
-- A number in an argument, in a flag value or in a value of `central config set` is a whole number written in decimal with the digits 0-9 only (`010` is ten; `+3`, spaces, `0x10`, `1_0`, `1e1`, `1.5` and an empty value are argument errors, exit code 2), and a negative number is written as it is, with its leading `-` (`--limit -5`, `ctl rules show -1`): an argument that begins with `-` and a digit is always a value, never a flag.
 
 ## Getting started
 
@@ -20,9 +19,7 @@ On the central host:
 ./mimamori central start
 ```
 
-`central start` runs in the foreground until it receives SIGTERM or SIGINT, so run it from a service manager or keep its terminal open. The `ctl` commands run in another terminal.
-
-Open `http://<central>:9580` in a browser, log in, create a monitoring rule and issue a token. The same can be done with `ctl rules create` and `ctl tokens issue`.
+Open `https://<central>:9580` in a browser, log in, create a monitoring rule and issue a token.
 
 On each monitored host:
 
@@ -31,7 +28,7 @@ On each monitored host:
 ./mimamori agent start
 ```
 
-`agent init` asks for the token (the value of the issued token). `agent start` runs in the foreground until it receives SIGTERM or SIGINT.
+`agent init` asks for the value of the token. `central start` and `agent start` run in the foreground until they receive SIGTERM or SIGINT.
 
 ## central
 
@@ -39,19 +36,15 @@ Commands for the central. Run them on the central host.
 
 | Command | Description |
 | --- | --- |
-| `central start` | Start the central (browser screens, agent API, management API and the built-in agent). Stops with SIGTERM or SIGINT |
-| `central stop [--timeout DURATION]` | Send SIGTERM to the running central and wait until it has stopped (default 120s). The central stops accepting, finishes the requests in progress, and its built-in agent ends its work as `agent stop` says, except that it finishes its request to the central in progress instead of cutting it. When no central runs, prints `central is not running` (exit code 0). When it has not stopped within `--timeout`, ends with exit code 7 (`process <pid> did not stop within <timeout>`); the central goes on stopping |
-| `central status` | Show whether the central is running, its process id, the data directory and the listen addresses (lines `central:`, `pid:`, `data dir:`, `web:`, `agents/admin:`). While it runs, the listen addresses it started with are shown, and a saved value that differs is marked, for example `http://0.0.0.0:9580 (saved: 0.0.0.0:9590, takes effect after restart)`. When it is not running, the saved values are shown. Exit code 3 when it is not running |
-| `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. `ADDRESS` is the e-mail address used to log in; `NAME` is the name shown on the screens. `--language` defaults to `auto`. Only while no administrator exists. The password is read from the terminal or the first line of standard input |
-| `central reset-password --email ADDRESS` | Reset the password of the administrator with this e-mail address (case is ignored), enable the account and invalidate its sessions, trusted browsers and pending verification codes |
-| `central config list` | List every configuration item with its value, whether it is set or the default, and when a change takes effect |
-| `central config get NAME` | Print the value of one item. `smtp.password` is not displayed (`smtp.password is not displayed`, exit code 2; `central config list` shows whether it is set) |
+| `central start` | Start the central |
+| `central stop [--timeout DURATION]` | Stop the running central and wait until it has stopped. `--timeout` defaults to 120s |
+| `central status` | Show whether the central is running, the data directory and the listen addresses |
+| `central init-admin --email ADDRESS --display-name NAME [--language auto\|en\|ja]` | Create the first administrator. The password is read from the terminal or standard input. `--language` defaults to `auto` |
+| `central reset-password --email ADDRESS` | Reset the password of an administrator. The password is read from the terminal or standard input |
+| `central config list` | List every configuration item |
+| `central config get NAME` | Print the value of one item |
 | `central config set NAME [VALUE]` | Set one item. Lists are comma separated. `smtp.password` is read from the terminal or standard input |
-| `central config unset NAME` | Remove one item so its default applies again |
-
-A running central applies a change made with `central config` at its next periodic check (every 30 seconds); a change made on the configuration screen is applied at once. `web_listen`, `agent_listen` and `builtin_agent` take effect when the central restarts.
-
-While `smtp.host` is set, logging in on the browser screens needs a verification code sent by e-mail. When nobody can log in because the code mail cannot be sent, fix the SMTP settings with `central config set smtp.*`, or stop asking for codes with `central config unset smtp.host` (both work while the central is stopped). Fix a wrong account address with `ctl accounts email ID ADDRESS` and a password with `central reset-password --email ADDRESS`.
+| `central config unset NAME` | Reset one item to its default |
 
 ## agent
 
@@ -59,18 +52,16 @@ Commands for the agent. Run them on each monitored host.
 
 | Command | Description |
 | --- | --- |
-| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. `HOST` is the host name or IP address of the central; `PORT` defaults to 9581. The token is read from the terminal (not echoed) or the first line of standard input. `--overwrite` re-initializes an initialized agent (only while the agent is stopped); the stored rule is cleared, and the first sync after the next start applies the rule assigned to the token or, when none is assigned, removes the audit rules the agent loaded |
-| `agent set-central --host HOST [--port PORT]` | Change the central host (and port) of the initialized agent. Only while the agent is stopped; saved only when the agent can connect to the new address with its current token. Without `--port` the current port is kept |
-| `agent set-workers N [--builtin]` | Set the worker count of the agent (1-64, default 1): how many of its units (monitoring step, runs of command sets) it processes at the same time; the communication with the central does not depend on it. With `--builtin`, run on the central's host, it sets the built-in agent's own count in `builtin-agent.db` (created when missing; the data directory must hold a `central.db` that is not empty). Takes effect when the agent (for `--builtin`: the central) starts; may be run while it runs. Prints the new and the previous count and, while the agent runs, the count it uses until it is restarted. A value of `N` that is not a whole number from 1 to 64 is refused with `the agent's worker count must be a whole number from 1 to 64` and exit code 2. Exit code 3 without `agent.db` (or, with `--builtin`, without `central.db`, with an empty `central.db` (`holds no central (central.db is empty)`), or with a `central.db` of another build; in these cases nothing is written and no `builtin-agent.db` is created) |
-| `agent start` | Start the agent. Stops with SIGTERM or SIGINT. Refused with exit code 3 when the agent is not initialized, another agent runs with the same data directory, or the saved worker count is not a whole number from 1 to 64 (`agent workers: stored value "X" is not a whole number from 1 to 64; set it with agent set-workers N`) |
-| `agent stop [--timeout DURATION]` | Send SIGTERM to the running agent and wait until it has stopped (default 300s). The agent starts nothing new and cuts the request to the central in progress. Every running command is ended at the same time: SIGTERM to its process group, and SIGKILL to what is left of the group 60 s later (the 60 s are for the whole group; also while the output of processes it left behind is read). A monitoring step in progress is finished and its state saved, but it starts no further auditd tool: an auditd tool it waits for is ended at the same time as the commands and in the same way (SIGTERM, SIGKILL 60 s later) and its part counts as failed; the audit log is not read (the next start reads from the same position), an application or removal of the audit rules that has not begun is not begun, and the step's report carries no host information (the central keeps the host information it has); an application or removal that has begun runs to its end. After every worker ended, the agent sends what it has not sent yet in one last report that says it stops, and ends. When no agent runs, prints `agent is not running` (exit code 0). When it has not stopped within `--timeout`, ends with exit code 7 (`process <pid> did not stop within <timeout>`); the agent goes on stopping |
-| `agent status` | Show whether the agent is running and its process id, the central, the token and its expiry, the worker count (line `agent workers:`), the applied rule, the last application result and the unsent reports and detections (lines `agent:`, `pid:`, `central:`, `token name:`, `token expires:`, `agent workers:`, `rule:`, `last apply:`, `unsent:`). While the agent runs with another worker count than the saved one, both are shown, for example `1 (saved: 4, takes effect after restart)`. A saved count that is not a whole number from 1 to 64 is shown as `stored value "X" is not a whole number from 1 to 64; set it with agent set-workers N`. Exit code 3 when it is not running |
+| `agent init --central-host HOST [--central-port PORT] [--overwrite] [--ca-fingerprint FP]` | Initialize the agent. The token is read from the terminal or standard input. `--central-port` defaults to 9581. `--overwrite` re-initializes an initialized agent. `--ca-fingerprint` checks the fingerprint of the central's CA |
+| `agent set-central --host HOST [--port PORT]` | Change the central the agent connects to. Without `--port` the current port is kept |
+| `agent set-workers N [--builtin]` | Set the worker count of the agent (1-64, default 1). With `--builtin`, set the count of the built-in agent on the central host. Takes effect at the next start |
+| `agent start` | Start the agent |
+| `agent stop [--timeout DURATION]` | Stop the running agent and wait until it has stopped. `--timeout` defaults to 300s |
+| `agent status` | Show whether the agent is running, the central, the token, the worker count, the applied rule and the unsent reports |
 
 ## ctl
 
-Management commands. Run them on the central host while the central is running. They connect to the address of `agent_listen` (to `127.0.0.1` for an empty host or `0.0.0.0`, to `::1` for `::`) and its port, and verify the central's certificate with `ca.crt` of the data directory; the management API answers only connections from the central host itself. `--json` prints the raw JSON (`ctl rules export` and `ctl command-sets export` always print JSON, and `ctl rules edit` prints only its messages). Without `--json`, a list is printed as a table and a single object as indented JSON without its `*_i18n` fields; both show times in local time (`YYYY-MM-DD HH:MM:SS`) and other values as they are; long values in tables are shortened to 60 characters (except in `ctl tokens list`). A refusal of the central is printed as `Error: HTTP <status>: <error>` and ends with exit code 2 for 400, 403, 404 and 409, with 4 for 401 and with 1 for any other status. A content file given with `--file` must contain a JSON object. A flag that does not apply to the other flags given is ignored without an error; the notes of each command below say which one is used.
-
-A request of `ctl` is cut only when nothing arrives from the central for 60 seconds. A cut after the request was sent prints `Error: the central sent nothing for 60 seconds; it may still carry out the request: <error>` and exits with code 5; the central finishes a request it is processing, so the request may have been carried out. A cut while connecting, during the TLS handshake or while the request is sent prints the error itself and also exits with code 5 (the request did not reach the central).
+Management commands. Run them on the central host while the central is running, as a user who can read the data directory. `--json` prints JSON.
 
 ### agents
 
@@ -83,29 +74,29 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 
 | Command | Description |
 | --- | --- |
-| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token (`--valid-days` defaults to the `token_valid_days` setting of the central, also when 0 or less is given; more than 3650 is an argument error; `--rule-version` applies only together with `--rule` and defaults to the latest version) and show its value with the `agent init` command to run on the monitored host (with `--central-port` when `agent_listen` does not use port 9581) |
-| `ctl tokens list` | List tokens with their values in full |
-| `ctl tokens show ID` | Show a token with its value in full |
-| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name (`--valid-days` as in `tokens issue`); the previous values stop working. The `agent init` command shown includes `--overwrite` |
-| `ctl tokens unbind ID` | Remove the binding to an agent instance |
-| `ctl tokens revoke ID` | Revoke a token immediately |
+| `ctl tokens issue NAME [--valid-days N] [--rule ID] [--rule-version V]` | Issue a token and show the `agent init` command to run on the monitored host. `--valid-days` defaults to the `token_valid_days` setting; `--rule-version` defaults to the latest version |
+| `ctl tokens list` | List tokens |
+| `ctl tokens show ID` | Show a token |
+| `ctl tokens reissue ID [--valid-days N]` | Reissue a token with the same name. The previous value stops working |
+| `ctl tokens unbind ID` | Remove the binding to an agent |
+| `ctl tokens revoke ID` | Revoke a token |
 
 ### rules
 
 | Command | Description |
 | --- | --- |
 | `ctl rules list` | List rules |
-| `ctl rules show ID [--version V]` | Show a rule (given version; the latest when omitted or 0 or less) |
-| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty. Each `--choice` is one value (`FIELD` may contain commas). With `--template`, `--file` is ignored; `--choice` is used only together with `--template` |
-| `ctl rules export ID [--version V]` | Print the content of a version as JSON (the latest version when `--version` is omitted) |
-| `ctl rules save ID --file F [--comment C] [--description D]` | Save edited content as a new version |
+| `ctl rules show ID [--version V]` | Show a rule. `--version` defaults to the latest version |
+| `ctl rules create NAME [--template T]... [--choice FIELD=TEMPLATE]... [--file F] [--description D]` | Create a rule from templates, from a JSON file (`-` for standard input) or empty |
+| `ctl rules export ID [--version V]` | Print the content of a version as JSON |
+| `ctl rules save ID --file F [--comment C] [--description D]` | Save the content of a file as a new version |
 | `ctl rules edit ID [--comment C] [--editor CMD]` | Edit the latest version with an editor (default `vi`) and save it as a new version |
-| `ctl rules history ID` | List the versions of a rule |
+| `ctl rules history ID` | List the versions |
 | `ctl rules diff ID FROM TO` | Show the difference between two versions |
-| `ctl rules apply ID --agent ID... [--version V]` | Apply a version (default: latest) to agents (an agent given more than once counts once; an agent that does not exist is an argument error) |
-| `ctl rules unassign --agent ID...` | Take the rule away from agents: after its next sync each agent removes the audit rules it loaded and its rules file in its next monitoring step, and reports that nothing is applied (an agent without a rule is left as it is and not counted; an agent given more than once counts once; an agent that does not exist is an argument error) |
-| `ctl rules to-template ID NAME [--version V] [--description D]` | Define an administrator template from a version (default: latest) |
-| `ctl rules delete ID` | Delete a rule (not possible while applied) |
+| `ctl rules apply ID --agent ID... [--version V]` | Apply a version to agents. `--version` defaults to the latest version |
+| `ctl rules unassign --agent ID...` | Take the rule away from agents |
+| `ctl rules to-template ID NAME [--version V] [--description D]` | Create a template from a version |
+| `ctl rules delete ID` | Delete a rule |
 
 ### templates
 
@@ -113,45 +104,45 @@ A request of `ctl` is cut only when nothing arrives from the central for 60 seco
 | --- | --- |
 | `ctl templates list` | List templates |
 | `ctl templates show NAME` | Show a template |
-| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | Create an administrator template (`--from-rule` copies the latest version unless `--version` is given; `--version` is used only with `--from-rule`). When more than one source is given, the first of `--from-builtin`, `--from-rule` and `--file` in this order is used and the others are ignored |
-| `ctl templates update NAME --file F [--description D]` | Change an administrator template (the description is kept when `--description` is omitted) |
-| `ctl templates delete NAME` | Delete an administrator template |
+| `ctl templates create NAME [--from-builtin T \| --from-rule ID [--version V] \| --file F] [--description D]` | Create a template from a built-in template, a version of a rule or a file |
+| `ctl templates update NAME --file F [--description D]` | Change a template created by an administrator |
+| `ctl templates delete NAME` | Delete a template created by an administrator |
 
 ### detections
 
 | Command | Description |
 | --- | --- |
-| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS` (the form the tables show), `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD` in local time, or RFC3339; any other value is an argument error that names these forms. `--agent` 0 or less means all agents. An empty value of `--category`, `--type`, `--from`, `--to`, `--acknowledged` or `--suppressed` is the same as not giving the flag (it filters nothing); a `--category`, `--type`, `--acknowledged` or `--suppressed` other than the values shown is an argument error (exit code 2) that lists them. `--limit` defaults to 100 and is held between 1 and 500 (0 gives 1 row, more than 500 gives 500); `--offset` defaults to 0 and is held between 0 and 1000000 |
+| `ctl detections list [--agent ID] [--category alert\|normal] [--type exec\|denied\|read\|network\|writable\|exec_file] [--from T] [--to T] [--acknowledged true\|false] [--suppressed true\|false] [--limit N] [--offset N]` | List detections. `T` is `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD` and similar in local time, or RFC3339. `--limit` defaults to 100 (at most 500) |
 | `ctl detections show AGENT_ID ID` | Show a detection |
-| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged. `AGENT_ID` and `ID` must be positive integers written with digits only, with nothing after them. When any of the given detections does not exist, nothing is acknowledged, the missing ones are named, and the exit code is 2 (as for any object that does not exist). Detections that are already acknowledged count as existing |
+| `ctl detections ack AGENT_ID:ID...` | Mark detections as acknowledged |
 
 ### suppressions
 
 | Command | Description |
 | --- | --- |
 | `ctl suppressions list` | List suppression conditions |
-| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition (empty fields match anything; `--exe` and `--target` accept `*`). At least one of `--type`, `--user`, `--exe` and `--target` is required; `--agent` alone is an argument error (without `--agent` the condition applies to all agents; an `--agent` value that is no agent id, 0 and negative values included, is an argument error) |
+| `ctl suppressions create [--agent ID] [--type T] [--user U] [--exe E] [--target T] [--comment C]` | Create a suppression condition. Without `--agent` it applies to all agents. `--exe` and `--target` accept `*` |
 | `ctl suppressions delete ID` | Delete a suppression condition |
 
 ### command-sets
 
-Command sets of one agent (the built-in agent included): definitions, run requests and results. `AGENT_ID` is the id of `ctl agents list`. These commands work without a verification code.
+`AGENT_ID` is the id of `ctl agents list`.
 
 | Command | Description |
 | --- | --- |
-| `ctl command-sets list AGENT_ID` | List the command sets of an agent. Above the table: the agent, the OS user new sets default to (the user the agent runs as; `(not reported yet)` before the agent has connected), the host's time zone (also `(not reported yet)` before), whether the agent holds the current definitions, and whether the agent is responding (`agent responding: no` while it has not synced within three of its check intervals and 600 seconds, and from its last report at a stop until it syncs again; its run requests then wait until it syncs again, and a request handed to it and not answered goes back to `queued`). `request.state` is `queued` (waiting for a sync of the agent that hands it over) or `delivered` (handed to the agent with a sync) |
-| `ctl command-sets show AGENT_ID SET_ID` | Show a command set: its definition, schedule summary, open run request, last finished run, whether it is running, and problems the agent reported about it |
-| `ctl command-sets export AGENT_ID SET_ID` | Print only the definition of a command set as JSON (always JSON), in the shape `create` and `update` read. The time of a once schedule is printed in local time with its offset |
-| `ctl command-sets create AGENT_ID --file F` | Create a command set from a definition file (`-` for standard input). When `os_user` is omitted, the OS user the agent runs as is used (an agent that has never connected has none; then `os_user` is required) |
-| `ctl command-sets update AGENT_ID SET_ID --file F` | Replace the whole definition of a command set with a definition file. When `os_user` is omitted, the set's current OS user is kept |
-| `ctl command-sets delete AGENT_ID SET_ID` | Delete a command set. Its runs are kept until the retention removes them; a run request that waits to be handed to the agent (`queued`) is discarded |
-| `ctl command-sets import AGENT_ID --from SOURCE_AGENT_ID SET_ID[=NEW_NAME]...` | Copy command sets of the agent `SOURCE_AGENT_ID` (it may be `AGENT_ID` itself) into `AGENT_ID`, with everything including the OS user and the working directory. `=NEW_NAME` renames the copy (default: the source name; everything after the first `=` is the name). When a name is already used in the destination or repeated in the import, nothing is created and the names are printed. `SET_ID` must be a positive integer and `NEW_NAME` must not be empty |
-| `ctl command-sets run AGENT_ID SET_ID` | Request a run of a command set (also of a scheduled one). It is handed to the agent with one of its next syncs: each sync in which the agent can take a request hands over the agent's oldest waiting request (one per sync); requests of other agents play no role. A set can have only one request that the agent has not answered; a request that still waits to be handed over (`queued`) 24 hours after it was made expires. Prints the request, with the state `queued` |
-| `ctl command-sets discard AGENT_ID REQUEST_ID` | Discard a run request that waits to be handed to the agent (`queued`; also one that went back to `queued` because the agent stopped or went silent) (`REQUEST_ID` is the `id` printed by `run`, or `request.id` of `show`). A request in another state is refused (exit code 2) |
-| `ctl command-sets runs AGENT_ID SET_ID [--limit N] [--before RUN_ID]` | List the runs of a command set, newest first (also of a deleted set while its runs are kept): trigger, due time of a scheduled run, the number of occurrences skipped before it without a run (`skipped`, `-` when none), start, end, state, reason and the display value on one line. `--limit` defaults to 50 and is held between 1 and 500; when older runs exist, the `--before` value of the next page is printed below the table |
-| `ctl command-sets show-run AGENT_ID RUN_ID` | Show a run: trigger (with the due time of a scheduled run or the id of the run request), the occurrences skipped before it without a run (number, first and last, when there are any), OS user, working directory, times, state (with the reason of the run, such as `interrupted`), display value, and for every executed command its result (with its reason), exit code, times, command line, note and console output (up to 1 MiB per command), and how many commands were not executed |
+| `ctl command-sets list AGENT_ID` | List the command sets of an agent |
+| `ctl command-sets show AGENT_ID SET_ID` | Show a command set |
+| `ctl command-sets export AGENT_ID SET_ID` | Print the definition of a command set as JSON |
+| `ctl command-sets create AGENT_ID --file F` | Create a command set from a definition file (`-` for standard input) |
+| `ctl command-sets update AGENT_ID SET_ID --file F` | Replace the definition of a command set with a definition file |
+| `ctl command-sets delete AGENT_ID SET_ID` | Delete a command set |
+| `ctl command-sets import AGENT_ID --from SOURCE_AGENT_ID SET_ID[=NEW_NAME]...` | Copy command sets from another agent. `=NEW_NAME` renames the copy |
+| `ctl command-sets run AGENT_ID SET_ID` | Request a run of a command set |
+| `ctl command-sets discard AGENT_ID REQUEST_ID` | Discard a run request not yet handed to the agent |
+| `ctl command-sets runs AGENT_ID SET_ID [--limit N] [--before RUN_ID]` | List the runs, newest first. `--limit` defaults to 50 |
+| `ctl command-sets show-run AGENT_ID RUN_ID` | Show the result of a run |
 
-The definition file is one JSON object in the shape of `CommandSetSpec` of the API (see [API仕様.md](API仕様.md), chapter 4.1, for every field, its values and limits); unknown fields are refused. Omitted fields take their defaults: run mode from whether a schedule is given, 100 kept runs, comma joiner, success code 0, failure codes 1 or more, `on_problems` `stop`, 20 lines. An omitted `timeout_sec` is 0: the command has no time limit and is waited for until it ends. Example:
+The definition file is one JSON object (see [API仕様.md](API仕様.md), chapter 4.1, for its fields). Example:
 
 ```json
 {
@@ -166,22 +157,18 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 }
 ```
 
-- An empty `work_dir` is the home directory of the OS user. Every command line is run by bash exactly as written, as the set's OS user.
-- Recurring schedules (`weekly`, `daily`, `every_hours`, `every_minutes`, `hourly_at`) run in the local time of the monitored host. The time of a once schedule (`{"kind": "once", "at": "2026-12-01 03:00"}`) may be written without an offset (`YYYY-MM-DD HH:MM[:SS]`, also with `T` instead of the space); it is then read in the local time of the host where `ctl` runs. A time in the past is refused.
-- Values the central refuses (an invalid definition, a name already used by another set of the agent, a second open run request) end with exit code 2 and a message that names the field and, for a command, its position (from 1).
-
 ### accounts
 
 | Command | Description |
 | --- | --- |
-| `ctl accounts list` | List accounts (id, email, display_name, role, language, disabled, notify, locked_until, created_at) |
-| `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account. `EMAIL` is the e-mail address used to log in (unique, case is ignored); `NAME` is the name shown on the screens (need not be unique). `--language` defaults to `auto`; password from standard input |
-| `ctl accounts email ID ADDRESS` | Change the e-mail address at once, without a verification code. The account's sessions, trusted browsers and pending verification codes are invalidated |
-| `ctl accounts display-name ID NAME` | Change the display name (sessions are kept) |
-| `ctl accounts role ID admin\|viewer` | Change the role (the account's sessions are invalidated) |
-| `ctl accounts notify ID on\|off` | Choose whether the account receives notification mails (detection notifications). New accounts are `off`. A disabled account keeps its choice but receives nothing while disabled. Sessions are kept |
-| `ctl accounts password ID` | Reset the password (from standard input). The account's sessions, trusted browsers and pending verification codes are invalidated |
-| `ctl accounts disable ID` | Disable an account. Its sessions, trusted browsers and pending verification codes are invalidated |
+| `ctl accounts list` | List accounts |
+| `ctl accounts create EMAIL --display-name NAME --role admin\|viewer [--language auto\|en\|ja]` | Create an account. The password is read from standard input. `--language` defaults to `auto` |
+| `ctl accounts email ID ADDRESS` | Change the e-mail address |
+| `ctl accounts display-name ID NAME` | Change the display name |
+| `ctl accounts role ID admin\|viewer` | Change the role |
+| `ctl accounts notify ID on\|off` | Choose whether the account receives notification mails |
+| `ctl accounts password ID` | Reset the password. The password is read from standard input |
+| `ctl accounts disable ID` | Disable an account |
 | `ctl accounts enable ID` | Enable an account |
 | `ctl accounts delete ID` | Delete an account |
 
@@ -189,8 +176,8 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 
 | Command | Description |
 | --- | --- |
-| `ctl certs status` | Show the CA and server certificate status |
-| `ctl history [--category C] [--limit N] [--offset N]` | Show the history (`--limit` defaults to 50 and is held between 1 and 500; `--offset` defaults to 0 and is held between 0 and 10000000). Categories: `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command`; an empty `--category` is the same as not giving it (every category); any other `--category` is an argument error (exit code 2) that lists them |
+| `ctl certs status` | Show the status of the private CA and the server certificate |
+| `ctl history [--category C] [--limit N] [--offset N]` | Show the history. `C` is one of `account`, `rule`, `token`, `certificate`, `rejected`, `template`, `suppression`, `detection`, `config`, `command`. `--limit` defaults to 50 |
 
 ## version
 
@@ -203,10 +190,10 @@ The definition file is one JSON object in the shape of `CommandSetSpec` of the A
 | Code | Meaning |
 | --- | --- |
 | 0 | Success |
-| 1 | Unspecified error (for `ctl`, also an answer of the central with a status that the other codes do not name, such as 500) |
-| 2 | Invalid arguments or flags (also errors in the command line itself, such as an unknown command or flag or a missing value, and values the central refuses, such as a duplicate name or a change to a built-in template) |
-| 3 | Configuration or database error, including another instance already running, a listen address that cannot be opened (for example in use), `agent init` or `agent set-central` while the agent is running, and a `central.db`, `agent.db` or `builtin-agent.db` (`agent set-workers --builtin`) in the data directory that was created by another build of the program (every command that opens it, `status` included, fails with a message that names the file; the data directory has to be created again); for `status`, not running |
-| 4 | Authentication or authorization failure (for `ctl`, `cli.secret` that does not match the running central, or a central certificate that `ca.crt` cannot verify; for `central stop` and `agent stop`, a process the user may not signal: `not permitted to signal process <pid> (run as the user running it)`) |
-| 5 | Execution error (external command or the central), including a `ctl` request cut after 60 seconds without anything from the central |
-| 6 | File or directory I/O error (for `ctl`, also `cli.secret` or `ca.crt` that cannot be read, or a `ca.crt` without a certificate) |
-| 7 | Timeout: `central stop` or `agent stop` waited longer than `--timeout` |
+| 1 | Unspecified error |
+| 2 | Invalid arguments |
+| 3 | Configuration or database error; for `status`, not running |
+| 4 | Authentication or authorization failure |
+| 5 | Execution error (external command or the central) |
+| 6 | File or directory I/O error |
+| 7 | Timeout (`stop` waited longer than `--timeout`) |

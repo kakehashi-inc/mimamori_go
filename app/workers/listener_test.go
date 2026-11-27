@@ -75,10 +75,12 @@ func TestConnLimit(t *testing.T) {
 	}
 	waitFor(t, "all 6 places in use", func() bool { return s.lim.open() == 6 })
 	start := time.Now()
-	c := s.dialWeb(t) // the kernel completes the connection
+	raw := dialTCP(t, s.webAddr, nil) // the kernel completes the connection
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("connection beyond the bound established after %v", d)
 	}
+	// The TLS handshake waits until the server accepts the connection.
+	c := handshake(t, raw)
 	_, _ = io.WriteString(c, getReq("/test/slow?ms=0"))
 	a := readAnswer(c, bufio.NewReader(c), "GET", 20*time.Second)
 	if a.status != http.StatusOK || time.Since(ref) < 1500*time.Millisecond {

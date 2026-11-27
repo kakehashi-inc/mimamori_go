@@ -127,7 +127,7 @@ func startServe(t *testing.T, o serveOpts) *serveEnv {
 		t.Fatal(err)
 	}
 	s.webAddr, s.agentAddr = webLn.Addr().String(), agentLn.Addr().String()
-	s.web = newHTTPServer(s.routes(e.web), s.admit(e.c.admitWebBody), nil, s.budget, logger)
+	s.web = newHTTPServer(s.routes(e.web), s.admit(e.c.admitWebBody), e.c.tlsConfig(), s.budget, logger)
 	s.agent = newHTTPServer(s.routes(e.agent), s.admit(e.c.admitAgentBody), e.c.tlsConfig(), s.budget, logger)
 	// The tests see when the server calls its handler; the request gate of
 	// newHTTPServer runs unchanged inside.
@@ -138,7 +138,7 @@ func startServe(t *testing.T, o serveOpts) *serveEnv {
 			gate.ServeHTTP(w, r)
 		})
 	}
-	go func() { _ = s.web.Serve(s.lim.listener(webLn, o.idle)) }()
+	go func() { _ = s.web.ServeTLS(s.lim.listener(webLn, o.idle), "", "") }()
 	go func() { _ = s.agent.ServeTLS(s.lim.listener(agentLn, o.idle), "", "") }()
 	t.Cleanup(s.stop)
 	// Both listeners hold their place while they wait in accept.
@@ -235,22 +235,28 @@ func (s *serveEnv) waitOpen(t *testing.T, want int, wait time.Duration) time.Dur
 	return time.Since(start)
 }
 
-// dialWeb connects to the plain listener.
-func (s *serveEnv) dialWeb(t *testing.T) net.Conn {
+// dialWeb connects to the browser listener and completes the handshake.
+func (s *serveEnv) dialWeb(t *testing.T) *tls.Conn {
 	t.Helper()
-	return dialTCP(t, s.webAddr, nil)
+	return handshake(t, dialTCP(t, s.webAddr, nil))
 }
 
-// dialAgentRaw connects to the TLS listener without a handshake.
+// dialAgentRaw connects to the agent listener without a handshake.
 func (s *serveEnv) dialAgentRaw(t *testing.T) net.Conn {
 	t.Helper()
 	return dialTCP(t, s.agentAddr, nil)
 }
 
-// dialAgent connects to the TLS listener and completes the handshake.
+// dialAgent connects to the agent listener and completes the handshake.
 func (s *serveEnv) dialAgent(t *testing.T) *tls.Conn {
 	t.Helper()
-	c := tls.Client(s.dialAgentRaw(t), testClientTLS())
+	return handshake(t, s.dialAgentRaw(t))
+}
+
+// handshake completes the TLS handshake of a client on raw.
+func handshake(t *testing.T, raw net.Conn) *tls.Conn {
+	t.Helper()
+	c := tls.Client(raw, testClientTLS())
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := c.Handshake(); err != nil {
 		t.Fatal(err)
@@ -259,7 +265,7 @@ func (s *serveEnv) dialAgent(t *testing.T) *tls.Conn {
 	return c
 }
 
-// both runs f for the plain listener and for the TLS listener.
+// both runs f for the browser listener and for the agent listener.
 func (s *serveEnv) both(t *testing.T, f func(t *testing.T, dial func() net.Conn)) {
 	t.Run("web", func(t *testing.T) { f(t, func() net.Conn { return s.dialWeb(t) }) })
 	t.Run("agent", func(t *testing.T) { f(t, func() net.Conn { return s.dialAgent(t) }) })
@@ -398,7 +404,7 @@ func TestServeManyAtOnce(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				c, err := net.DialTimeout("tcp", s.webAddr, 10*time.Second)
+				c, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", s.webAddr, testClientTLS())
 				if err != nil {
 					failed.Add(1)
 					first.CompareAndSwap(nil, err.Error())
@@ -586,7 +592,7 @@ func smallReceiveBuffer(fd uintptr) {
 // everything.
 func TestServeUnreadResponse(t *testing.T) {
 	s := startServe(t, serveOpts{})
-	c := dialTCP(t, s.webAddr, smallReceiveBuffer)
+	c := handshake(t, dialTCP(t, s.webAddr, smallReceiveBuffer))
 	start := time.Now()
 	_, _ = io.WriteString(c, getReq("/test/big?mib=16"))
 	for s.lim.open() <= s.baselineCnt {
@@ -602,7 +608,7 @@ func TestServeUnreadResponse(t *testing.T) {
 		t.Fatalf("unread answer: released after %v, want one idle time (%v) after the buffers filled", since, s.idle)
 	}
 
-	slow := dialTCP(t, s.webAddr, smallReceiveBuffer)
+	slow := handshake(t, dialTCP(t, s.webAddr, smallReceiveBuffer))
 	_, _ = io.WriteString(slow, getReq("/test/big?mib=2"))
 	start = time.Now()
 	br := bufio.NewReader(slow)
@@ -720,17 +726,16 @@ func TestServePeerCloses(t *testing.T) {
 	}
 }
 
-// The handler's context carries the peer and the local address, the TLS
-// state on the agent listener, and is never done.
+// The handler's context carries the peer and the local address and the TLS
+// state on both listeners, and is never done.
 func TestServeHandlerContext(t *testing.T) {
 	s := startServe(t, serveOpts{})
 	for _, tc := range []struct {
 		what string
 		c    net.Conn
-		tls  bool
-	}{{"web", s.dialWeb(t), false}, {"agent", s.dialAgent(t), true}} {
+	}{{"web", s.dialWeb(t)}, {"agent", s.dialAgent(t)}} {
 		a := roundTrip(t, tc.c, getReq("/test/ctx"))
-		want := fmt.Sprintf("remote=%s local=%s tcp=true tls=%v done=false", tc.c.LocalAddr(), tc.c.RemoteAddr(), tc.tls)
+		want := fmt.Sprintf("remote=%s local=%s tcp=true tls=true done=false", tc.c.LocalAddr(), tc.c.RemoteAddr())
 		if a.status != http.StatusOK || a.body != want {
 			t.Fatalf("%s: %d %q, want %q", tc.what, a.status, a.body, want)
 		}
@@ -839,8 +844,10 @@ func TestServeLibraryAnswers(t *testing.T) {
 			t.Errorf("5000 header lines within 64 KiB: %d %v", a.status, a.err)
 		}
 	})
-	if a := roundTrip(t, s.dialAgentRaw(t), getReq("/agent/v1/ca")); a.status != http.StatusBadRequest || !strings.Contains(a.body, "HTTPS server") {
-		t.Errorf("plain HTTP to the TLS listener: %d %q %v", a.status, a.body, a.err)
+	for what, addr := range map[string]string{"web": s.webAddr, "agent": s.agentAddr} {
+		if a := roundTrip(t, dialTCP(t, addr, nil), getReq("/api/v1/health")); a.status != http.StatusBadRequest || !strings.Contains(a.body, "HTTPS server") {
+			t.Errorf("%s: plain HTTP to the TLS listener: %d %q %v", what, a.status, a.body, a.err)
+		}
 	}
 }
 

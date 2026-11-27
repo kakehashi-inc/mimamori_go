@@ -74,12 +74,12 @@ func (c *concClient) do(cl *http.Client, method, url string, body any, hdr map[s
 }
 
 func (c *concClient) login(email, pass string) (int, string, string) {
-	return c.do(c.web, "POST", "http://"+c.s.webAddr+"/api/v1/auth/login", map[string]string{"email": email, "password": pass}, map[string]string{csrfHeader: "1"})
+	return c.do(c.web, "POST", "https://"+c.s.webAddr+"/api/v1/auth/login", map[string]string{"email": email, "password": pass}, map[string]string{csrfHeader: "1"})
 }
 
 // browser calls the browser API as the administrator.
 func (c *concClient) browser(method, path string, body any) (int, string) {
-	code, b, _ := c.do(c.web, method, "http://"+c.s.webAddr+"/api/v1"+path, body, map[string]string{"Cookie": sessionCookie + "=" + c.cookie, csrfHeader: "1"})
+	code, b, _ := c.do(c.web, method, "https://"+c.s.webAddr+"/api/v1"+path, body, map[string]string{"Cookie": sessionCookie + "=" + c.cookie, csrfHeader: "1"})
 	return code, b
 }
 

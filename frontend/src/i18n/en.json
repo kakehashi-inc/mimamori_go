@@ -586,6 +586,69 @@
         "stillRunning": "This run has not finished yet. Reload to see the commands that ended since.",
         "noCommands": "No command has ended yet."
     },
+    "caInstall": {
+        "title": "Install the CA certificate",
+        "intro": "The screens of mimamori use a certificate issued by the private CA of this central. Install the CA certificate on each device you use, so that the browser trusts this site without a warning.",
+        "warningNote": "Until the CA certificate is installed, the browser warns about this site. To open this page you have accepted the warning once.",
+        "verifyNote": "Before installing, compare the fingerprint below with the one your administrator tells you. Administrators see it on the Certificates screen.",
+        "certificates": "CA certificates",
+        "installBoth": "Two CA certificates are offered while a new CA is introduced. Install both.",
+        "nameNote": "The certificate appears under this name in the certificate list of the device.",
+        "subject": "Name",
+        "fingerprint": "Fingerprint (SHA-256)",
+        "notAfter": "Expires",
+        "download": "Download",
+        "openInSafari": "On iPhone and iPad the certificate can only be installed from Safari. Open this page in Safari.",
+        "steps": "Installation steps",
+        "detected": "Steps for this device: {{env}}",
+        "undetected": "This device could not be identified. Follow the steps for your device.",
+        "macOrIpad": "Safari on a Mac cannot be told apart from Safari on an iPad. Follow the steps for your device.",
+        "showAll": "Show the steps for other devices",
+        "showDetected": "Show only the steps for this device",
+        "menusVary": "The names and the order of the menus differ with the version of the OS and the browser.",
+        "guides": {
+            "windows": {
+                "title": "Windows (Chrome, Edge)",
+                "steps": "Download the CA certificate with the button above and open the downloaded file.\nClick \"Install Certificate...\", choose \"Current User\" and click \"Next\".\nChoose \"Place all certificates in the following store\", click \"Browse...\" and select \"Trusted Root Certification Authorities\".\nClick \"Next\" and \"Finish\", and answer \"Yes\" to the security warning.\nClose every window of the browser and open this site again.",
+                "note": "Chrome and Edge use the certificates of Windows, so the other programs of this Windows user trust the CA as well."
+            },
+            "macos": {
+                "title": "macOS (Safari, Chrome, Edge)",
+                "steps": "Download the CA certificate with the button above and open the downloaded file. Keychain Access opens; add the certificate to the \"login\" keychain.\nIn Keychain Access, double-click the certificate with the name shown above.\nOpen \"Trust\" and set \"When using this certificate\" to \"Always Trust\".\nClose the window and enter your password to save the change.\nQuit the browser and open this site again.",
+                "note": "Safari, Chrome and Edge use the keychain of macOS, so the other programs of this macOS user trust the CA as well."
+            },
+            "linux": {
+                "title": "Linux (Chrome, Chromium, Edge)",
+                "steps": "Download the CA certificate with the button above.\nOpen the settings of the browser, then \"Privacy and security\" > \"Security\" > \"Manage certificates\".\nImport the downloaded file as a certificate authority (the \"Authorities\" tab, or the certificates installed by you).\nAllow it to identify websites and confirm.\nQuit the browser and open this site again.",
+                "note": "The certificate is stored in the certificate database of your Linux user, which other programs of the user may also use."
+            },
+            "chromeos": {
+                "title": "ChromeOS",
+                "steps": "Download the CA certificate with the button above.\nOpen Settings, then \"Privacy and security\" > \"Security\" > \"Manage certificates\".\nOpen the \"Authorities\" tab, click \"Import\" and choose the downloaded file.\nCheck \"Trust this certificate for identifying websites\" and click \"OK\".\nOpen this site again.",
+                "note": ""
+            },
+            "firefox": {
+                "title": "Firefox (Windows, macOS, Linux)",
+                "steps": "Click the download button above. Firefox shows the dialog \"Downloading Certificate\".\nCheck \"Trust this CA to identify websites.\" and click \"OK\".\nOpen this site again.",
+                "note": "Without the dialog: save the file, open Settings > \"Privacy & Security\" > \"Certificates\" > \"View Certificates...\", and import it on the \"Authorities\" tab. Firefox keeps its own certificates, so only this Firefox profile trusts the CA."
+            },
+            "ios": {
+                "title": "iPhone / iPad (every browser)",
+                "steps": "Open this page in Safari, tap the download button above, and tap \"Allow\" when Safari asks to download a configuration profile.\nOpen Settings, tap \"Profile Downloaded\" (or General > \"VPN & Device Management\"), tap the profile and \"Install\", and enter your passcode.\nOpen Settings > General > About > \"Certificate Trust Settings\" and turn on full trust for the certificate with the name shown above.\nOpen this site again.",
+                "note": "Every browser of the device uses the trust of iOS and iPadOS, so the CA is trusted in all of them."
+            },
+            "android": {
+                "title": "Android (Chrome, Edge, Samsung Internet)",
+                "steps": "Download the CA certificate with the button above.\nOpen Settings and search for \"CA certificate\" (usually under \"Security and privacy\" > \"More security settings\" > \"Encryption and credentials\" > \"Install a certificate\").\nChoose \"CA certificate\", tap \"Install anyway\", and choose the downloaded file.\nQuit the browser and open this site again.",
+                "note": "A browser cannot install the certificate itself; it is installed in Settings. The menus differ by manufacturer."
+            },
+            "androidFirefox": {
+                "title": "Android (Firefox)",
+                "steps": "Download the CA certificate with the button above.\nInstall it in Settings as a CA certificate, as for the other Android browsers (search Settings for \"CA certificate\").\nIn Firefox, open Settings > \"About Firefox\" and tap the Firefox logo five times to show the secret settings.\nGo back to Settings, open \"Secret Settings\" and turn on \"Use third party CA certificates\".\nQuit Firefox and open this site again.",
+                "note": "Firefox for Android trusts the certificates installed in Settings only with this setting."
+            }
+        }
+    },
     "srv": {
         "account": {
             "current_password_wrong": "the current password is wrong",
@@ -662,6 +725,7 @@
         },
         "common": {
             "body_refused": "request body not read: a body this large needs an authenticated request",
+            "ca_not_found": "CA certificate not found",
             "command_not_in_path": "command {{name}} not found in PATH",
             "db_other_build": "database {{path}} was created by another build of the program and its tables do not match this build: the data directory has to be created again (move it away and set the program up anew)",
             "internal_error": "internal error",

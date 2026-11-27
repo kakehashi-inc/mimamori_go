@@ -121,10 +121,10 @@ func startCentral() error {
 	// bodies hold for both listeners.
 	limit := newProcessConnLimit(logger)
 	budget := newBodyBudget(modules.MaxBufferedBytes)
-	web := newHTTPServer(c.webHandler(), c.admitWebBody, nil, budget, logger)
+	web := newHTTPServer(c.webHandler(), c.admitWebBody, c.tlsConfig(), budget, logger)
 	agent := newHTTPServer(c.agentHandler(), c.admitAgentBody, c.tlsConfig(), budget, logger)
 	serveErr := make(chan error, 2)
-	go func() { serveErr <- web.Serve(limit.listener(webLn, modules.IdleTimeout)) }()
+	go func() { serveErr <- web.ServeTLS(limit.listener(webLn, modules.IdleTimeout), "", "") }()
 	go func() { serveErr <- agent.ServeTLS(limit.listener(agentLn, modules.IdleTimeout), "", "") }()
 
 	stopBuiltin := make(chan struct{})
@@ -136,7 +136,7 @@ func startCentral() error {
 	stopPeriodic := make(chan struct{})
 	waitPeriodic := c.startPeriodic(c.periodicSteps(), stopPeriodic)
 	running = true
-	logger.Printf("%s central %s started: web http://%s, agents and management https://%s",
+	logger.Printf("%s central %s started: web https://%s, agents and management https://%s",
 		modules.AppName, modules.AppVersion, cfg.WebListen, cfg.AgentListen)
 	// Nothing about the built-in agent is logged while it is disabled.
 	builtinEnabled := *c.conf().BuiltinAgent

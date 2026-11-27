@@ -571,6 +571,11 @@
             "commandsCount": "{{total}} 個中 {{done}} 個"
         }
     },
+    "certificates": {
+        "caPage": "CA配布ページ",
+        "caPageNote": "画面を使う人に、このURLを伝えてください。ログインなしで開け、CA証明書と端末ごとのインストールの手順を表示します。どの画面からもリンクしていません。",
+        "open": "開く"
+    },
     "srv": {
         "account": {
             "last_admin_delete": "有効な管理者が 1 人だけのため、削除できません。",

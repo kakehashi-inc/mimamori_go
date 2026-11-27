@@ -155,7 +155,7 @@ func (c *core) newSession(accountID int64, remember bool) (*models.Session, *htt
 	// Without "keep me logged in" the session ends SessionIdleTimeout after
 	// the last operation (sessionAuth extends it); the cookie has no Max-Age.
 	expires := now + int64(modules.SessionIdleTimeout/time.Second)
-	cookie := &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	cookie := &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode}
 	if remember {
 		// "Keep me logged in": the cookie survives closing the browser and
 		// the session lasts the configured period from login.
@@ -172,7 +172,7 @@ func (c *core) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if p.SessionID != "" {
 		_ = c.db.Write(func(tx models.Writer) error { return models.DeleteSession(tx, p.SessionID) })
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 

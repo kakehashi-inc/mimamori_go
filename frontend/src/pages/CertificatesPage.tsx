@@ -5,6 +5,7 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, DescriptionList, PageHeader } from '../components/PageHeader';
 import { Alert, EmptyState, ErrorAlert, Loading } from '../components/StateViews';
+import { Slot } from '../components/Slot';
 import { CertStatusBadge } from '../components/StatusBadges';
 import { Table, TBody, Td, Th, THead, Tr } from '../components/Table';
 import { useApi } from '../hooks/useApi';
@@ -49,6 +50,7 @@ export function CertificatesPage() {
             ) : (
                 data && (
                     <div className='flex flex-col gap-4'>
+                        <Slot name='certificates.sections' />
                         <Card title={t('certificates.rotation')}>
                             <DescriptionList
                                 items={[

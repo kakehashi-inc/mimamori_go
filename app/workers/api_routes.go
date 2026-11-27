@@ -29,6 +29,8 @@ func (c *core) registerAPI(admin, viewer *http.ServeMux, prefix string, cli bool
 	}
 	if !cli {
 		h("GET /health", c.handleHealth)
+		h("GET /ca", c.handleWebCAList)
+		h("GET /ca/{file}", c.handleWebCAFile)
 		h("POST /auth/login", c.handleLogin)
 		h("POST /auth/login/verify", c.handleLoginVerify)
 		h("POST /auth/logout", requireAny(c.handleLogout))

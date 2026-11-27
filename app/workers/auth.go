@@ -68,9 +68,10 @@ func (c *core) findSession(r *http.Request) (*models.Session, *models.Account) {
 	return s, a
 }
 
-// publicAPIRoute reports whether a browser API request needs no session.
+// publicAPIRoute reports whether a browser API request needs no session:
+// the health check, the CA certificates and the login.
 func publicAPIRoute(r *http.Request) bool {
-	return (r.Method == http.MethodGet && r.URL.Path == "/api/v1/health") ||
+	return (r.Method == http.MethodGet && (r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/ca" || strings.HasPrefix(r.URL.Path, "/api/v1/ca/"))) ||
 		(r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/login/verify"))
 }
 

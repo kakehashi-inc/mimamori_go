@@ -423,6 +423,11 @@ export interface CertInfo {
     status: CertState;
 }
 
+/** A CA certificate offered for installation, with the path segment of its download. */
+export interface InstallableCA extends CertInfo {
+    file: string;
+}
+
 export interface CertStatus {
     cas: CertInfo[] | null;
     /** Absent while there is no active server certificate. */

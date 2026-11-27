@@ -24,7 +24,7 @@ func connOf(ctx context.Context) *modules.IdleConn {
 
 // newHTTPServer builds the server of one listener: handler behind the
 // request gate (with the listener's pre-check admit and the process's body
-// budget), HTTP/1.1 only, TLS when tlsCfg is set (served with ServeTLS).
+// budget), HTTP/1.1 only, TLS with tlsCfg (served with ServeTLS).
 // The server sets no time limit of its own: time is governed by the
 // connections' idle time alone (modules.IdleConn, given by the listener of
 // connLimit). Handlers learn the peer address (r.RemoteAddr), the local

@@ -121,7 +121,7 @@ func (c *core) newBrowserMemory(r *http.Request, accountID int64, trusted bool, 
 	m.row = &models.BrowserVerification{ID: modules.HashSecret(value), AccountID: accountID, Trusted: trusted,
 		CreatedAt: now, ExpiresAt: expires, RemoteAddr: remoteHost(r.RemoteAddr)}
 	m.cookie = &http.Cookie{Name: verifyCookie, Value: value, Path: verifyCookiePath, MaxAge: c.conf().TwoStepTrustDays * 86400,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode}
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode}
 	return m, nil
 }
 

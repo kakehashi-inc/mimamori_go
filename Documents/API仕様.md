@@ -8,14 +8,14 @@
 
 | 待ち受け | 通信 | パス | 利用者 | 認証 |
 | --- | --- | --- | --- | --- |
-| ブラウザ用（既定 `0.0.0.0:9580`） | HTTP | `/api/v1/*` | ブラウザ画面 | ログインセッション（Cookie `mimamori_session`） |
-| ブラウザ用 | HTTP | `/*` | ブラウザ | なし（埋め込み SPA）。管理者の画面だけが読み込むファイル（2 章の `/ui/modules` が返すもの）は、管理者のログインセッションがある要求にだけ返し（`Cache-Control: private, no-store`）、それ以外の要求には知らないパスと同じ `index.html` を返す |
+| ブラウザ用（既定 `0.0.0.0:9580`） | HTTPS（独自CA） | `/api/v1/*` | ブラウザ画面 | ログインセッション（Cookie `mimamori_session`） |
+| ブラウザ用 | HTTPS（独自CA） | `/*` | ブラウザ | なし（埋め込み SPA）。管理者の画面だけが読み込むファイル（2 章の `/ui/modules` が返すもの）は、管理者のログインセッションがある要求にだけ返し（`Cache-Control: private, no-store`）、それ以外の要求には知らないパスと同じ `index.html` を返す |
 | エージェントおよび管理用（既定 `0.0.0.0:9581`） | HTTPS（独自CA） | `/agent/v1/*` | エージェント | トークン（`Authorization: Bearer mmr_...`）とインスタンスID（`GET /agent/v1/ca` だけは認証なし） |
 | エージェントおよび管理用 | HTTPS（独自CA） | `/admin/v1/*` | CLI | 接続元がこのホスト（ループバックのアドレス、または接続を受け付けた自分側の IP アドレスと同じアドレス）で、CLI 用の秘密（セントラルがデータディレクトリの `cli.secret` に書く値。`Authorization: Bearer <値>`） |
 
 - `/api/v1/X` と `/admin/v1/X` は、認証の方法を除いて同じ操作です（以下ではパスを `/api/v1` を省略して記載します）。`/admin/v1` は CLI 用で、アカウントとは結び付かず最大の権限を持ちます。
-- 例外として、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify`、`/auth/step-up`、`/auth/step-up/verify`、`/ui/modules` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
-- ブラウザ用で認証の要らない（公開の）パスは `GET /health`、`POST /auth/login`、`POST /auth/login/verify` だけです。
+- 例外として、10 章の `/ca`、`/ca/{file}` と、2 章の `/health`、`/auth/login`、`/auth/login/verify`、`/auth/logout`、`/auth/password`、`/auth/language`、`/auth/display-name`、`/auth/email`、`/auth/email/verify`、`/auth/step-up`、`/auth/step-up/verify`、`/ui/modules` は `/api/v1` だけにあり、`/auth/me` は両方にあります。
+- ブラウザ用で認証の要らない（公開の）パスは `GET /health`、`GET /ca`、`GET /ca/{file}`、`POST /auth/login`、`POST /auth/login/verify` だけです。
 - 接続元がこのホストでない `/admin/v1/*` は 404 を返します。このホストとは、接続元のアドレスがループバックのアドレスであるか、接続元の IP アドレスがその接続を受け付けた自分側の IP アドレスと同じ場合です（`agent_listen` が特定の IP アドレスのとき、`ctl` はそのアドレスに接続します）。判定には TCP の接続の両端のアドレスだけを使い、ヘッダーは使いません。
 - 両方の待ち受けは HTTP/1.1 で答えます（HTTP/2 の接続の開始には 505。1.2 の表）。持続的な接続（keep-alive）を使え、1 つの接続で続けて複数の要求を送れます。クライアントは `Connection: close` で 1 回ごとに閉じても構いません。セントラルは、60 秒何も通信の無い接続を閉じます。
 
@@ -110,7 +110,8 @@ interface Me { id: number; email: string; display_name: string; role: 'admin' | 
 
 - コードは 6 桁の数字で、有効期限は 10 分、1 つのコードで誤りは 5 回までです。新しいコードは、パスワードの入力からやり直すと送ります。
 - ログインの成功、ロック、コードのメールを送れなかったことは、履歴（`account`、操作 `login`、`login_locked`、`login_code_failed`）に残します。
-- Cookie `mimamori_verify`（HttpOnly、SameSite=Strict、Path `/api/v1/auth/login`）は、`trust` の値に関係なく `Max-Age` が `trust_days` 日です。この Cookie があるブラウザで次にログインするときにコードを省くかどうかは、セントラルが判定します（[システム仕様.md](システム仕様.md) の 12.4）。
+- セッションの Cookie と Cookie `mimamori_verify` は、どちらも HttpOnly、Secure、SameSite=Strict です。
+- Cookie `mimamori_verify`（Path `/api/v1/auth/login`）は、`trust` の値に関係なく `Max-Age` が `trust_days` 日です。この Cookie があるブラウザで次にログインするときにコードを省くかどうかは、セントラルが判定します（[システム仕様.md](システム仕様.md) の 12.4）。
 
 自分のメールアドレスの変更（`POST /auth/email` と `POST /auth/email/verify`）:
 
@@ -566,6 +567,8 @@ interface Suppression {
 | メソッド | パス | 権限 | 要求 | 応答 |
 | --- | --- | --- | --- | --- |
 | GET | `/certificates` | V | - | `CertStatus` |
+| GET | `/ca` | なし | - | `{"cas": InstallableCA[]}`。端末にインストールする CA（`active` と `next`）。ブラウザ用だけにある |
+| GET | `/ca/{file}` | なし | - | CA 証明書 1 つの PEM。`{file}` は `InstallableCA` の `file`。`Content-Type: application/x-x509-ca-cert`、`Content-Disposition: inline; filename="mimamori-ca-<フィンガープリントの先頭 16 文字>.crt"`、`Cache-Control: no-cache`。`active` と `next` の CA に無い値は 404（`CA certificate not found`、コード `common.ca_not_found`）。ブラウザ用だけにある |
 
 ```ts
 interface CertInfo { fingerprint: string; subject: string; not_before: string; not_after: string; status: 'active' | 'next' | 'retired' }
@@ -575,6 +578,7 @@ interface CertStatus {
   rotation: { state: 'none' | 'distributing' | 'switched'; next_ca_created_at: string | null; switch_after: string | null };
   agents_missing_new_ca: { agent_id: number; display_name: string }[];   // 一度も同期していないエージェントは含めない
 }
+interface InstallableCA extends CertInfo { file: string }   // file はフィンガープリント（16 進の小文字）と ".crt"
 ```
 
 ## 11. 履歴

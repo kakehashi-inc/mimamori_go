@@ -22,6 +22,7 @@ import {
     RunTriggerHead,
     RunTriggerItem,
 } from './parts/CommandSetParts';
+import { CaPageSection } from './parts/CertificateParts';
 import { AckAction, EmptyHead, SelectAllHead, SelectRow, ToSuppressionAction } from './parts/DetectionParts';
 import { AccountHistoryOption, ConfigHistoryOption, NoCentralHostsNotice } from './parts/MiscParts';
 import { CreateRuleAction, RemoveRuleAction, RuleActions } from './parts/RuleParts';
@@ -64,6 +65,7 @@ registerExtension({
         'history.categoryOptionsStart': [AccountHistoryOption],
         'history.categoryOptionsEnd': [ConfigHistoryOption, CommandHistoryOption],
         'guide.notices': [NoCentralHostsNotice],
+        'certificates.sections': [CaPageSection],
         'agentDetail.sections': [CommandSetsSection],
         'agentDetail.ruleActions': [RemoveRuleAction],
         'commandRuns.headMiddle': [RunTriggerHead],

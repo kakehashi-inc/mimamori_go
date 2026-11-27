@@ -64,6 +64,7 @@ export interface SlotProps {
     'history.categoryOptionsStart': NoProps;
     'history.categoryOptionsEnd': NoProps;
     'guide.notices': { guide: Guide };
+    'certificates.sections': NoProps;
     'agentDetail.sections': { agent: AgentDetail; reload: () => void };
     // Actions on the rule of the agent, in the card of the rule and application.
     'agentDetail.ruleActions': { agent: AgentDetail; reload: () => void };

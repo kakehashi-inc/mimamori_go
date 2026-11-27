@@ -86,7 +86,7 @@ func (c *CentralStatusCmd) Run() error {
 				fmt.Printf("%-16s %v\n", "configuration:", cfgErr)
 			}
 			for _, line := range []struct{ label, item, prefix string }{
-				{"web:", "web_listen", "http://"},
+				{"web:", "web_listen", "https://"},
 				{"agents/admin:", "agent_listen", "https://"},
 			} {
 				if text, ok := statusValue(line.item, line.prefix, cfg, runningValues); ok {
